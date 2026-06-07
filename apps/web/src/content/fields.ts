@@ -27,6 +27,7 @@ export function stringField(fields: JsonFields, key: string): string | null {
   const value = fields[key];
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
+  if (trimmed.toLowerCase() === "null") return null;
   return trimmed ? trimmed : null;
 }
 

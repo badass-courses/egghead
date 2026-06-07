@@ -18,6 +18,8 @@ export type LessonForPage = {
   duration: number | null;
   freeForever: boolean;
   isProContent: boolean;
+  hasTranscript: boolean;
+  hasSrt: boolean;
   state: string | null;
   visibilityState: string | null;
   videoHlsUrl: string | null;
@@ -58,6 +60,8 @@ export const getLessonBySlug = cache(async (slug: string): Promise<LessonForPage
       duration: numberField(fields, "duration"),
       freeForever: booleanField(fields, "freeForever"),
       isProContent: booleanField(fields, "isProContent"),
+      hasTranscript: booleanField(fields, "hasTranscript"),
+      hasSrt: booleanField(fields, "hasSrt"),
       state: stringField(fields, "state"),
       visibilityState: stringField(fields, "visibilityState"),
       videoHlsUrl: stringField(fields, "currentVideoHlsUrl"),

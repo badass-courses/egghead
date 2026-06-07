@@ -212,6 +212,21 @@ body {
   border: 1px solid var(--subtle);
 }
 
+.egghead-video-placeholder-content {
+  display: grid;
+  gap: 12px;
+  place-content: center;
+  height: 100%;
+  padding: 24px;
+  color: var(--background);
+  text-align: center;
+}
+
+.egghead-video-placeholder-content a {
+  color: inherit;
+  font-weight: 650;
+}
+
 .egghead-search-results {
   display: grid;
   gap: 1px;
