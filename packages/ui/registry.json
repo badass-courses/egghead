@@ -1,0 +1,31 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "egghead",
+  "homepage": "https://egghead.io",
+  "items": [
+    {
+      "name": "egghead-tokens",
+      "type": "registry:style",
+      "title": "Egghead tokens",
+      "description": "Sparse black/white light-dark tokens for the standalone Egghead app.",
+      "files": [
+        {
+          "path": "registry/egghead/tokens.css",
+          "type": "registry:style"
+        }
+      ]
+    },
+    {
+      "name": "egghead-structure",
+      "type": "registry:component",
+      "title": "Egghead structure primitives",
+      "description": "Minimal typography and structure primitives for professional CourseBuilder surfaces.",
+      "files": [
+        {
+          "path": "registry/egghead/structure.tsx",
+          "type": "registry:component"
+        }
+      ]
+    }
+  ]
+}

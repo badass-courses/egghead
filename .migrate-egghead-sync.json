@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "migrate-egghead.synced-working-copy.v1",
+  "canonical": "/Users/joel/Code/badass-courses/egghead",
+  "workingCopy": "/Users/joel/Code/skillrecordings/migrate-egghead/egghead",
+  "mechanic": "plain rsync mirror for Phase 0 bootstrap; not a git subtree or submodule",
+  "sourceOfTruth": "canonical",
+  "guardrails": {
+    "localDevOnly": true,
+    "noCommitsOrPushesWithoutApproval": true,
+    "noProdDevPlanetScaleWrites": true,
+    "noStripeInngestWriterChanges": true,
+    "noReadFlip": true
+  }
+}

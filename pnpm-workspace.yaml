@@ -1,0 +1,14 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+onlyBuiltDependencies:
+  - "@swc/core"
+  - "esbuild"
+  - "protobufjs"
+  - "sharp"
+allowBuilds:
+  '@swc/core': true
+  esbuild: true
+  protobufjs: true
+  sharp: true

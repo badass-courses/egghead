@@ -1,0 +1,17 @@
+{
+  "name": "@egghead/standalone",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.3.0",
+  "scripts": {
+    "dev": "turbo dev --filter=@egghead/web",
+    "build": "turbo build",
+    "typecheck": "turbo typecheck",
+    "phase0:imports": "tsx --tsconfig apps/web/tsconfig.json scripts/phase0-imports.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "turbo": "^2.6.3",
+    "typescript": "^5.9.3"
+  }
+}

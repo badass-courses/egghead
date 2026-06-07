@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "mve-content-auth.app-local-harness.v1",
+  "suiteId": "mve-content-auth",
+  "phase": "phase-0-standalone-extraction",
+  "canonicalBrainSource": {
+    "behaviors": "/Users/joel/Code/skillrecordings/migrate-egghead/.brain/data/migrate-egghead/testing/mve-content-auth.behaviors.jsonl",
+    "results": "/Users/joel/Code/skillrecordings/migrate-egghead/.brain/data/migrate-egghead/testing/mve-content-auth.results.jsonl"
+  },
+  "appLocalHome": "apps/web/tests/behaviors",
+  "privacy": "aggregate/redacted fixtures only; no raw customer rows, emails, tokens, Stripe IDs, or secrets",
+  "guardrails": {
+    "commerceExcluded": true,
+    "stripeWriterUnchanged": true,
+    "inngestWriterUnchanged": true,
+    "prodDevPlanetScaleWritesBlocked": true,
+    "readFlipBlocked": true,
+    "bareLegacyProDoesNotGrantBroadAccess": true
+  }
+}

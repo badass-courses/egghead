@@ -1,0 +1,30 @@
+{
+  "name": "@egghead/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --turbo --port 3008",
+    "build": "next build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@auth/core": "0.37.2",
+    "@coursebuilder/adapter-drizzle": "1.0.7",
+    "@coursebuilder/core": "1.2.1",
+    "@coursebuilder/next": "0.0.31",
+    "@egghead/ui": "workspace:*",
+    "drizzle-orm": "0.36.0",
+    "mysql2": "^3.22.5",
+    "next": "16.0.10",
+    "next-auth": "5.0.0-beta.25",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.25",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "typescript": "^5.9.3"
+  }
+}
