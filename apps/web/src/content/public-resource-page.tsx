@@ -13,7 +13,11 @@ export function PublicContentPage({
   return (
     <Container as="main" size="narrow">
       <Stack gap="loose">
-        <SectionHeader description={resource.description} eyebrow={eyebrow} title={resource.title} />
+        <SectionHeader
+          description={resource.description}
+          eyebrow={eyebrow}
+          title={resource.title}
+        />
 
         <dl className="egghead-course-facts" aria-label={`${eyebrow} facts`}>
           <div>

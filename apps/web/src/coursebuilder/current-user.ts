@@ -104,7 +104,9 @@ async function findRehearsalCohortUserId(cohort: RehearsalCohort, context: Curre
     }
 
     if (cohort === "paid_course_purchaser") {
-      const matchSpecificCourse = context.legacyRailsPlaylistId ? "AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sellableId')) = ?" : "";
+      const matchSpecificCourse = context.legacyRailsPlaylistId
+        ? "AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sellableId')) = ?"
+        : "";
       const [rows] = await connection.execute<FixtureUserRow[]>(
         `
           SELECT entitlement.userId
@@ -308,9 +310,10 @@ export async function getCurrentUserFromRequest(
     };
   }
 
-  const userId = fixture === "active-all-access-user"
-    ? await findActiveAllAccessFixtureUserId()
-    : await findRehearsalCohortUserId(rehearsalCohort, context);
+  const userId =
+    fixture === "active-all-access-user"
+      ? await findActiveAllAccessFixtureUserId()
+      : await findRehearsalCohortUserId(rehearsalCohort, context);
 
   if (!userId) {
     return {

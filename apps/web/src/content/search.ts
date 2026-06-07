@@ -33,12 +33,31 @@ export type SearchResult = {
 
 export type SearchContentType = SearchResult["type"];
 
+const SEARCH_CONTENT_TYPES = new Set<string>([
+  "article",
+  "campaign",
+  "case-study",
+  "course",
+  "guide",
+  "lesson",
+  "podcast",
+  "post",
+  "project",
+  "success-story",
+  "talk",
+  "tip",
+]);
+
+function isSearchContentType(value: string): value is SearchContentType {
+  return SEARCH_CONTENT_TYPES.has(value);
+}
+
 function resultType(type: string, postType: string | null): SearchContentType {
   if (type === "course" || postType === "course") return "course";
   if (type === "lesson" || postType === "lesson") return "lesson";
-  if (postType) return postType as SearchContentType;
+  if (postType && isSearchContentType(postType)) return postType;
   if (type === "post") return "post";
-  return type as SearchContentType;
+  return isSearchContentType(type) ? type : "post";
 }
 
 function resultHref(type: SearchContentType, slug: string) {
@@ -55,7 +74,10 @@ function resultHref(type: SearchContentType, slug: string) {
   return `/${slug}`;
 }
 
-export async function searchContent(term: string, typeFilter?: string | null): Promise<SearchResult[]> {
+export async function searchContent(
+  term: string,
+  typeFilter?: string | null,
+): Promise<SearchResult[]> {
   "use cache";
   cacheLife("minutes");
   cacheTag("egghead-search");

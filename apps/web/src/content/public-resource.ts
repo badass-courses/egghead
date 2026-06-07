@@ -80,7 +80,8 @@ export async function getPublicContentBySlug(
 
     const fields = fieldsFromJson(resource.fields);
     const resourceSlug = stringField(fields, "slug") ?? slug;
-    const path = stringField(fields, "path") ?? pathForPublicContentFamily(resource.family, resourceSlug);
+    const path =
+      stringField(fields, "path") ?? pathForPublicContentFamily(resource.family, resourceSlug);
 
     return {
       id: resource.id,
@@ -89,7 +90,8 @@ export async function getPublicContentBySlug(
       slug: resourceSlug,
       description: stringField(fields, "description") ?? stringField(fields, "summary") ?? "",
       sourcePath: path,
-      sourceDisposition: stringField(fields, "contentManifestSource") ?? "coursebuilder_public_content",
+      sourceDisposition:
+        stringField(fields, "contentManifestSource") ?? "coursebuilder_public_content",
     };
   } finally {
     await connection.end();

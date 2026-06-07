@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
@@ -34,7 +35,11 @@ export async function generateMetadata(props: SearchPageProps): Promise<Metadata
     searchTermFromProps(props),
     contentTypeFromProps(props),
   ]);
-  const title = term ? `${term} | egghead` : contentType ? `${contentType} | egghead` : "Search | egghead";
+  const title = term
+    ? `${term} | egghead`
+    : contentType
+      ? `${contentType} | egghead`
+      : "Search | egghead";
 
   return {
     title,
@@ -45,7 +50,7 @@ export async function generateMetadata(props: SearchPageProps): Promise<Metadata
   };
 }
 
-export default async function SearchPage(props: SearchPageProps) {
+async function SearchResults(props: SearchPageProps) {
   const [term, contentType] = await Promise.all([
     searchTermFromProps(props),
     contentTypeFromProps(props),
@@ -53,44 +58,65 @@ export default async function SearchPage(props: SearchPageProps) {
   const results = await searchContent(term, contentType);
 
   return (
+    <>
+      <SectionHeader
+        description={
+          term
+            ? `${results.length} results for ${term}`
+            : contentType
+              ? `${results.length} retained ${contentType} resources`
+              : `${results.length} retained resources`
+        }
+        eyebrow="Browse"
+        title="Search"
+      />
+
+      {results.length > 0 ? (
+        <ol
+          className="egghead-search-results"
+          data-search-results-count={results.length}
+          data-search-term={term || "browse"}
+          data-search-type={contentType || "all"}
+        >
+          {results.map((result) => (
+            <li data-search-result-type={result.type} key={result.id}>
+              <a href={result.href}>
+                <span className="egghead-search-type">{result.type}</span>
+                <span className="egghead-search-title">{result.title}</span>
+                {result.description ? (
+                  <span className="egghead-search-description">{result.description}</span>
+                ) : null}
+              </a>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="egghead-empty-state" data-search-state="no-results">
+          No retained resources match this search.
+        </p>
+      )}
+    </>
+  );
+}
+
+function SearchFallback() {
+  return (
+    <>
+      <SectionHeader description="Loading retained resources." eyebrow="Browse" title="Search" />
+      <p className="egghead-empty-state" data-search-state="pending">
+        Loading retained resources.
+      </p>
+    </>
+  );
+}
+
+export default function SearchPage(props: SearchPageProps) {
+  return (
     <Container as="main" size="wide">
       <Stack gap="loose">
-        <SectionHeader
-          description={
-            term
-              ? `${results.length} results for ${term}`
-              : contentType
-                ? `${results.length} retained ${contentType} resources`
-                : `${results.length} retained resources`
-          }
-          eyebrow="Browse"
-          title="Search"
-        />
-
-        {results.length > 0 ? (
-          <ol
-            className="egghead-search-results"
-            data-search-results-count={results.length}
-            data-search-term={term || "browse"}
-            data-search-type={contentType || "all"}
-          >
-            {results.map((result) => (
-              <li data-search-result-type={result.type} key={result.id}>
-                <a href={result.href}>
-                  <span className="egghead-search-type">{result.type}</span>
-                  <span className="egghead-search-title">{result.title}</span>
-                  {result.description ? (
-                    <span className="egghead-search-description">{result.description}</span>
-                  ) : null}
-                </a>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="egghead-empty-state" data-search-state="no-results">
-            No retained resources match this search.
-          </p>
-        )}
+        <Suspense fallback={<SearchFallback />}>
+          <SearchResults {...props} />
+        </Suspense>
       </Stack>
     </Container>
   );
