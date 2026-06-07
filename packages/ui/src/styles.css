@@ -211,3 +211,62 @@ body {
 .egghead-video-placeholder {
   border: 1px solid var(--subtle);
 }
+
+.egghead-search-results {
+  display: grid;
+  gap: 1px;
+  padding: 1px;
+  margin: 0;
+  list-style: none;
+  background: var(--subtle);
+}
+
+.egghead-search-results li {
+  margin: 0;
+  background: var(--background);
+}
+
+.egghead-search-results a {
+  display: grid;
+  gap: 8px;
+  min-height: 112px;
+  padding: 22px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.egghead-search-results a:hover {
+  background: var(--panel);
+}
+
+.egghead-search-type {
+  font-size: 0.75rem;
+  font-weight: 650;
+  line-height: 1.2;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.egghead-search-title {
+  overflow-wrap: anywhere;
+  font-size: clamp(1.25rem, 2vw, 1.75rem);
+  font-weight: 720;
+  line-height: 1.1;
+}
+
+.egghead-search-description {
+  display: -webkit-box;
+  max-width: var(--measure);
+  overflow: hidden;
+  color: var(--muted);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.egghead-empty-state {
+  padding: 24px;
+  margin: 0;
+  color: var(--muted);
+  border: 1px solid var(--subtle);
+  background: var(--panel);
+}
