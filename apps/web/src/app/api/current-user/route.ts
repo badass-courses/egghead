@@ -1,14 +1,12 @@
-import { getCurrentUser } from "../../../coursebuilder/current-user";
+import { getCurrentUserFromRequest } from "../../../coursebuilder/current-user";
 
-export async function GET() {
-  const user = await getCurrentUser();
+export async function GET(request: Request) {
+  const currentUser = await getCurrentUserFromRequest(request);
 
   return Response.json({
-    user,
+    user: currentUser.user,
     source: "egghead-standalone-app",
     requestTimeRailsFallback: false,
-    compatibility: {
-      anonymousReturnsNullUser: true,
-    },
+    compatibility: currentUser.compatibility,
   });
 }
