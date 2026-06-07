@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "types": ["node"]
+  },
+  "include": ["apps/web/next-env.d.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules"]
+}

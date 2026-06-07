@@ -1,12 +1,7 @@
 import { courseBuilderConfig } from "../apps/web/src/coursebuilder/config";
 import { getCurrentUser } from "../apps/web/src/coursebuilder/current-user";
 import { EGGHEAD_TABLE_PREFIX, getEggheadTableName } from "../apps/web/src/db/mysql-table";
-import {
-  entitlements,
-  entitlementTypes,
-  resourceProgress,
-  users,
-} from "../apps/web/src/db/schema";
+import { entitlements, entitlementTypes, resourceProgress, users } from "../apps/web/src/db/schema";
 
 const currentUser = await getCurrentUser();
 

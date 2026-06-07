@@ -1,16 +1,17 @@
 import mysql from "mysql2/promise";
+import { getEnv } from "../env";
 
-const DEFAULT_LOCAL_DOCKER_MYSQL_URL =
-  "mysql://root:root@127.0.0.1:3307/coursebuilder_test";
+const DEFAULT_LOCAL_DOCKER_MYSQL_URL = "mysql://root:root@127.0.0.1:3307/coursebuilder_test";
+const LEADING_SLASH = /^\//;
 
 export function getDatabaseUrl() {
-  return process.env.DATABASE_URL ?? DEFAULT_LOCAL_DOCKER_MYSQL_URL;
+  return getEnv("DATABASE_URL") ?? DEFAULT_LOCAL_DOCKER_MYSQL_URL;
 }
 
 export function assertLocalDockerDatabaseUrl(rawUrl = getDatabaseUrl()) {
   const url = new URL(rawUrl);
   const host = url.hostname;
-  const database = url.pathname.replace(/^\//, "");
+  const database = url.pathname.replace(LEADING_SLASH, "");
   const isLocalHost = host === "127.0.0.1" || host === "localhost" || host === "::1";
   const isLocalDatabase =
     database === "coursebuilder_test" ||
@@ -18,7 +19,7 @@ export function assertLocalDockerDatabaseUrl(rawUrl = getDatabaseUrl()) {
     database.endsWith("_test") ||
     database.endsWith("_local");
 
-  if (!isLocalHost || !isLocalDatabase) {
+  if (!(isLocalHost && isLocalDatabase)) {
     throw new Error(
       `Refusing non-local Docker MySQL URL for Phase 0: host=${host} database=${database}`,
     );
@@ -27,7 +28,7 @@ export function assertLocalDockerDatabaseUrl(rawUrl = getDatabaseUrl()) {
   return { url, host, database };
 }
 
-export async function createLocalMysqlConnection() {
+export function createLocalMysqlConnection() {
   const rawUrl = getDatabaseUrl();
   assertLocalDockerDatabaseUrl(rawUrl);
   return mysql.createConnection(rawUrl);

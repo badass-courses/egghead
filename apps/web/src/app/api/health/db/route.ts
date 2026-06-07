@@ -1,4 +1,4 @@
-import { getLocalDockerDbProof } from "@/db/local-docker";
+import { getLocalDockerDbProof } from "../../../../db/local-docker";
 
 export async function GET() {
   const proof = await getLocalDockerDbProof();

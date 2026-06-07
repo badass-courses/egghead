@@ -2,10 +2,10 @@ import { sql } from "drizzle-orm";
 import {
   index,
   json,
+  type MySqlTableFn,
   timestamp,
   uniqueIndex,
   varchar,
-  type MySqlTableFn,
 } from "drizzle-orm/mysql-core";
 
 export function getEggheadUsersSchema(mysqlTable: MySqlTableFn) {
@@ -41,9 +41,7 @@ export function getEggheadUsersSchema(mysqlTable: MySqlTableFn) {
       emailIdx: index("email_idx").on(user.email),
       roleIdx: index("role_idx").on(user.role),
       createdAtIdx: index("created_at_idx").on(user.createdAt),
-      legacyRailsUserIdIdx: uniqueIndex("legacyRailsUserId_idx").on(
-        user.legacyRailsUserId,
-      ),
+      legacyRailsUserIdIdx: uniqueIndex("legacyRailsUserId_idx").on(user.legacyRailsUserId),
       legacyContactIdIdx: index("legacyContactId_idx").on(user.legacyContactId),
     }),
   );

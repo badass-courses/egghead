@@ -1,21 +1,21 @@
 :root {
-  color-scheme: light;
   --background: #ffffff;
   --foreground: #090909;
   --muted: #606060;
   --subtle: #e5e5e5;
   --panel: #fafafa;
   --focus: #090909;
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    color-scheme: dark;
     --background: #090909;
     --foreground: #f7f7f7;
     --muted: #a5a5a5;
     --subtle: #262626;
     --panel: #111111;
     --focus: #f7f7f7;
+    color-scheme: dark;
   }
 }

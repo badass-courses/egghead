@@ -1,0 +1,19 @@
+pre-commit:
+  parallel: false
+  jobs:
+    - name: typecheck
+      run: pnpm typecheck
+    - name: tsgo
+      run: pnpm typecheck:tsgo
+    - name: oxlint
+      run: pnpm lint
+    - name: oxfmt
+      run: pnpm format:check
+    - name: phase0-imports
+      run: pnpm phase0:imports
+
+pre-push:
+  parallel: false
+  jobs:
+    - name: full-check
+      run: pnpm check

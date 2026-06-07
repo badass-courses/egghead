@@ -1,6 +1,6 @@
-import { getBaseUrl } from "@/coursebuilder/url";
+import { getBaseUrl } from "../../../coursebuilder/url";
 
-export async function GET(request: Request) {
+export function GET(request: Request) {
   const baseUrl = getBaseUrl(request);
 
   return Response.json({
@@ -30,8 +30,7 @@ export async function GET(request: Request) {
     },
     next_actions: [
       {
-        command:
-          "bun tools/me.ts egghead standalone check --url http://localhost:3008 --json",
+        command: "bun tools/me.ts egghead standalone check --url http://localhost:3008 --json",
         description: "Run local Phase 0 standalone boundary checks from migrate-egghead",
       },
     ],

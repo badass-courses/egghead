@@ -1,5 +1,4 @@
 :root {
-  color-scheme: light;
   --background: #ffffff;
   --foreground: #090909;
   --muted: #606060;
@@ -7,21 +6,21 @@
   --panel: #fafafa;
   --focus: #090909;
   --font-sans:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-serif: Georgia, "Times New Roman", serif;
   --measure: 68ch;
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    color-scheme: dark;
     --background: #090909;
     --foreground: #f7f7f7;
     --muted: #a5a5a5;
     --subtle: #262626;
     --panel: #111111;
     --focus: #f7f7f7;
+    color-scheme: dark;
   }
 }
 
@@ -32,8 +31,8 @@ body {
 }
 
 ::selection {
-  background: var(--foreground);
   color: var(--background);
+  background: var(--foreground);
 }
 
 :focus-visible {
@@ -43,8 +42,8 @@ body {
 
 .egghead-container {
   width: min(100% - 32px, 1120px);
-  margin-inline: auto;
   padding-block: clamp(48px, 8vw, 112px);
+  margin-inline: auto;
 }
 
 .egghead-container-narrow {
@@ -79,31 +78,31 @@ body {
 
 .egghead-eyebrow {
   margin: 0;
-  color: var(--muted);
   font-size: 0.8125rem;
   font-weight: 650;
   line-height: 1.2;
+  color: var(--muted);
   text-transform: uppercase;
 }
 
 .egghead-section-header h1 {
   margin: 0;
-  color: var(--foreground);
   font-size: clamp(3rem, 8vw, 6.5rem);
   font-weight: 760;
   line-height: 0.95;
+  color: var(--foreground);
 }
 
 .egghead-section-description,
 .egghead-prose p {
   max-width: var(--measure);
   margin: 0;
-  color: var(--muted);
   font-size: clamp(1.125rem, 2vw, 1.35rem);
   line-height: 1.55;
+  color: var(--muted);
 }
 
 .egghead-prose {
-  border-top: 1px solid var(--subtle);
   padding-top: 24px;
+  border-top: 1px solid var(--subtle);
 }

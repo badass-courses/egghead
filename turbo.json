@@ -12,6 +12,10 @@
     "typecheck": {
       "dependsOn": ["^typecheck"],
       "outputs": []
+    },
+    "typecheck:tsgo": {
+      "dependsOn": ["^typecheck:tsgo"],
+      "outputs": []
     }
   }
 }

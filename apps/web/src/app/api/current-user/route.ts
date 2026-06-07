@@ -1,4 +1,4 @@
-import { getCurrentUser } from "@/coursebuilder/current-user";
+import { getCurrentUser } from "../../../coursebuilder/current-user";
 
 export async function GET() {
   const user = await getCurrentUser();

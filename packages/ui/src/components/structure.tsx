@@ -9,12 +9,7 @@ export function Stack({
 }: ComponentPropsWithoutRef<"div"> & {
   gap?: "tight" | "normal" | "loose";
 }) {
-  return (
-    <div
-      className={cn("egghead-stack", `egghead-stack-${gap}`, className)}
-      {...props}
-    />
-  );
+  return <div className={cn("egghead-stack", `egghead-stack-${gap}`, className)} {...props} />;
 }
 
 export function SectionHeader({

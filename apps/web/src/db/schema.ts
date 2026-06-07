@@ -1,7 +1,7 @@
 import { getCourseBuilderSchema } from "@coursebuilder/adapter-drizzle/mysql";
 
-import { mysqlTable } from "@/db/mysql-table";
-import { getEggheadUsersSchema } from "@/db/users";
+import { mysqlTable } from "./mysql-table";
+import { getEggheadUsersSchema } from "./users";
 
 export const eggheadCourseBuilderSchema = getCourseBuilderSchema(mysqlTable, {
   getUsersSchema: getEggheadUsersSchema,

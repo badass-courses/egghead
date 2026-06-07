@@ -2,19 +2,27 @@
   "name": "@egghead/ui",
   "private": true,
   "type": "module",
-  "sideEffects": ["**/*.css"],
+  "sideEffects": [
+    "**/*.css"
+  ],
   "exports": {
-    ".": "./src/index.ts",
+    "./container": "./src/components/container.tsx",
+    "./registry": "./registry.json",
+    "./structure": "./src/components/structure.tsx",
     "./styles.css": "./src/styles.css",
-    "./registry": "./registry.json"
+    "./utils": "./src/utils.ts"
   },
-  "peerDependencies": {
-    "react": "19.2.3",
-    "react-dom": "19.2.3"
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:tsgo": "tsgo --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
   }
 }

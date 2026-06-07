@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev --turbo --port 3008",
     "build": "next build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:tsgo": "tsgo --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@auth/core": "0.37.2",
