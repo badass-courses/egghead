@@ -3,32 +3,32 @@ import type { Metadata } from "next";
 import { getPublicContentStaticParams } from "../../../content/public-resource";
 import { getPublicContentMetadata, renderPublicContentRoute } from "../../../content/public-route";
 
-type PodcastPageProps = {
+type TipPageProps = {
   params: Promise<{
     slug: string;
   }>;
 };
 
-async function slugFromParams(params: PodcastPageProps["params"]) {
+async function slugFromParams(params: TipPageProps["params"]) {
   const resolved = await params;
   return decodeURIComponent(resolved.slug);
 }
 
 export function generateStaticParams() {
-  return getPublicContentStaticParams(["podcast"]);
+  return getPublicContentStaticParams(["tip"]);
 }
 
-export async function generateMetadata({ params }: PodcastPageProps): Promise<Metadata> {
+export async function generateMetadata({ params }: TipPageProps): Promise<Metadata> {
   const slug = await slugFromParams(params);
   return getPublicContentMetadata({
-    canonicalPrefix: "/podcasts",
-    families: ["podcast"],
-    label: "Podcast",
+    canonicalPrefix: "/tips",
+    families: ["tip"],
+    label: "Tip",
     slug,
   });
 }
 
-export default async function PodcastPage({ params }: PodcastPageProps) {
+export default async function TipPage({ params }: TipPageProps) {
   const slug = await slugFromParams(params);
-  return renderPublicContentRoute({ eyebrow: "Podcast", families: ["podcast"], slug });
+  return renderPublicContentRoute({ eyebrow: "Tip", families: ["tip"], slug });
 }

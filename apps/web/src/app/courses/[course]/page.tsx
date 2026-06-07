@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
-import { getCourseBySlug } from "../../../content/course";
+import { getCourseBySlug, getCourseStaticParams } from "../../../content/course";
 
 type CoursePageProps = {
   params: Promise<{
@@ -39,6 +39,10 @@ export async function generateMetadata({ params }: CoursePageProps): Promise<Met
       type: "article",
     },
   };
+}
+
+export function generateStaticParams() {
+  return getCourseStaticParams();
 }
 
 export default async function CoursePage({ params }: CoursePageProps) {

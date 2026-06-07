@@ -1,5 +1,5 @@
-import { cache } from "react";
 import type { RowDataPacket } from "mysql2";
+import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { booleanField, fieldsFromJson, numberField, objectField, stringField } from "./fields";
@@ -60,7 +60,12 @@ function toLesson(row: LessonResourceRow): CourseLesson {
   };
 }
 
-export const getCourseBySlug = cache(async (slug: string): Promise<CourseForPage | null> => {
+export async function getCourseBySlug(slug: string): Promise<CourseForPage | null> {
+  "use cache";
+  cacheLife("hours");
+  cacheTag("egghead-content");
+  cacheTag(`egghead-course:${slug}`);
+
   const connection = await createLocalMysqlConnection();
 
   try {
@@ -115,4 +120,35 @@ export const getCourseBySlug = cache(async (slug: string): Promise<CourseForPage
   } finally {
     await connection.end();
   }
-});
+}
+
+export async function getCourseStaticParams() {
+  "use cache";
+  cacheLife("hours");
+  cacheTag("egghead-course-static-params");
+
+  const connection = await createLocalMysqlConnection();
+
+  try {
+    const [rows] = await connection.execute<Array<RowDataPacket & { slug: string }>>(
+      `
+        SELECT JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) AS slug
+        FROM egghead_ContentResource
+        WHERE deletedAt IS NULL
+          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) IS NOT NULL
+          AND (
+            type = 'course'
+            OR (
+              type = 'post'
+              AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')) = 'course'
+            )
+          )
+        ORDER BY createdAt DESC
+      `,
+    );
+
+    return rows.map((row) => ({ course: row.slug }));
+  } finally {
+    await connection.end();
+  }
+}

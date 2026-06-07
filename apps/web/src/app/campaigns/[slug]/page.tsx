@@ -3,32 +3,32 @@ import type { Metadata } from "next";
 import { getPublicContentStaticParams } from "../../../content/public-resource";
 import { getPublicContentMetadata, renderPublicContentRoute } from "../../../content/public-route";
 
-type PodcastPageProps = {
+type CampaignPageProps = {
   params: Promise<{
     slug: string;
   }>;
 };
 
-async function slugFromParams(params: PodcastPageProps["params"]) {
+async function slugFromParams(params: CampaignPageProps["params"]) {
   const resolved = await params;
   return decodeURIComponent(resolved.slug);
 }
 
 export function generateStaticParams() {
-  return getPublicContentStaticParams(["podcast"]);
+  return getPublicContentStaticParams(["campaign"]);
 }
 
-export async function generateMetadata({ params }: PodcastPageProps): Promise<Metadata> {
+export async function generateMetadata({ params }: CampaignPageProps): Promise<Metadata> {
   const slug = await slugFromParams(params);
   return getPublicContentMetadata({
-    canonicalPrefix: "/podcasts",
-    families: ["podcast"],
-    label: "Podcast",
+    canonicalPrefix: "/campaigns",
+    families: ["campaign"],
+    label: "Campaign",
     slug,
   });
 }
 
-export default async function PodcastPage({ params }: PodcastPageProps) {
+export default async function CampaignPage({ params }: CampaignPageProps) {
   const slug = await slugFromParams(params);
-  return renderPublicContentRoute({ eyebrow: "Podcast", families: ["podcast"], slug });
+  return renderPublicContentRoute({ eyebrow: "Campaign", families: ["campaign"], slug });
 }

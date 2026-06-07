@@ -10,6 +10,7 @@ type SearchPageProps = {
   }>;
   searchParams: Promise<{
     q?: string | string[];
+    type?: string | string[];
   }>;
 };
 
@@ -23,13 +24,21 @@ async function searchTermFromProps(props: SearchPageProps) {
   return firstValue(searchParams.q) || pathTerm;
 }
 
+async function contentTypeFromProps(props: SearchPageProps) {
+  const searchParams = await props.searchParams;
+  return firstValue(searchParams.type);
+}
+
 export async function generateMetadata(props: SearchPageProps): Promise<Metadata> {
-  const term = await searchTermFromProps(props);
-  const title = term ? `${term} | egghead` : "Search | egghead";
+  const [term, contentType] = await Promise.all([
+    searchTermFromProps(props),
+    contentTypeFromProps(props),
+  ]);
+  const title = term ? `${term} | egghead` : contentType ? `${contentType} | egghead` : "Search | egghead";
 
   return {
     title,
-    description: "Find retained egghead courses and lessons.",
+    description: "Find retained egghead content.",
     alternates: {
       canonical: term ? `https://egghead.io/q/${encodeURIComponent(term)}` : "https://egghead.io/q",
     },
@@ -37,15 +46,22 @@ export async function generateMetadata(props: SearchPageProps): Promise<Metadata
 }
 
 export default async function SearchPage(props: SearchPageProps) {
-  const term = await searchTermFromProps(props);
-  const results = await searchContent(term);
+  const [term, contentType] = await Promise.all([
+    searchTermFromProps(props),
+    contentTypeFromProps(props),
+  ]);
+  const results = await searchContent(term, contentType);
 
   return (
     <Container as="main" size="wide">
       <Stack gap="loose">
         <SectionHeader
           description={
-            term ? `${results.length} results for ${term}` : `${results.length} retained resources`
+            term
+              ? `${results.length} results for ${term}`
+              : contentType
+                ? `${results.length} retained ${contentType} resources`
+                : `${results.length} retained resources`
           }
           eyebrow="Browse"
           title="Search"
@@ -56,6 +72,7 @@ export default async function SearchPage(props: SearchPageProps) {
             className="egghead-search-results"
             data-search-results-count={results.length}
             data-search-term={term || "browse"}
+            data-search-type={contentType || "all"}
           >
             {results.map((result) => (
               <li data-search-result-type={result.type} key={result.id}>
