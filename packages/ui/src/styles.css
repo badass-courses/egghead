@@ -196,3 +196,18 @@ body {
   font-size: 0.875rem;
   color: var(--muted);
 }
+
+.egghead-video,
+.egghead-video-placeholder {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--foreground);
+}
+
+.egghead-video {
+  display: block;
+}
+
+.egghead-video-placeholder {
+  border: 1px solid var(--subtle);
+}

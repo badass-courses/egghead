@@ -2,6 +2,7 @@ import { cache } from "react";
 import type { RowDataPacket } from "mysql2";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
+import { booleanField, fieldsFromJson, numberField, objectField, stringField } from "./fields";
 
 type ContentResourceRow = RowDataPacket & {
   id: string;
@@ -14,8 +15,6 @@ type ContentResourceRow = RowDataPacket & {
 type LessonResourceRow = ContentResourceRow & {
   position: number;
 };
-
-type JsonFields = Record<string, unknown>;
 
 export type CourseLesson = {
   id: string;
@@ -41,47 +40,7 @@ export type CourseForPage = {
   lessons: CourseLesson[];
 };
 
-function fieldsFromJson(value: unknown): JsonFields {
-  if (typeof value === "string") {
-    try {
-      const parsed: unknown = JSON.parse(value);
-      return fieldsFromJson(parsed);
-    } catch {
-      return {};
-    }
-  }
-
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return Object.fromEntries(Object.entries(value));
-  }
-
-  return {};
-}
-
-function objectField(fields: JsonFields, key: string): JsonFields | null {
-  const value = fields[key];
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return Object.fromEntries(Object.entries(value));
-}
-
-function stringField(fields: JsonFields, key: string): string | null {
-  const value = fields[key];
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function numberField(fields: JsonFields, key: string): number | null {
-  const value = fields[key];
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function booleanField(fields: JsonFields, key: string): boolean {
-  return fields[key] === true;
-}
-
-function instructorName(fields: JsonFields): string | null {
+function instructorName(fields: Record<string, unknown>): string | null {
   const instructor = objectField(fields, "instructor");
   return instructor ? stringField(instructor, "name") : null;
 }
