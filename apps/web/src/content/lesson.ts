@@ -110,6 +110,9 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
       stringField(fields, "currentVideoHlsUrl") ??
       stringField(videoFields, "currentVideoHlsUrl") ??
       stringField(videoFields, "hlsUrl") ??
+      stringField(fields, "videoUrl") ??
+      stringField(videoFields, "videoUrl") ??
+      stringField(videoFields, "url") ??
       (muxPlaybackId ? `https://stream.mux.com/${muxPlaybackId}.m3u8` : null);
     const videoDashUrl =
       stringField(fields, "currentVideoDashUrl") ?? stringField(videoFields, "currentVideoDashUrl");
