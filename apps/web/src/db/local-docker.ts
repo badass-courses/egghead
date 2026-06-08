@@ -117,7 +117,7 @@ export function assertLocalDockerDatabaseUrl(rawUrl = getDatabaseUrl()) {
   return safety;
 }
 
-function mysqlConnectionOptionsFromUrl(rawUrl: string) {
+export function mysqlConnectionOptionsFromUrl(rawUrl: string) {
   const { url, host, database } = parseDatabaseUrl(rawUrl);
   const port = Number(url.port || "3306");
   const sslAccept = url.searchParams.get("sslaccept")?.toLowerCase();
