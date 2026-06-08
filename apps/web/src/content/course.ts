@@ -32,6 +32,7 @@ export type CourseForPage = {
   title: string;
   slug: string;
   description: string;
+  body: string | null;
   state: string | null;
   visibilityState: string | null;
   accessState: string | null;
@@ -110,6 +111,7 @@ export async function getCourseBySlug(slug: string): Promise<CourseForPage | nul
       title: stringField(fields, "title") ?? "Untitled course",
       slug: stringField(fields, "slug") ?? slug,
       description: stringField(fields, "description") ?? stringField(fields, "summary") ?? "",
+      body: stringField(fields, "body"),
       state: stringField(fields, "state"),
       visibilityState: stringField(fields, "visibilityState"),
       accessState: stringField(fields, "accessState"),

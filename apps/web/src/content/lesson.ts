@@ -23,6 +23,7 @@ export type LessonForPage = {
   title: string;
   slug: string;
   description: string;
+  body: string | null;
   duration: number | null;
   freeForever: boolean;
   isProContent: boolean;
@@ -35,6 +36,7 @@ export type LessonForPage = {
   visibilityState: string | null;
   videoHlsUrl: string | null;
   videoDashUrl: string | null;
+  videoResourceId: string | null;
   videoMuxPlaybackId: string | null;
 };
 
@@ -102,7 +104,8 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
     const parentCourse = parentCourseRows[0] ?? null;
     const parentCourseFields = parentCourse ? fieldsFromJson(parentCourse.fields) : {};
     const videoFields = videoRows[0] ? fieldsFromJson(videoRows[0].fields) : {};
-    const muxPlaybackId = stringField(videoFields, "muxPlaybackId");
+    const muxPlaybackId =
+      stringField(fields, "muxPlaybackId") ?? stringField(videoFields, "muxPlaybackId");
     const videoHlsUrl =
       stringField(fields, "currentVideoHlsUrl") ??
       (muxPlaybackId ? `https://stream.mux.com/${muxPlaybackId}.m3u8` : null);
@@ -112,6 +115,7 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
       title: stringField(fields, "title") ?? "Untitled lesson",
       slug: stringField(fields, "slug") ?? slug,
       description: stringField(fields, "description") ?? stringField(fields, "summary") ?? "",
+      body: stringField(fields, "body"),
       duration: numberField(fields, "duration") ?? numberField(videoFields, "duration"),
       freeForever: booleanField(fields, "freeForever"),
       isProContent: booleanField(fields, "isProContent"),
@@ -124,6 +128,7 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
       visibilityState: stringField(fields, "visibilityState"),
       videoHlsUrl,
       videoDashUrl: stringField(fields, "currentVideoDashUrl"),
+      videoResourceId: videoRows[0]?.id ?? null,
       videoMuxPlaybackId: muxPlaybackId,
     };
   } finally {

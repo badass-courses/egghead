@@ -8,6 +8,7 @@ import {
   getCourseStaticParams,
   type CourseForPage,
 } from "../../../content/course";
+import { MarkdownContent } from "../../../content/markdown-content";
 
 type CoursePageProps = {
   params: Promise<{
@@ -56,6 +57,7 @@ async function CoursePageStatic({ course }: { course: CourseForPage }) {
     <Container as="main" size="wide">
       <Stack gap="loose">
         <SectionHeader description={course.description} eyebrow="Course" title={course.title} />
+        <MarkdownContent label="Course body">{course.body}</MarkdownContent>
 
         <dl className="egghead-course-facts" aria-label="Course facts">
           <div>

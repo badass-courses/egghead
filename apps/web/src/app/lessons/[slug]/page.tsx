@@ -11,6 +11,8 @@ import {
   getLessonStaticParams,
   type LessonForPage,
 } from "../../../content/lesson";
+import { LessonMuxPlayer } from "../../../content/lesson-mux-player";
+import { MarkdownContent } from "../../../content/markdown-content";
 import { getCurrentUserFromRequest } from "../../../coursebuilder/current-user";
 
 type LessonPageProps = {
@@ -114,12 +116,23 @@ async function LessonAccessExperience({ lesson }: { lesson: LessonForPage }) {
   );
   const accessRequired = lesson.courseLinked && !lesson.freeForever;
   const accessGranted = !accessRequired || currentUser.contentAccess?.granted === true;
-  const canWatch = Boolean(videoUrl && accessGranted);
-  const videoState = canWatch ? "allowed" : videoUrl && accessRequired ? "gated" : "unavailable";
+  const playbackId = lesson.videoMuxPlaybackId;
+  const canWatch = Boolean((playbackId || videoUrl) && accessGranted);
+  const videoState = canWatch
+    ? "allowed"
+    : playbackId || (videoUrl && accessRequired)
+      ? "gated"
+      : "unavailable";
 
   return (
     <>
-      {canWatch && videoUrl ? (
+      {canWatch && playbackId ? (
+        <LessonMuxPlayer
+          playbackId={playbackId}
+          title={lesson.title}
+          videoId={lesson.videoResourceId ?? lesson.id}
+        />
+      ) : canWatch && videoUrl ? (
         <video
           aria-label={`${lesson.title} video`}
           className="egghead-video"
@@ -173,6 +186,7 @@ async function LessonPageStatic({
         <SectionHeader description={lesson.description} eyebrow="Lesson" title={lesson.title} />
 
         <Suspense fallback={<LessonAccessFallback lesson={lesson} />}>{accessComponent}</Suspense>
+        <MarkdownContent label="Lesson body">{lesson.body}</MarkdownContent>
       </Stack>
     </Container>
   );

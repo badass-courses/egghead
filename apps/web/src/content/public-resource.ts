@@ -28,6 +28,7 @@ export type PublicContentResource = {
   title: string;
   slug: string;
   description: string;
+  body: string | null;
   sourcePath: string;
   sourceDisposition: string;
 };
@@ -89,6 +90,7 @@ export async function getPublicContentBySlug(
       title: stringField(fields, "title") ?? "Untitled",
       slug: resourceSlug,
       description: descriptionField(fields),
+      body: stringField(fields, "body"),
       sourcePath: path,
       sourceDisposition:
         stringField(fields, "contentManifestSource") ?? "coursebuilder_public_content",
