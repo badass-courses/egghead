@@ -117,10 +117,26 @@ export function assertLocalDockerDatabaseUrl(rawUrl = getDatabaseUrl()) {
   return safety;
 }
 
+function mysqlConnectionOptionsFromUrl(rawUrl: string) {
+  const { url, host, database } = parseDatabaseUrl(rawUrl);
+  const port = Number(url.port || "3306");
+  const sslAccept = url.searchParams.get("sslaccept")?.toLowerCase();
+  const needsSsl = sslAccept === "strict" || isPlanetScaleDatabase({ host });
+
+  return {
+    host,
+    port,
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    database,
+    ...(needsSsl ? { ssl: { rejectUnauthorized: true } } : {}),
+  };
+}
+
 export function createEggheadMysqlConnection() {
   const rawUrl = getDatabaseUrl();
   assertDatabaseUrlForRuntime(rawUrl);
-  return mysql.createConnection(rawUrl);
+  return mysql.createConnection(mysqlConnectionOptionsFromUrl(rawUrl));
 }
 
 export function createLocalMysqlConnection() {
@@ -133,7 +149,7 @@ export async function getRuntimeDbProof() {
   try {
     const rawUrl = getDatabaseUrl();
     const safety = assertDatabaseUrlForRuntime(rawUrl);
-    connection = await mysql.createConnection(rawUrl);
+    connection = await mysql.createConnection(mysqlConnectionOptionsFromUrl(rawUrl));
     const [rows] = await connection.query("SELECT 1 AS ok");
 
     return {
