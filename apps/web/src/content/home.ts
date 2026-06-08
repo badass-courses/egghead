@@ -3,6 +3,7 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
+import { publishedResourceSql } from "./publication";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
 
 const PUBLIC_CONTENT_FAMILIES = [
@@ -85,21 +86,22 @@ export async function getHomeContent(): Promise<HomeContent> {
     const [courseRows] = await connection.execute<HomeResourceRow[]>(
       `
         SELECT
-          id,
+          course.id,
           'course' AS family,
-          fields
-        FROM egghead_ContentResource
-        WHERE deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) != ''
+          course.fields
+        FROM egghead_ContentResource course
+        WHERE course.deletedAt IS NULL
+          ${publishedResourceSql("course")}
+          AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) IS NOT NULL
+          AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) != ''
           AND (
-            type = 'course'
+            course.type = 'course'
             OR (
-              type = 'post'
-              AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')) = 'course'
+              course.type = 'post'
+              AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.postType')) = 'course'
             )
           )
-        ORDER BY createdAt DESC
+        ORDER BY course.createdAt DESC
         LIMIT 6
       `,
     );
@@ -107,15 +109,16 @@ export async function getHomeContent(): Promise<HomeContent> {
     const [resourceRows] = await connection.execute<HomeResourceRow[]>(
       `
         SELECT
-          id,
-          COALESCE(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')), type) AS family,
-          fields
-        FROM egghead_ContentResource
-        WHERE deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) != ''
-          AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')), type) IN (${publicFamilyPlaceholders})
-        ORDER BY createdAt DESC
+          resource.id,
+          COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) AS family,
+          resource.fields
+        FROM egghead_ContentResource resource
+        WHERE resource.deletedAt IS NULL
+          ${publishedResourceSql("resource")}
+          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
+          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+          AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${publicFamilyPlaceholders})
+        ORDER BY resource.createdAt DESC
         LIMIT 10
       `,
       [...PUBLIC_CONTENT_FAMILIES],

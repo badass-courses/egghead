@@ -3,6 +3,7 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
+import { publishedResourceSql } from "./publication";
 
 export type PublicContentFamily =
   | "article"
@@ -63,15 +64,16 @@ export async function getPublicContentBySlug(
     const [rows] = await connection.execute<PublicContentRow[]>(
       `
         SELECT
-          id,
-          type,
-          COALESCE(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')), type) AS family,
-          fields
-        FROM egghead_ContentResource
-        WHERE deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) = ?
-          AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')), type) IN (${placeholders})
-        ORDER BY createdAt DESC
+          resource.id,
+          resource.type,
+          COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) AS family,
+          resource.fields
+        FROM egghead_ContentResource resource
+        WHERE resource.deletedAt IS NULL
+          ${publishedResourceSql("resource")}
+          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) = ?
+          AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${placeholders})
+        ORDER BY resource.createdAt DESC
         LIMIT 1
       `,
       [slug, ...families],
@@ -113,12 +115,20 @@ export async function getPublicContentStaticParams(families: PublicContentFamily
   try {
     const [rows] = await connection.execute<Array<RowDataPacket & { slug: string }>>(
       `
-        SELECT JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) AS slug
-        FROM egghead_ContentResource
-        WHERE deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) IS NOT NULL
-          AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')), type) IN (${placeholders})
-        ORDER BY createdAt DESC
+        SELECT resource_slug.slug
+        FROM (
+          SELECT
+            JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) AS slug,
+            resource.createdAt
+          FROM egghead_ContentResource resource
+          WHERE resource.deletedAt IS NULL
+            ${publishedResourceSql("resource")}
+            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
+            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+            AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${placeholders})
+        ) resource_slug
+        GROUP BY resource_slug.slug
+        ORDER BY MAX(resource_slug.createdAt) DESC
       `,
       families,
     );

@@ -3,6 +3,7 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { booleanField, fieldsFromJson, numberField, objectField, stringField } from "./fields";
+import { publishedResourceSql, routeableLessonResourceSql } from "./publication";
 
 type ContentResourceRow = RowDataPacket & {
   id: string;
@@ -72,15 +73,16 @@ export async function getCourseBySlug(slug: string): Promise<CourseForPage | nul
   try {
     const [courseRows] = await connection.execute<ContentResourceRow[]>(
       `
-        SELECT id, type, fields, createdAt, updatedAt
-        FROM egghead_ContentResource
-        WHERE deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) = ?
+        SELECT course.id, course.type, course.fields, course.createdAt, course.updatedAt
+        FROM egghead_ContentResource course
+        WHERE course.deletedAt IS NULL
+          ${publishedResourceSql("course")}
+          AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) = ?
           AND (
-            type = 'course'
+            course.type = 'course'
             OR (
-              type = 'post'
-              AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')) = 'course'
+              course.type = 'post'
+              AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.postType')) = 'course'
             )
           )
         LIMIT 1
@@ -97,7 +99,15 @@ export async function getCourseBySlug(slug: string): Promise<CourseForPage | nul
         JOIN egghead_ContentResource lesson
           ON lesson.id = link.resourceId
          AND lesson.deletedAt IS NULL
+         ${routeableLessonResourceSql("lesson")}
         WHERE link.resourceOfId = ?
+          AND (
+            lesson.type = 'lesson'
+            OR (
+              lesson.type = 'post'
+              AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.postType')) = 'lesson'
+            )
+          )
         ORDER BY link.position ASC, lesson.createdAt ASC
       `,
       [course.id],
@@ -134,18 +144,26 @@ export async function getCourseStaticParams() {
   try {
     const [rows] = await connection.execute<Array<RowDataPacket & { slug: string }>>(
       `
-        SELECT JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) AS slug
-        FROM egghead_ContentResource
-        WHERE deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) IS NOT NULL
-          AND (
-            type = 'course'
-            OR (
-              type = 'post'
-              AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')) = 'course'
+        SELECT course_slug.slug
+        FROM (
+          SELECT
+            JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) AS slug,
+            course.createdAt
+          FROM egghead_ContentResource course
+          WHERE course.deletedAt IS NULL
+            ${publishedResourceSql("course")}
+            AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) IS NOT NULL
+            AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) != ''
+            AND (
+              course.type = 'course'
+              OR (
+                course.type = 'post'
+                AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.postType')) = 'course'
+              )
             )
-          )
-        ORDER BY createdAt DESC
+        ) course_slug
+        GROUP BY course_slug.slug
+        ORDER BY MAX(course_slug.createdAt) DESC
       `,
     );
 

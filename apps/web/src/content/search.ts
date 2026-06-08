@@ -3,6 +3,7 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
+import { publishedResourceSql } from "./publication";
 
 type SearchResourceRow = RowDataPacket & {
   id: string;
@@ -33,7 +34,7 @@ export type SearchResult = {
 
 export type SearchContentType = SearchResult["type"];
 
-const SEARCH_CONTENT_TYPES = new Set<string>([
+const SEARCH_CONTENT_TYPE_VALUES = [
   "article",
   "campaign",
   "case-study",
@@ -46,7 +47,9 @@ const SEARCH_CONTENT_TYPES = new Set<string>([
   "success-story",
   "talk",
   "tip",
-]);
+] as const satisfies SearchContentType[];
+
+const SEARCH_CONTENT_TYPES = new Set<string>(SEARCH_CONTENT_TYPE_VALUES);
 
 function isSearchContentType(value: string): value is SearchContentType {
   return SEARCH_CONTENT_TYPES.has(value);
@@ -87,18 +90,20 @@ export async function searchContent(
   const likeTerm = `%${normalized}%`;
   const normalizedType = typeFilter?.trim() || null;
   const typeClause = normalizedType
-    ? "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')), type) = ?"
+    ? "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) = ?"
     : "";
+  const publicTypePlaceholders = SEARCH_CONTENT_TYPE_VALUES.map(() => "?").join(", ");
   const termClause = normalized
     ? `
             AND (
-              LOWER(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.title'))) LIKE ?
-              OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.description'))) LIKE ?
-              OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.summary'))) LIKE ?
+              LOWER(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.title'))) LIKE ?
+              OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.description'))) LIKE ?
+              OR LOWER(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.summary'))) LIKE ?
             )
         `
     : "";
   const params = [
+    ...SEARCH_CONTENT_TYPE_VALUES,
     ...(normalizedType ? [normalizedType] : []),
     ...(normalized ? [likeTerm, likeTerm, likeTerm] : []),
   ];
@@ -106,12 +111,16 @@ export async function searchContent(
   try {
     const [rows] = await connection.execute<SearchResourceRow[]>(
       `
-          SELECT id, type, fields
-          FROM egghead_ContentResource
-          WHERE deletedAt IS NULL
+          SELECT resource.id, resource.type, resource.fields
+          FROM egghead_ContentResource resource
+          WHERE resource.deletedAt IS NULL
+            ${publishedResourceSql("resource")}
+            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
+            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+            AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${publicTypePlaceholders})
             ${typeClause}
             ${termClause}
-          ORDER BY createdAt DESC
+          ORDER BY resource.createdAt DESC
           LIMIT 24
         `,
       params,

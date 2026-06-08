@@ -3,6 +3,11 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { booleanField, fieldsFromJson, numberField, stringField } from "./fields";
+import {
+  LESSON_STATIC_PARAM_LIMIT,
+  publishedResourceSql,
+  routeableLessonResourceSql,
+} from "./publication";
 
 type ContentResourceRow = RowDataPacket & {
   id: string;
@@ -51,17 +56,25 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
   try {
     const [lessonRows] = await connection.execute<ContentResourceRow[]>(
       `
-        SELECT id, type, fields
-        FROM egghead_ContentResource
-        WHERE deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) = ?
+        SELECT lesson.id, lesson.type, lesson.fields
+        FROM egghead_ContentResource lesson
+        WHERE lesson.deletedAt IS NULL
+          ${routeableLessonResourceSql("lesson")}
+          AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) = ?
           AND (
-            type = 'lesson'
+            lesson.type = 'lesson'
             OR (
-              type = 'post'
-              AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')) = 'lesson'
+              lesson.type = 'post'
+              AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.postType')) = 'lesson'
             )
           )
+        ORDER BY
+          CASE LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.state')), 'published'))
+            WHEN 'published' THEN 0
+            WHEN 'retired' THEN 1
+            ELSE 2
+          END,
+          lesson.createdAt DESC
         LIMIT 1
       `,
       [slug],
@@ -76,6 +89,7 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
         JOIN egghead_ContentResource parent
           ON parent.id = link.resourceOfId
          AND parent.deletedAt IS NULL
+         ${publishedResourceSql("parent")}
         WHERE link.resourceId = ?
           AND (
             parent.type = 'course'
@@ -156,23 +170,26 @@ export async function getLessonStaticParams() {
         SELECT lesson_slug.slug
         FROM (
           SELECT
-            JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) AS slug,
-            createdAt
-          FROM egghead_ContentResource
-          WHERE deletedAt IS NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) != ''
+            JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) AS slug,
+            lesson.createdAt
+          FROM egghead_ContentResource lesson
+          WHERE lesson.deletedAt IS NULL
+            ${publishedResourceSql("lesson")}
+            AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) IS NOT NULL
+            AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) != ''
             AND (
-              type = 'lesson'
+              lesson.type = 'lesson'
               OR (
-                type = 'post'
-                AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')) = 'lesson'
+                lesson.type = 'post'
+                AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.postType')) = 'lesson'
               )
             )
         ) lesson_slug
         GROUP BY lesson_slug.slug
         ORDER BY MAX(lesson_slug.createdAt) DESC
+        LIMIT ?
       `,
+      [LESSON_STATIC_PARAM_LIMIT],
     );
 
     return rows.map((row) => ({ slug: row.slug }));

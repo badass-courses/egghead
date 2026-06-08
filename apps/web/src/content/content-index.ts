@@ -4,6 +4,7 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
+import { publishedResourceSql } from "./publication";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
 
 export type ContentIndexFamily = "course" | "lesson" | PublicContentFamily;
@@ -133,15 +134,15 @@ const CONTENT_INDEX_CONFIG = {
   },
 } satisfies Record<ContentIndexFamily, ContentIndexConfig>;
 
-function resourceWhereClause(family: ContentIndexFamily) {
+function resourceWhereClause(family: ContentIndexFamily, alias = "resource") {
   if (family === "course") {
     return {
       sql: `
         AND (
-          type = 'course'
+          ${alias}.type = 'course'
           OR (
-            type = 'post'
-            AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')) = 'course'
+            ${alias}.type = 'post'
+            AND JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.postType')) = 'course'
           )
         )
       `,
@@ -153,10 +154,10 @@ function resourceWhereClause(family: ContentIndexFamily) {
     return {
       sql: `
         AND (
-          type = 'lesson'
+          ${alias}.type = 'lesson'
           OR (
-            type = 'post'
-            AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')) = 'lesson'
+            ${alias}.type = 'post'
+            AND JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.postType')) = 'lesson'
           )
         )
       `,
@@ -165,7 +166,7 @@ function resourceWhereClause(family: ContentIndexFamily) {
   }
 
   return {
-    sql: "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')), type) = ?",
+    sql: `AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.postType')), ${alias}.type) = ?`,
     params: [family],
   };
 }
@@ -220,30 +221,32 @@ export async function getContentIndex(family: ContentIndexFamily): Promise<Conte
   cacheTag(`egghead-content-index:${family}`);
 
   const config = CONTENT_INDEX_CONFIG[family];
-  const where = resourceWhereClause(family);
+  const where = resourceWhereClause(family, "resource");
   const connection = await createLocalMysqlConnection();
 
   try {
     const [countRows] = await connection.execute<CountRow[]>(
       `
         SELECT COUNT(*) AS total
-        FROM egghead_ContentResource
-        WHERE deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) != ''
+        FROM egghead_ContentResource resource
+        WHERE resource.deletedAt IS NULL
+          ${publishedResourceSql("resource")}
+          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
+          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
           ${where.sql}
       `,
       where.params,
     );
     const [rows] = await connection.execute<ContentIndexRow[]>(
       `
-        SELECT id, type, fields
-        FROM egghead_ContentResource
-        WHERE deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) != ''
+        SELECT resource.id, resource.type, resource.fields
+        FROM egghead_ContentResource resource
+        WHERE resource.deletedAt IS NULL
+          ${publishedResourceSql("resource")}
+          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
+          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
           ${where.sql}
-        ORDER BY createdAt DESC
+        ORDER BY resource.createdAt DESC
         LIMIT ?
       `,
       [...where.params, config.limit],
