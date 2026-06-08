@@ -2,7 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
-import { fieldsFromJson, stringField } from "./fields";
+import { descriptionField, fieldsFromJson, stringField } from "./fields";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
 
 const PUBLIC_CONTENT_FAMILIES = [
@@ -41,10 +41,6 @@ function isPublicContentFamily(value: string | null): value is PublicContentFami
   return PUBLIC_CONTENT_FAMILIES.some((family) => family === value);
 }
 
-function descriptionFromFields(fields: Record<string, unknown>) {
-  return stringField(fields, "description") ?? stringField(fields, "summary") ?? "";
-}
-
 function toCourseItem(row: HomeResourceRow): HomeContentItem | null {
   const fields = fieldsFromJson(row.fields);
   const slug = stringField(fields, "slug");
@@ -55,7 +51,7 @@ function toCourseItem(row: HomeResourceRow): HomeContentItem | null {
     family: "course",
     title: stringField(fields, "title") ?? "Untitled course",
     slug,
-    description: descriptionFromFields(fields),
+    description: descriptionField(fields),
     href: `/courses/${slug}`,
   };
 }
@@ -71,7 +67,7 @@ function toPublicItem(row: HomeResourceRow): HomeContentItem | null {
     family,
     title: stringField(fields, "title") ?? "Untitled",
     slug,
-    description: descriptionFromFields(fields),
+    description: descriptionField(fields),
     href: stringField(fields, "path") ?? pathForPublicContentFamily(family, slug),
   };
 }

@@ -27,7 +27,7 @@ export async function getPublicContentMetadata({
 
   return {
     title: `${title} | egghead`,
-    description: resource?.description ?? `Retained egghead ${label.toLowerCase()} route.`,
+    description: resource?.description ?? `Browse egghead ${label.toLowerCase()} content.`,
     alternates: {
       canonical: `https://egghead.io${canonicalPath}`,
     },

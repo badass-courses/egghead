@@ -2,7 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
-import { fieldsFromJson, stringField } from "./fields";
+import { descriptionField, fieldsFromJson, stringField } from "./fields";
 
 type SearchResourceRow = RowDataPacket & {
   id: string;
@@ -127,7 +127,7 @@ export async function searchContent(
         type,
         title: stringField(fields, "title") ?? "Untitled",
         slug,
-        description: stringField(fields, "description") ?? stringField(fields, "summary") ?? "",
+        description: descriptionField(fields),
         href: resultHref(type, slug),
       };
     });

@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "egghead",
-  description: "Standalone Egghead CourseBuilder app",
+  description: "Courses, lessons, articles, talks, podcasts, and field notes for developers.",
 };
 
 export default function RootLayout({

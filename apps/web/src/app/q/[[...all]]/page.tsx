@@ -43,7 +43,7 @@ export async function generateMetadata(props: SearchPageProps): Promise<Metadata
 
   return {
     title,
-    description: "Find retained egghead content.",
+    description: "Find egghead courses, lessons, articles, talks, podcasts, and tips.",
     alternates: {
       canonical: term ? `https://egghead.io/q/${encodeURIComponent(term)}` : "https://egghead.io/q",
     },
@@ -64,8 +64,8 @@ async function SearchResults(props: SearchPageProps) {
           term
             ? `${results.length} results for ${term}`
             : contentType
-              ? `${results.length} retained ${contentType} resources`
-              : `${results.length} retained resources`
+              ? `${results.length} ${contentType} resources`
+              : `${results.length} resources`
         }
         eyebrow="Browse"
         title="Search"
@@ -92,7 +92,7 @@ async function SearchResults(props: SearchPageProps) {
         </ol>
       ) : (
         <p className="egghead-empty-state" data-search-state="no-results">
-          No retained resources match this search.
+          No resources match this search.
         </p>
       )}
     </>
@@ -102,9 +102,9 @@ async function SearchResults(props: SearchPageProps) {
 function SearchFallback() {
   return (
     <>
-      <SectionHeader description="Loading retained resources." eyebrow="Browse" title="Search" />
+      <SectionHeader description="Loading resources." eyebrow="Browse" title="Search" />
       <p className="egghead-empty-state" data-search-state="pending">
-        Loading retained resources.
+        Loading resources.
       </p>
     </>
   );

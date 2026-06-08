@@ -2,7 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
-import { fieldsFromJson, stringField } from "./fields";
+import { descriptionField, fieldsFromJson, stringField } from "./fields";
 
 export type PublicContentFamily =
   | "article"
@@ -88,7 +88,7 @@ export async function getPublicContentBySlug(
       family: resource.family,
       title: stringField(fields, "title") ?? "Untitled",
       slug: resourceSlug,
-      description: stringField(fields, "description") ?? stringField(fields, "summary") ?? "",
+      description: descriptionField(fields),
       sourcePath: path,
       sourceDisposition:
         stringField(fields, "contentManifestSource") ?? "coursebuilder_public_content",

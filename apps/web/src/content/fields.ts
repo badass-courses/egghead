@@ -31,6 +31,14 @@ export function stringField(fields: JsonFields, key: string): string | null {
   return trimmed ? trimmed : null;
 }
 
+export function descriptionField(fields: JsonFields): string {
+  const value = stringField(fields, "description") ?? stringField(fields, "summary") ?? "";
+  if (!value) return "";
+  if (/content manifest rehearsal/i.test(value)) return "";
+  if (/legacy public archive route preserved/i.test(value)) return "";
+  return value;
+}
+
 export function numberField(fields: JsonFields, key: string): number | null {
   const value = fields[key];
   const parsed = Number(value);
