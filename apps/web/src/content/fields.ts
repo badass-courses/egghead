@@ -31,8 +31,44 @@ export function stringField(fields: JsonFields, key: string): string | null {
   return trimmed ? trimmed : null;
 }
 
+function stripMarkdownForExcerpt(value: string): string {
+  return value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*]\([^)]+\)/g, " ")
+    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^>\s?/gm, "")
+    .replace(/[*_~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function excerptField(fields: JsonFields, maxLength = 260): string {
+  const value = stringField(fields, "summary") ?? stringField(fields, "description") ?? "";
+  if (!value) return "";
+
+  const firstParagraph = value
+    .split(/\n{2,}/)
+    .map((part) => stripMarkdownForExcerpt(part))
+    .find(Boolean);
+  const excerpt = firstParagraph ?? stripMarkdownForExcerpt(value);
+
+  if (excerpt.length <= maxLength) return excerpt;
+  return `${excerpt.slice(0, maxLength).replace(/\s+\S*$/, "")}...`;
+}
+
+export function markdownField(fields: JsonFields): string | null {
+  return (
+    stringField(fields, "body") ??
+    stringField(fields, "markdown") ??
+    stringField(fields, "description") ??
+    stringField(fields, "summary")
+  );
+}
+
 export function descriptionField(fields: JsonFields): string {
-  const value = stringField(fields, "description") ?? stringField(fields, "summary") ?? "";
+  const value = excerptField(fields);
   if (!value) return "";
   if (/content manifest rehearsal/i.test(value)) return "";
   if (/legacy public archive route preserved/i.test(value)) return "";

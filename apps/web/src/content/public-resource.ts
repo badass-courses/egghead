@@ -2,7 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
-import { descriptionField, fieldsFromJson, stringField } from "./fields";
+import { descriptionField, fieldsFromJson, markdownField, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
 
 export type PublicContentFamily =
@@ -30,6 +30,11 @@ export type PublicContentResource = {
   slug: string;
   description: string;
   body: string | null;
+  imageUrl: string | null;
+  mediaUrl: string | null;
+  videoHlsUrl: string | null;
+  videoDashUrl: string | null;
+  thumbnailUrl: string | null;
   sourcePath: string;
   sourceDisposition: string;
 };
@@ -92,7 +97,16 @@ export async function getPublicContentBySlug(
       title: stringField(fields, "title") ?? "Untitled",
       slug: resourceSlug,
       description: descriptionField(fields),
-      body: stringField(fields, "body"),
+      body: markdownField(fields),
+      imageUrl:
+        stringField(fields, "imageUrl") ??
+        stringField(fields, "image") ??
+        stringField(fields, "ogImage") ??
+        stringField(fields, "thumbnailUrl"),
+      mediaUrl: stringField(fields, "mediaUrl") ?? stringField(fields, "audioUrl"),
+      videoHlsUrl: stringField(fields, "currentVideoHlsUrl") ?? stringField(fields, "hlsUrl"),
+      videoDashUrl: stringField(fields, "currentVideoDashUrl"),
+      thumbnailUrl: stringField(fields, "thumbnailUrl") ?? stringField(fields, "thumbUrl"),
       sourcePath: path,
       sourceDisposition:
         stringField(fields, "contentManifestSource") ?? "coursebuilder_public_content",

@@ -2,7 +2,15 @@ import type { RowDataPacket } from "mysql2";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
-import { booleanField, fieldsFromJson, numberField, objectField, stringField } from "./fields";
+import {
+  booleanField,
+  excerptField,
+  fieldsFromJson,
+  markdownField,
+  numberField,
+  objectField,
+  stringField,
+} from "./fields";
 import { publishedResourceSql, routeableLessonResourceSql } from "./publication";
 
 type ContentResourceRow = RowDataPacket & {
@@ -120,8 +128,8 @@ export async function getCourseBySlug(slug: string): Promise<CourseForPage | nul
       id: course.id,
       title: stringField(fields, "title") ?? "Untitled course",
       slug: stringField(fields, "slug") ?? slug,
-      description: stringField(fields, "description") ?? stringField(fields, "summary") ?? "",
-      body: stringField(fields, "body"),
+      description: excerptField(fields),
+      body: markdownField(fields),
       state: stringField(fields, "state"),
       visibilityState: stringField(fields, "visibilityState"),
       accessState: stringField(fields, "accessState"),

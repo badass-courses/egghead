@@ -2,7 +2,14 @@ import type { RowDataPacket } from "mysql2";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
-import { booleanField, fieldsFromJson, numberField, stringField } from "./fields";
+import {
+  booleanField,
+  excerptField,
+  fieldsFromJson,
+  markdownField,
+  numberField,
+  stringField,
+} from "./fields";
 import {
   LESSON_STATIC_PARAM_LIMIT,
   publishedResourceSql,
@@ -135,16 +142,22 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
       id: lesson.id,
       title: stringField(fields, "title") ?? "Untitled lesson",
       slug: stringField(fields, "slug") ?? slug,
-      description: stringField(fields, "description") ?? stringField(fields, "summary") ?? "",
-      body: stringField(fields, "body"),
+      description: excerptField(fields),
+      body: markdownField(fields),
       duration: numberField(fields, "duration") ?? numberField(videoFields, "duration"),
       freeForever: booleanField(fields, "freeForever"),
       isProContent: booleanField(fields, "isProContent"),
       courseLinked: Boolean(parentCourse),
       parentCourseId: parentCourse?.id ?? null,
       parentCourseLegacyRailsPlaylistId: numberField(parentCourseFields, "legacyRailsPlaylistId"),
-      hasTranscript: booleanField(fields, "hasTranscript"),
-      hasSrt: booleanField(fields, "hasSrt"),
+      hasTranscript:
+        booleanField(fields, "hasTranscript") ||
+        booleanField(fields, "transcriptSourceAvailable") ||
+        Boolean(stringField(fields, "transcript")),
+      hasSrt:
+        booleanField(fields, "hasSrt") ||
+        booleanField(fields, "srtSourceAvailable") ||
+        Boolean(stringField(fields, "srt")),
       state: stringField(fields, "state"),
       visibilityState: stringField(fields, "visibilityState"),
       videoHlsUrl,
