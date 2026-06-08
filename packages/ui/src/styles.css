@@ -250,6 +250,12 @@ body {
   margin: 0;
 }
 
+.egghead-login-actions {
+  display: grid;
+  gap: 12px;
+  max-width: 320px;
+}
+
 .egghead-login-button {
   width: 100%;
   min-height: 64px;

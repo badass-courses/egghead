@@ -4,21 +4,10 @@ import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
+import { isGithubAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUserFromRequest } from "../../coursebuilder/current-user";
 import { getEggheadRuntime } from "../../db/local-docker";
-import { REHEARSAL_COHORTS, type RehearsalCohort } from "../../coursebuilder/rehearsal-cohort";
-
-const COHORT_LABELS: Record<RehearsalCohort, string> = {
-  active_individual_subscriber: "Active subscriber",
-  active_team_seat_learner: "Team learner",
-  anonymous: "Sign out",
-  bare_legacy_pro_quarantined: "Legacy pro",
-  expired_canceled_subscriber: "Expired subscriber",
-  free_signed_in: "Free account",
-  instructor_admin_support: "Staff access",
-  paid_course_purchaser: "Course purchaser",
-  team_owner_admin: "Team owner",
-};
+import { signIn } from "../../server/auth";
 
 async function CurrentLoginState() {
   const requestHeaders = await headers();
@@ -30,15 +19,25 @@ async function CurrentLoginState() {
 
   return (
     <div className="egghead-login-state">
-      <p className="egghead-eyebrow">Current cohort</p>
-      <p>{COHORT_LABELS[currentUser.user.cohort]}</p>
-      <p>{currentUser.user.support.accessSummary}</p>
+      <p className="egghead-eyebrow">Signed in</p>
+      <p>
+        {currentUser.user.access.granted
+          ? "Membership access active"
+          : "No active membership access"}
+      </p>
     </div>
   );
 }
 
+async function signInWithGithub() {
+  "use server";
+
+  await signIn("github", { redirectTo: "/" });
+}
+
 export default function LoginPage() {
   const runtime = getEggheadRuntime();
+  const githubAuthConfigured = isGithubAuthConfigured();
 
   if (runtime === "production") notFound();
 
@@ -46,26 +45,26 @@ export default function LoginPage() {
     <Container as="main" size="narrow">
       <Stack gap="loose">
         <SectionHeader
-          description="Choose a redacted beta cohort backed by migrated CourseBuilder permissions."
-          eyebrow="Beta"
-          title="Sign in"
+          description="Use your GitHub account to continue."
+          eyebrow="Account"
+          title="Sign in to egghead"
         />
 
         <Suspense fallback={null}>
           <CurrentLoginState />
         </Suspense>
 
-        <div className="egghead-login-grid">
-          {REHEARSAL_COHORTS.map((cohort) => (
-            <form action="/api/rehearsal-login" key={cohort} method="post">
-              <input name="cohort" type="hidden" value={cohort} />
-              <input name="returnTo" type="hidden" value="/" />
-              <button className="egghead-login-button" type="submit">
-                {COHORT_LABELS[cohort]}
-              </button>
-            </form>
-          ))}
-        </div>
+        {githubAuthConfigured ? (
+          <form action={signInWithGithub} className="egghead-login-actions">
+            <button className="egghead-login-button" type="submit">
+              Continue with GitHub
+            </button>
+          </form>
+        ) : (
+          <p className="egghead-empty-state">
+            GitHub sign-in is not configured for this environment.
+          </p>
+        )}
       </Stack>
     </Container>
   );
