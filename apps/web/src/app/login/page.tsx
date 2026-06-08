@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
@@ -19,15 +20,27 @@ const COHORT_LABELS: Record<RehearsalCohort, string> = {
   team_owner_admin: "Team owner",
 };
 
-export default async function LoginPage() {
-  const runtime = getEggheadRuntime();
-
-  if (runtime === "production") notFound();
-
+async function CurrentLoginState() {
   const requestHeaders = await headers();
   const currentUser = await getCurrentUserFromRequest(
     new Request("http://egghead.local/login", { headers: requestHeaders }),
   );
+
+  if (!currentUser.user) return null;
+
+  return (
+    <div className="egghead-login-state">
+      <p className="egghead-eyebrow">Current cohort</p>
+      <p>{COHORT_LABELS[currentUser.user.cohort]}</p>
+      <p>{currentUser.user.support.accessSummary}</p>
+    </div>
+  );
+}
+
+export default function LoginPage() {
+  const runtime = getEggheadRuntime();
+
+  if (runtime === "production") notFound();
 
   return (
     <Container as="main" size="narrow">
@@ -38,13 +51,9 @@ export default async function LoginPage() {
           title="Sign in"
         />
 
-        {currentUser.user ? (
-          <div className="egghead-login-state">
-            <p className="egghead-eyebrow">Current cohort</p>
-            <p>{COHORT_LABELS[currentUser.user.cohort]}</p>
-            <p>{currentUser.user.support.accessSummary}</p>
-          </div>
-        ) : null}
+        <Suspense fallback={null}>
+          <CurrentLoginState />
+        </Suspense>
 
         <div className="egghead-login-grid">
           {REHEARSAL_COHORTS.map((cohort) => (
