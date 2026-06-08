@@ -108,7 +108,11 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
       stringField(fields, "muxPlaybackId") ?? stringField(videoFields, "muxPlaybackId");
     const videoHlsUrl =
       stringField(fields, "currentVideoHlsUrl") ??
+      stringField(videoFields, "currentVideoHlsUrl") ??
+      stringField(videoFields, "hlsUrl") ??
       (muxPlaybackId ? `https://stream.mux.com/${muxPlaybackId}.m3u8` : null);
+    const videoDashUrl =
+      stringField(fields, "currentVideoDashUrl") ?? stringField(videoFields, "currentVideoDashUrl");
 
     return {
       id: lesson.id,
@@ -127,7 +131,7 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
       state: stringField(fields, "state"),
       visibilityState: stringField(fields, "visibilityState"),
       videoHlsUrl,
-      videoDashUrl: stringField(fields, "currentVideoDashUrl"),
+      videoDashUrl,
       videoResourceId: videoRows[0]?.id ?? null,
       videoMuxPlaybackId: muxPlaybackId,
     };
