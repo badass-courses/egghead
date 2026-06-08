@@ -15,6 +15,7 @@ import {
   publishedResourceSql,
   routeableLessonResourceSql,
 } from "./publication";
+import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
 
 type ContentResourceRow = RowDataPacket & {
   id: string;
@@ -51,6 +52,21 @@ export type LessonForPage = {
   videoResourceId: string | null;
   videoMuxPlaybackId: string | null;
 };
+
+function hotLessonStaticParamSql() {
+  if (HOT_LESSON_STATIC_PARAMS.length === 0) {
+    return "SELECT NULL AS slug, NULL AS popularityRank, NULL AS requests720h WHERE FALSE";
+  }
+
+  return HOT_LESSON_STATIC_PARAMS.map(
+    (row) =>
+      `SELECT ${sqlString(row.slug)} AS slug, ${row.popularityRank} AS popularityRank, ${row.requests720h} AS requests720h`,
+  ).join(" UNION ALL ");
+}
+
+function sqlString(value: string) {
+  return `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
+}
 
 export async function getLessonBySlug(slug: string): Promise<LessonForPage | null> {
   "use cache";
@@ -178,14 +194,21 @@ export async function getLessonStaticParams() {
   const connection = await createLocalMysqlConnection();
 
   try {
-    const [rows] = await connection.execute<Array<RowDataPacket & { slug: string }>>(
+    const [rows] = await connection.query<Array<RowDataPacket & { slug: string }>>(
       `
+        WITH hot_lessons AS (
+          ${hotLessonStaticParamSql()}
+        )
         SELECT lesson_slug.slug
         FROM (
           SELECT
             JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) AS slug,
-            lesson.createdAt
+            lesson.createdAt,
+            hot_lessons.popularityRank,
+            hot_lessons.requests720h
           FROM egghead_ContentResource lesson
+          LEFT JOIN hot_lessons
+            ON hot_lessons.slug = JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug'))
           WHERE lesson.deletedAt IS NULL
             ${publishedResourceSql("lesson")}
             AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) IS NOT NULL
@@ -199,10 +222,13 @@ export async function getLessonStaticParams() {
             )
         ) lesson_slug
         GROUP BY lesson_slug.slug
-        ORDER BY MAX(lesson_slug.createdAt) DESC
-        LIMIT ?
+        ORDER BY
+          CASE WHEN MIN(lesson_slug.popularityRank) IS NULL THEN 1 ELSE 0 END ASC,
+          MIN(lesson_slug.popularityRank) ASC,
+          MAX(lesson_slug.requests720h) DESC,
+          MAX(lesson_slug.createdAt) DESC
+        LIMIT ${LESSON_STATIC_PARAM_LIMIT}
       `,
-      [LESSON_STATIC_PARAM_LIMIT],
     );
 
     return rows.map((row) => ({ slug: row.slug }));

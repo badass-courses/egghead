@@ -87,16 +87,17 @@ body {
 
 .egghead-section-header h1 {
   margin: 0;
-  font-size: clamp(2rem, 4vw, 3.5rem);
+  overflow-wrap: anywhere;
+  font-size: 1.875rem;
   font-weight: 760;
-  line-height: 1.05;
+  line-height: 1.12;
   color: var(--foreground);
 }
 
 .egghead-section-description {
   max-width: var(--measure);
   margin: 0;
-  font-size: clamp(1.125rem, 2vw, 1.35rem);
+  font-size: 1.0625rem;
   line-height: 1.55;
   color: var(--muted);
 }
@@ -127,11 +128,11 @@ body {
 }
 
 .egghead-prose h2 {
-  font-size: clamp(1.5rem, 3vw, 2.25rem);
+  font-size: 1.5rem;
 }
 
 .egghead-prose h3 {
-  font-size: clamp(1.25rem, 2vw, 1.6rem);
+  font-size: 1.25rem;
 }
 
 .egghead-prose a {
@@ -255,8 +256,8 @@ body {
 }
 
 .egghead-home-section-header h2 {
-  font-size: clamp(1.75rem, 4vw, 3rem);
-  line-height: 1;
+  font-size: 1.625rem;
+  line-height: 1.08;
 }
 
 .egghead-home-section-header p {
@@ -468,9 +469,36 @@ body {
 
 .egghead-search-title {
   overflow-wrap: anywhere;
-  font-size: clamp(1.25rem, 2vw, 1.75rem);
+  font-size: 1.2rem;
   font-weight: 720;
   line-height: 1.1;
+}
+
+@media (min-width: 760px) {
+  .egghead-section-header h1 {
+    font-size: 2.35rem;
+    line-height: 1.08;
+  }
+
+  .egghead-section-description {
+    font-size: 1.15rem;
+  }
+
+  .egghead-prose h2 {
+    font-size: 1.875rem;
+  }
+
+  .egghead-prose h3 {
+    font-size: 1.4rem;
+  }
+
+  .egghead-home-section-header h2 {
+    font-size: 2.125rem;
+  }
+
+  .egghead-search-title {
+    font-size: 1.4rem;
+  }
 }
 
 .egghead-search-description {

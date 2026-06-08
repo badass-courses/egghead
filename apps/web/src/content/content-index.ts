@@ -223,6 +223,7 @@ export async function getContentIndex(family: ContentIndexFamily): Promise<Conte
   const config = CONTENT_INDEX_CONFIG[family];
   const where = resourceWhereClause(family, "resource");
   const connection = await createLocalMysqlConnection();
+  const limit = Math.max(1, Math.floor(config.limit));
 
   try {
     const [countRows] = await connection.execute<CountRow[]>(
@@ -247,9 +248,9 @@ export async function getContentIndex(family: ContentIndexFamily): Promise<Conte
           AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
           ${where.sql}
         ORDER BY resource.createdAt DESC
-        LIMIT ?
+        LIMIT ${limit}
       `,
-      [...where.params, config.limit],
+      where.params,
     );
 
     return {
