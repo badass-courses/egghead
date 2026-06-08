@@ -3,7 +3,11 @@ import { notFound } from "next/navigation";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
-import { getCourseBySlug, getCourseStaticParams } from "../../../content/course";
+import {
+  getCourseBySlug,
+  getCourseStaticParams,
+  type CourseForPage,
+} from "../../../content/course";
 
 type CoursePageProps = {
   params: Promise<{
@@ -45,11 +49,8 @@ export function generateStaticParams() {
   return getCourseStaticParams();
 }
 
-export default async function CoursePage({ params }: CoursePageProps) {
-  const slug = await courseSlugFromParams(params);
-  const course = await getCourseBySlug(slug);
-
-  if (!course) notFound();
+async function CoursePageStatic({ course }: { course: CourseForPage }) {
+  "use cache";
 
   return (
     <Container as="main" size="wide">
@@ -98,4 +99,13 @@ export default async function CoursePage({ params }: CoursePageProps) {
       </Stack>
     </Container>
   );
+}
+
+export default async function CoursePage({ params }: CoursePageProps) {
+  const slug = await courseSlugFromParams(params);
+  const course = await getCourseBySlug(slug);
+
+  if (!course) notFound();
+
+  return <CoursePageStatic course={course} />;
 }

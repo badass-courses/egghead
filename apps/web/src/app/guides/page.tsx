@@ -1,5 +1,10 @@
-import { permanentRedirect } from "next/navigation";
+import { ContentIndexPage } from "../../content/content-index-page";
+import { contentIndexMetadata, getContentIndex } from "../../content/content-index";
 
-export default function GuidesIndexRedirectPage() {
-  permanentRedirect("/q?type=guide");
+export const metadata = contentIndexMetadata("guide");
+
+export default async function GuidesIndexPage() {
+  const index = await getContentIndex("guide");
+
+  return <ContentIndexPage index={index} />;
 }

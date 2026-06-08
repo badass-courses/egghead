@@ -3,13 +3,15 @@ import { SectionHeader, Stack } from "@egghead/ui/structure";
 
 import type { PublicContentResource } from "./public-resource";
 
-export function PublicContentPage({
+export async function PublicContentPage({
   eyebrow,
   resource,
 }: {
   eyebrow: string;
   resource: PublicContentResource;
 }) {
+  "use cache";
+
   return (
     <Container as="main" size="narrow">
       <Stack gap="loose">

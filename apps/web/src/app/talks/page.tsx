@@ -1,5 +1,10 @@
-import { permanentRedirect } from "next/navigation";
+import { ContentIndexPage } from "../../content/content-index-page";
+import { contentIndexMetadata, getContentIndex } from "../../content/content-index";
 
-export default function TalksIndexRedirectPage() {
-  permanentRedirect("/q?type=talk");
+export const metadata = contentIndexMetadata("talk");
+
+export default async function TalksIndexPage() {
+  const index = await getContentIndex("talk");
+
+  return <ContentIndexPage index={index} />;
 }

@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, type ReactNode } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
 import {
-  getCourseLinkedLessonStaticParams,
   getLessonBySlug,
+  getLessonStaticParams,
   type LessonForPage,
 } from "../../../content/lesson";
 import { getCurrentUserFromRequest } from "../../../coursebuilder/current-user";
@@ -50,7 +50,7 @@ export async function generateMetadata({ params }: LessonPageProps): Promise<Met
 }
 
 export function generateStaticParams() {
-  return getCourseLinkedLessonStaticParams();
+  return getLessonStaticParams();
 }
 
 function LessonAccessFallback({ lesson }: { lesson: LessonForPage }) {
@@ -158,6 +158,26 @@ async function LessonAccessExperience({ lesson }: { lesson: LessonForPage }) {
   );
 }
 
+async function LessonPageStatic({
+  accessComponent,
+  lesson,
+}: {
+  accessComponent: ReactNode;
+  lesson: LessonForPage;
+}) {
+  "use cache";
+
+  return (
+    <Container as="main" size="narrow">
+      <Stack gap="loose">
+        <SectionHeader description={lesson.description} eyebrow="Lesson" title={lesson.title} />
+
+        <Suspense fallback={<LessonAccessFallback lesson={lesson} />}>{accessComponent}</Suspense>
+      </Stack>
+    </Container>
+  );
+}
+
 export default async function LessonPage({ params }: LessonPageProps) {
   const slug = await lessonSlugFromParams(params);
   const lesson = await getLessonBySlug(slug);
@@ -165,14 +185,9 @@ export default async function LessonPage({ params }: LessonPageProps) {
   if (!lesson) notFound();
 
   return (
-    <Container as="main" size="narrow">
-      <Stack gap="loose">
-        <SectionHeader description={lesson.description} eyebrow="Lesson" title={lesson.title} />
-
-        <Suspense fallback={<LessonAccessFallback lesson={lesson} />}>
-          <LessonAccessExperience lesson={lesson} />
-        </Suspense>
-      </Stack>
-    </Container>
+    <LessonPageStatic
+      accessComponent={<LessonAccessExperience lesson={lesson} />}
+      lesson={lesson}
+    />
   );
 }

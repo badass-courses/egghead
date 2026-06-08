@@ -131,7 +131,7 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
   }
 }
 
-export async function getCourseLinkedLessonStaticParams() {
+export async function getLessonStaticParams() {
   "use cache";
   cacheLife("hours");
   cacheTag("egghead-lesson-static-params");
@@ -141,28 +141,25 @@ export async function getCourseLinkedLessonStaticParams() {
   try {
     const [rows] = await connection.execute<Array<RowDataPacket & { slug: string }>>(
       `
-        SELECT JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) AS slug
-        FROM egghead_ContentResource lesson
-        JOIN egghead_ContentResourceResource link
-          ON link.resourceId = lesson.id
-        JOIN egghead_ContentResource parent
-          ON parent.id = link.resourceOfId
-         AND parent.deletedAt IS NULL
-        WHERE lesson.deletedAt IS NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) IS NOT NULL
-          AND (
-            lesson.type = 'lesson'
-            OR (
-              lesson.type = 'post'
-              AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.postType')) = 'lesson'
+        SELECT lesson_slug.slug
+        FROM (
+          SELECT
+            JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) AS slug,
+            createdAt
+          FROM egghead_ContentResource
+          WHERE deletedAt IS NULL
+            AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) IS NOT NULL
+            AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.slug')) != ''
+            AND (
+              type = 'lesson'
+              OR (
+                type = 'post'
+                AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.postType')) = 'lesson'
+              )
             )
-          )
-          AND (
-            parent.type = 'course'
-            OR JSON_UNQUOTE(JSON_EXTRACT(parent.fields, '$.postType')) = 'course'
-          )
-        GROUP BY slug
-        ORDER BY MAX(lesson.createdAt) DESC
+        ) lesson_slug
+        GROUP BY lesson_slug.slug
+        ORDER BY MAX(lesson_slug.createdAt) DESC
       `,
     );
 

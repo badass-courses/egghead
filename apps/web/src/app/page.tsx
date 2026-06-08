@@ -16,8 +16,8 @@ function SearchForm() {
 function BrowseLinks() {
   return (
     <nav aria-label="Browse egghead" className="egghead-home-nav">
-      <Link href="/q?type=course">Courses</Link>
-      <Link href="/q?type=lesson">Lessons</Link>
+      <Link href="/courses">Courses</Link>
+      <Link href="/lessons">Lessons</Link>
       <Link href="/blog">Articles</Link>
       <Link href="/tips">Tips</Link>
       <Link href="/podcasts">Podcasts</Link>
