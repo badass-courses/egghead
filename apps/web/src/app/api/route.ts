@@ -1,4 +1,8 @@
+import { getEggheadRuntime, isBetaDatabaseApproved } from "../../db/local-docker";
+
 export function GET() {
+  const runtime = getEggheadRuntime();
+
   return Response.json(
     {
       id: "egghead",
@@ -20,9 +24,13 @@ export function GET() {
         },
       },
       guardrails: {
-        localDevOnly: true,
+        runtime,
+        localDevOnly: runtime === "local",
+        betaRuntime: runtime === "beta",
+        betaDatabaseApproved: isBetaDatabaseApproved(),
         noCommerce: true,
         noStripeWriterChange: true,
+        noInngestWriterChange: true,
         noReadFlip: true,
         noPlanetScaleWrites: true,
       },

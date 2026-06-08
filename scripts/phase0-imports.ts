@@ -1,9 +1,11 @@
 import { courseBuilderConfig } from "../apps/web/src/coursebuilder/config";
 import { getCurrentUser } from "../apps/web/src/coursebuilder/current-user";
+import { getEggheadRuntime, isBetaDatabaseApproved } from "../apps/web/src/db/local-docker";
 import { EGGHEAD_TABLE_PREFIX, getEggheadTableName } from "../apps/web/src/db/mysql-table";
 import { entitlements, entitlementTypes, resourceProgress, users } from "../apps/web/src/db/schema";
 
 const currentUser = await getCurrentUser();
+const runtime = getEggheadRuntime();
 
 console.log(
   JSON.stringify({
@@ -28,7 +30,10 @@ console.log(
       exportsLoad: Boolean(users && resourceProgress && entitlements && entitlementTypes),
     },
     guardrails: {
-      localDevOnly: true,
+      runtime,
+      localDevOnly: runtime === "local",
+      betaRuntime: runtime === "beta",
+      betaDatabaseApproved: isBetaDatabaseApproved(),
       commerceExcluded: true,
       stripeWriterUnchanged: true,
       inngestWriterUnchanged: true,

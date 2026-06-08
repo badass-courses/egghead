@@ -1,12 +1,15 @@
 import { getBaseUrl } from "../../../coursebuilder/url";
+import { getEggheadRuntime, isBetaDatabaseApproved } from "../../../db/local-docker";
 
 export function GET(request: Request) {
   const baseUrl = getBaseUrl(request);
+  const runtime = getEggheadRuntime();
 
   return Response.json({
     id: "egghead",
     displayName: "egghead",
     baseUrl,
+    runtime,
     auth: {
       currentUser: "/api/current-user",
     },
@@ -16,9 +19,12 @@ export function GET(request: Request) {
         coursebuilder: "/api/coursebuilder",
       },
       phase0: {
-        localOnly: true,
+        localOnly: runtime === "local",
+        betaRuntime: runtime === "beta",
+        betaDatabaseApproved: isBetaDatabaseApproved(),
         commerceExcluded: true,
         stripeWriterUnchanged: true,
+        inngestWriterUnchanged: true,
         readFlipBlocked: true,
       },
     },
