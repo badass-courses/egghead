@@ -227,6 +227,47 @@ body {
   font-weight: 650;
 }
 
+.egghead-login-state {
+  display: grid;
+  gap: 8px;
+  padding-block: 18px;
+  border-block: 1px solid var(--subtle);
+}
+
+.egghead-login-state p {
+  margin: 0;
+}
+
+.egghead-login-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
+  padding: 1px;
+  background: var(--subtle);
+}
+
+.egghead-login-grid form {
+  margin: 0;
+}
+
+.egghead-login-button {
+  width: 100%;
+  min-height: 64px;
+  padding: 18px;
+  border: 0;
+  border-radius: 0;
+  color: var(--foreground);
+  font: inherit;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+  background: var(--background);
+}
+
+.egghead-login-button:hover {
+  background: var(--panel);
+}
+
 .egghead-search-results {
   display: grid;
   gap: 1px;

@@ -3,21 +3,11 @@ import type { RowDataPacket } from "mysql2";
 
 import { evaluateContentAccessForUser } from "../access/evaluate";
 import { createLocalMysqlConnection } from "../db/local-docker";
+import { rehearsalCohortFromRequest, type RehearsalCohort } from "./rehearsal-cohort";
 
 type FixtureUserRow = RowDataPacket & {
   userId: string;
 };
-
-type RehearsalCohort =
-  | "active_individual_subscriber"
-  | "active_team_seat_learner"
-  | "anonymous"
-  | "bare_legacy_pro_quarantined"
-  | "expired_canceled_subscriber"
-  | "free_signed_in"
-  | "instructor_admin_support"
-  | "paid_course_purchaser"
-  | "team_owner_admin";
 
 type CurrentUserContext = {
   legacyRailsPlaylistId?: number | null;
@@ -26,7 +16,7 @@ type CurrentUserContext = {
 type CurrentUserPayload = {
   id: string;
   role: "user";
-  identitySource: "coursebuilder-local-docker-fixture";
+  identitySource: "coursebuilder-rehearsal-cohort";
   cohort: RehearsalCohort;
   access: Awaited<ReturnType<typeof evaluateContentAccessForUser>>;
   support: {
@@ -53,29 +43,6 @@ function hashUserId(userId: string) {
 
 async function findActiveAllAccessFixtureUserId() {
   return findRehearsalCohortUserId("active_individual_subscriber", {});
-}
-
-function normalizeRehearsalCohort(value: string | null): RehearsalCohort | null {
-  if (!value) return null;
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (normalized === "active_all_access_user") return "active_individual_subscriber";
-  if (normalized === "team_owner") return "team_owner_admin";
-  if (normalized === "legacy_pro") return "bare_legacy_pro_quarantined";
-  if (normalized === "staff") return "instructor_admin_support";
-
-  const cohorts: RehearsalCohort[] = [
-    "active_individual_subscriber",
-    "active_team_seat_learner",
-    "anonymous",
-    "bare_legacy_pro_quarantined",
-    "expired_canceled_subscriber",
-    "free_signed_in",
-    "instructor_admin_support",
-    "paid_course_purchaser",
-    "team_owner_admin",
-  ];
-
-  return cohorts.find((cohort) => cohort === normalized) ?? null;
 }
 
 async function findRehearsalCohortUserId(cohort: RehearsalCohort, context: CurrentUserContext) {
@@ -277,9 +244,7 @@ export async function getCurrentUserFromRequest(
   context: CurrentUserContext = {},
 ): Promise<CurrentUserReadModel> {
   const fixture = request.headers.get("x-egghead-mve-fixture");
-  const rehearsalCohort = normalizeRehearsalCohort(
-    request.headers.get("x-egghead-rehearsal-cohort") ?? fixture,
-  );
+  const rehearsalCohort = rehearsalCohortFromRequest(request);
   const authorization = request.headers.get("authorization");
 
   if (!rehearsalCohort && authorization) {
@@ -344,7 +309,7 @@ export async function getCurrentUserFromRequest(
     user: {
       id: hashUserId(userId),
       role: "user",
-      identitySource: "coursebuilder-local-docker-fixture",
+      identitySource: "coursebuilder-rehearsal-cohort",
       cohort: rehearsalCohort,
       access,
       support: {
