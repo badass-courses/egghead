@@ -14,10 +14,11 @@ export function Container<T extends ElementType = "div">({
   ...props
 }: ContainerProps<T>) {
   const Component = as ?? "div";
+  const sizeClass = size === "narrow" ? "max-w-3xl" : "max-w-6xl";
 
   return (
     <Component
-      className={cn("egghead-container", `egghead-container-${size}`, className)}
+      className={cn("mx-auto w-full px-4 py-12 sm:px-6 sm:py-16 lg:px-8", sizeClass, className)}
       {...props}
     />
   );

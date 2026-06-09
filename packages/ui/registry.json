@@ -26,6 +26,19 @@
           "type": "registry:component"
         }
       ]
+    },
+    {
+      "name": "egghead-button",
+      "type": "registry:ui",
+      "title": "Button",
+      "description": "A stark shadcn-style button primitive for Egghead CourseBuilder surfaces.",
+      "dependencies": ["@radix-ui/react-slot", "class-variance-authority"],
+      "files": [
+        {
+          "path": "registry/egghead/button.tsx",
+          "type": "registry:ui"
+        }
+      ]
     }
   ]
 }
