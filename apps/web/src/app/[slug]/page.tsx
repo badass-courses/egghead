@@ -67,6 +67,26 @@ export async function generateMetadata({ params }: RootContentPageProps): Promis
     };
   }
 
+  const publicResource = await getPublicContentBySlug(slug, [
+    ...STANDALONE_PUBLIC_CONTENT_FAMILIES,
+  ] satisfies PublicContentFamily[]);
+
+  if (publicResource) {
+    return {
+      title: `${publicResource.title} | egghead`,
+      description: publicResource.description,
+      alternates: {
+        canonical: `https://egghead.io${publicResource.canonicalPath}`,
+      },
+      openGraph: {
+        title: publicResource.title,
+        description: publicResource.description,
+        url: `https://egghead.io${publicResource.canonicalPath}`,
+        type: "article",
+      },
+    };
+  }
+
   const lesson = await getLessonBySlug(slug);
 
   if (lesson) {
@@ -85,28 +105,8 @@ export async function generateMetadata({ params }: RootContentPageProps): Promis
     };
   }
 
-  const publicResource = await getPublicContentBySlug(slug, [
-    ...STANDALONE_PUBLIC_CONTENT_FAMILIES,
-  ] satisfies PublicContentFamily[]);
-
-  if (!publicResource) {
-    return {
-      title: "Content not found | egghead",
-    };
-  }
-
   return {
-    title: `${publicResource.title} | egghead`,
-    description: publicResource.description,
-    alternates: {
-      canonical: `https://egghead.io${publicResource.canonicalPath}`,
-    },
-    openGraph: {
-      title: publicResource.title,
-      description: publicResource.description,
-      url: `https://egghead.io${publicResource.canonicalPath}`,
-      type: "article",
-    },
+    title: "Content not found | egghead",
   };
 }
 
@@ -115,6 +115,18 @@ export default async function RootContentPage({ params }: RootContentPageProps) 
   const course = await getCourseBySlug(slug);
 
   if (course) return <CoursePageStatic course={course} />;
+
+  const publicResource = await getPublicContentBySlug(slug, [
+    ...STANDALONE_PUBLIC_CONTENT_FAMILIES,
+  ] satisfies PublicContentFamily[]);
+
+  if (publicResource) {
+    return renderPublicContentRoute({
+      eyebrow: publicResource.family,
+      families: [publicResource.family],
+      slug,
+    });
+  }
 
   const lesson = await getLessonBySlug(slug);
 
@@ -131,15 +143,5 @@ export default async function RootContentPage({ params }: RootContentPageProps) 
     );
   }
 
-  const publicResource = await getPublicContentBySlug(slug, [
-    ...STANDALONE_PUBLIC_CONTENT_FAMILIES,
-  ] satisfies PublicContentFamily[]);
-
-  if (!publicResource) notFound();
-
-  return renderPublicContentRoute({
-    eyebrow: publicResource.family,
-    families: [publicResource.family],
-    slug,
-  });
+  return notFound();
 }
