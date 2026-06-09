@@ -178,7 +178,7 @@ export async function ensureEggheadTypesenseCollection({
   } catch (error) {
     const status =
       error && typeof error === "object" && "httpStatus" in error ? error.httpStatus : null;
-    if (status && status !== 404) throw error;
+    if (status !== 404) throw error;
   }
 
   await client.collections().create(eggheadTypesenseCollectionSchema());

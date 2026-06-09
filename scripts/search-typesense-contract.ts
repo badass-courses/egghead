@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import {
   EGGHEAD_TYPESENSE_COLLECTION_NAME,
   EGGHEAD_TYPESENSE_COLLECTION_SCHEMA,
@@ -18,6 +21,29 @@ function assertEqual(
   }
 
   return { name, pass: true as const };
+}
+
+function hasTypesenseDependency() {
+  const packageJson: unknown = JSON.parse(readFileSync("apps/web/package.json", "utf8"));
+  if (!packageJson || typeof packageJson !== "object") return false;
+  const dependencies =
+    "dependencies" in packageJson &&
+    packageJson.dependencies &&
+    typeof packageJson.dependencies === "object"
+      ? packageJson.dependencies
+      : {};
+  const devDependencies =
+    "devDependencies" in packageJson &&
+    packageJson.devDependencies &&
+    typeof packageJson.devDependencies === "object"
+      ? packageJson.devDependencies
+      : {};
+
+  return "typesense" in dependencies || "typesense" in devDependencies;
+}
+
+function typesenseIndexScriptExists() {
+  return existsSync(resolve("scripts/typesense-index.ts"));
 }
 
 function assertIncludes(name: string, values: readonly string[], expected: string) {
@@ -158,6 +184,8 @@ const checks = [
     getEggheadTypesenseConfig().collectionName,
     EGGHEAD_TYPESENSE_COLLECTION_NAME,
   ),
+  assertEqual("typesense dependency is declared", hasTypesenseDependency(), true),
+  assertEqual("guarded typesense index script exists", typesenseIndexScriptExists(), true),
 ];
 
 console.log(
@@ -168,8 +196,9 @@ console.log(
       collectionName: EGGHEAD_TYPESENSE_COLLECTION_NAME,
       indexedResultUrlField: "path",
       legacyUrlsPreservedAsMetadata: true,
-      liveTypesenseDependencyAdded: true,
-      guardedTypesenseIndexScriptAdded: true,
+      liveTypesenseDependencyAdded: hasTypesenseDependency(),
+      guardedTypesenseIndexScriptAdded: typesenseIndexScriptExists(),
+      externalProvisioningValidatedByContract: false,
       liveTypesenseCollectionProvisioned: false,
       liveTypesenseIndexingEnabled: false,
     },
