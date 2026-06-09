@@ -6,6 +6,7 @@ import {
   searchDocumentFromResource,
   searchDocumentTypeFromResource,
 } from "../apps/web/src/content/search-document";
+import { getEggheadTypesenseConfig } from "../apps/web/src/content/typesense";
 
 function assertEqual(
   name: string,
@@ -147,6 +148,11 @@ const checks = [
     standaloneLesson.parentResources.length,
     0,
   ),
+  assertEqual(
+    "runtime config defaults to migration collection",
+    getEggheadTypesenseConfig().collectionName,
+    EGGHEAD_TYPESENSE_COLLECTION_NAME,
+  ),
 ];
 
 console.log(
@@ -157,7 +163,10 @@ console.log(
       collectionName: EGGHEAD_TYPESENSE_COLLECTION_NAME,
       indexedResultUrlField: "path",
       legacyUrlsPreservedAsMetadata: true,
-      liveTypesenseDependencyAdded: false,
+      liveTypesenseDependencyAdded: true,
+      guardedTypesenseIndexScriptAdded: true,
+      liveTypesenseCollectionProvisioned: false,
+      liveTypesenseIndexingEnabled: false,
     },
   }),
 );

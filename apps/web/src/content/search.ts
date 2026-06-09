@@ -6,10 +6,16 @@ import { parentCourseSlugsForLessonIds } from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
 import { contentResourceSlugSql } from "./resource-slug";
 import {
+  type SearchIndexDocument,
   searchDocumentFromResource,
   searchDocumentTypeFromResource,
   type SearchDocumentType,
 } from "./search-document";
+import {
+  createEggheadTypesenseSearchClient,
+  getEggheadTypesenseConfig,
+  isEggheadTypesenseSearchConfigured,
+} from "./typesense";
 
 type SearchResourceRow = RowDataPacket & {
   createdAt: Date;
@@ -30,7 +36,7 @@ export type SearchResult = {
 
 export type SearchContentType = SearchResult["type"];
 
-const SEARCH_CONTENT_TYPE_VALUES = [
+export const SEARCH_CONTENT_TYPE_VALUES = [
   "article",
   "campaign",
   "case-study",
@@ -45,18 +51,21 @@ const SEARCH_CONTENT_TYPE_VALUES = [
   "tip",
 ] as const satisfies SearchContentType[];
 
-export async function searchContent(
-  term: string,
-  typeFilter?: string | null,
-): Promise<SearchResult[]> {
-  "use cache";
-  cacheLife("minutes");
-  cacheTag("egghead-search");
+function normalizedSearchContentType(typeFilter?: string | null) {
+  const normalizedType = typeFilter?.trim() || null;
+  if (!normalizedType) return null;
+  return SEARCH_CONTENT_TYPE_VALUES.some((value) => value === normalizedType)
+    ? normalizedType
+    : "invalid";
+}
 
-  const connection = await createLocalMysqlConnection();
+async function searchRowsFromDatabase(term: string, typeFilter?: string | null, limit = 24) {
   const normalized = term.trim().toLowerCase();
   const likeTerm = `%${normalized}%`;
-  const normalizedType = typeFilter?.trim() || null;
+  const normalizedType = normalizedSearchContentType(typeFilter);
+  if (normalizedType === "invalid") return [];
+
+  const connection = await createLocalMysqlConnection();
   const typeClause = normalizedType
     ? "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) = ?"
     : "";
@@ -75,6 +84,7 @@ export async function searchContent(
     ...(normalizedType ? [normalizedType] : []),
     ...(normalized ? [likeTerm, likeTerm, likeTerm] : []),
   ];
+  const limitClause = limit > 0 ? `LIMIT ${limit}` : "";
 
   try {
     const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
@@ -90,32 +100,112 @@ export async function searchContent(
             ${typeClause}
             ${termClause}
           ORDER BY resource.createdAt DESC
-          LIMIT 24
+          ${limitClause}
         `,
       params,
     );
 
+    return rows;
+  } finally {
+    await connection.end();
+  }
+}
+
+async function searchDocumentsFromRows(rows: SearchResourceRow[]) {
+  const connection = await createLocalMysqlConnection();
+
+  try {
     const parentCourseSlugs = await parentCourseSlugsForLessonIds(
       connection,
       rows.filter((row) => searchDocumentTypeFromResource(row) === "lesson").map((row) => row.id),
     );
 
-    return rows.map((row) => {
-      const document = searchDocumentFromResource({
+    return rows.map((row) =>
+      searchDocumentFromResource({
         parentCourseSlug: parentCourseSlugs.get(row.id),
         resource: row,
-      });
-
-      return {
-        id: document.id,
-        type: document.type,
-        title: document.title,
-        slug: document.slug,
-        description: document.description,
-        href: document.path,
-      };
-    });
+      }),
+    );
   } finally {
     await connection.end();
   }
+}
+
+function searchResultFromDocument(document: SearchIndexDocument): SearchResult {
+  return {
+    id: document.id,
+    type: document.type,
+    title: document.title,
+    slug: document.slug,
+    description: document.description,
+    href: document.path,
+  };
+}
+
+async function searchSqlContent(term: string, typeFilter?: string | null) {
+  const rows = await searchRowsFromDatabase(term, typeFilter);
+  const documents = await searchDocumentsFromRows(rows);
+  return documents.map(searchResultFromDocument);
+}
+
+function typesenseFilter(typeFilter?: string | null) {
+  const normalizedType = normalizedSearchContentType(typeFilter);
+  if (!normalizedType) return undefined;
+  if (normalizedType === "invalid") return "type:=__invalid__";
+  return `type:=${normalizedType}`;
+}
+
+async function searchTypesenseContent(term: string, typeFilter?: string | null) {
+  if (!isEggheadTypesenseSearchConfigured()) return null;
+
+  const config = getEggheadTypesenseConfig();
+  const client = createEggheadTypesenseSearchClient();
+  const normalized = term.trim();
+  const filter = typesenseFilter(typeFilter);
+  const searchParams = {
+    q: normalized || "*",
+    query_by: "title,description,summary,body",
+    per_page: 24,
+    sort_by: normalized
+      ? "_text_match:desc,updated_at_timestamp:desc"
+      : "updated_at_timestamp:desc",
+    ...(filter ? { filter_by: filter } : {}),
+  };
+  const response = await client
+    .collections<SearchIndexDocument>(config.collectionName)
+    .documents()
+    .search(searchParams);
+
+  return (response.hits ?? [])
+    .map((hit) => hit.document)
+    .filter(Boolean)
+    .map(searchResultFromDocument);
+}
+
+export async function loadSearchIndexDocuments({
+  limit,
+}: {
+  limit?: number;
+} = {}) {
+  const rows = await searchRowsFromDatabase("", null, limit ?? 0);
+  const selectedRows = typeof limit === "number" && limit > 0 ? rows.slice(0, limit) : rows;
+  return searchDocumentsFromRows(selectedRows);
+}
+
+export async function searchContent(
+  term: string,
+  typeFilter?: string | null,
+): Promise<SearchResult[]> {
+  "use cache";
+  cacheLife("minutes");
+  cacheTag("egghead-search");
+
+  try {
+    const typesenseResults = await searchTypesenseContent(term, typeFilter);
+    if (typesenseResults) return typesenseResults;
+  } catch {
+    return searchSqlContent(term, typeFilter);
+  }
+
+  return searchSqlContent(term, typeFilter);
 }
