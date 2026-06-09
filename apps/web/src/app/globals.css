@@ -4,8 +4,8 @@
 @plugin "@tailwindcss/typography";
 
 @source "../**/*.{ts,tsx,mdx}";
-@source "../../../packages/ui/src/**/*.{ts,tsx,mdx}";
-@source "../../../packages/ui/registry/**/*.{ts,tsx,mdx}";
+@source "../../../../packages/ui/src/**/*.{ts,tsx,mdx}";
+@source "../../../../packages/ui/registry/**/*.{ts,tsx,mdx}";
 
 @custom-variant dark (&:is(.dark *));
 
