@@ -11,7 +11,12 @@ import {
   objectField,
   stringField,
 } from "./fields";
-import { publishedResourceSql, routeableLessonResourceSql } from "./publication";
+import {
+  LESSON_STATIC_PARAM_LIMIT,
+  publishedResourceSql,
+  routeableLessonResourceSql,
+} from "./publication";
+import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
 import { collectionEntryPath, collectionPath, legacyCoursePath } from "./routes";
 
 type ContentResourceRow = RowDataPacket & {
@@ -70,6 +75,23 @@ type CourseLessonStaticParamRow = RowDataPacket & {
   collection: string;
   entry: string;
 };
+
+export const COURSE_LESSON_STATIC_PARAM_LIMIT = LESSON_STATIC_PARAM_LIMIT;
+
+function sqlString(value: string) {
+  return `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
+}
+
+function hotLessonStaticParamSql() {
+  if (HOT_LESSON_STATIC_PARAMS.length === 0) {
+    return "SELECT NULL AS slug, NULL AS popularityRank, NULL AS requests720h WHERE FALSE";
+  }
+
+  return HOT_LESSON_STATIC_PARAMS.map(
+    (row) =>
+      `SELECT ${sqlString(row.slug)} AS slug, ${row.popularityRank} AS popularityRank, ${row.requests720h} AS requests720h`,
+  ).join(" UNION ALL ");
+}
 
 function instructorName(fields: Record<string, unknown>): string | null {
   const instructor = objectField(fields, "instructor");
@@ -319,6 +341,9 @@ export async function getCourseLessonStaticParams() {
   try {
     const [rows] = await connection.query<CourseLessonStaticParamRow[]>(
       `
+        WITH hot_lessons AS (
+          ${hotLessonStaticParamSql()}
+        )
         SELECT route.collection, route.entry
         FROM (
           SELECT
@@ -362,12 +387,19 @@ export async function getCourseLessonStaticParams() {
             AND section.type = 'section'
             AND ${lessonResourceCondition("lesson")}
         ) route
+        LEFT JOIN hot_lessons
+          ON hot_lessons.slug = route.entry
         WHERE route.collection IS NOT NULL
           AND route.collection != ''
           AND route.entry IS NOT NULL
           AND route.entry != ''
         GROUP BY route.collection, route.entry
-        ORDER BY MAX(route.createdAt) DESC
+        ORDER BY
+          CASE WHEN MIN(hot_lessons.popularityRank) IS NULL THEN 1 ELSE 0 END ASC,
+          MIN(hot_lessons.popularityRank) ASC,
+          MAX(hot_lessons.requests720h) DESC,
+          MAX(route.createdAt) DESC
+        LIMIT ${COURSE_LESSON_STATIC_PARAM_LIMIT}
       `,
     );
 

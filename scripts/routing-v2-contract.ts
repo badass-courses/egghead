@@ -1,4 +1,6 @@
+import { COURSE_LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/course";
 import { lessonRequiresAccess } from "../apps/web/src/content/lesson-access";
+import { LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/publication";
 import {
   canonicalPublicContentPath,
   collectionEntryPath,
@@ -11,6 +13,14 @@ import {
 } from "../apps/web/src/content/routes";
 
 function assertEqual(name: string, actual: string | boolean, expected: string | boolean) {
+  if (actual !== expected) {
+    throw new Error(`${name}: expected ${String(expected)}, got ${String(actual)}`);
+  }
+
+  return { name, pass: true as const };
+}
+
+function assertNumberEqual(name: string, actual: number, expected: number) {
   if (actual !== expected) {
     throw new Error(`${name}: expected ${String(expected)}, got ${String(actual)}`);
   }
@@ -74,6 +84,11 @@ const checks = [
     lessonRequiresAccess({ courseLinked: true, freeForever: true }),
     false,
   ),
+  assertNumberEqual(
+    "course lesson static params use the shared lesson budget",
+    COURSE_LESSON_STATIC_PARAM_LIMIT,
+    LESSON_STATIC_PARAM_LIMIT,
+  ),
 ];
 
 console.log(
@@ -85,6 +100,7 @@ console.log(
       canonicalCollectionLessons: "/:collectionSlug/:entrySlug",
       standaloneSingles: "/:slug",
       legacyUrlsPreserved: true,
+      lessonStaticParamLimit: LESSON_STATIC_PARAM_LIMIT,
       onlyCourseLinkedLessonsMayGate: true,
     },
   }),
