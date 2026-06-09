@@ -1,4 +1,5 @@
 import { COURSE_LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/course";
+import { lessonCanonicalPathForRouteContext } from "../apps/web/src/content/lesson-route-context";
 import { lessonRequiresAccess } from "../apps/web/src/content/lesson-access";
 import { LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/publication";
 import {
@@ -63,6 +64,16 @@ const checks = [
     "legacy lesson embed path is preserved",
     legacyLessonEmbedPath("camera-and-renderer"),
     "/lessons/camera-and-renderer/embed",
+  ),
+  assertEqual(
+    "course-linked discovery lesson href is canonical collection child",
+    lessonCanonicalPathForRouteContext("camera-and-renderer", "modern-three-js"),
+    "/modern-three-js/camera-and-renderer",
+  ),
+  assertEqual(
+    "standalone discovery lesson href is root single",
+    lessonCanonicalPathForRouteContext("camera-and-renderer", null),
+    "/camera-and-renderer",
   ),
   assertEqual(
     "legacy talk path is preserved",

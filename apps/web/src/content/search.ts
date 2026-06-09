@@ -3,14 +3,13 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
+import {
+  lessonCanonicalPathForRouteContext,
+  parentCourseSlugsForLessonIds,
+} from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
 import { contentResourceSlugSql } from "./resource-slug";
-import {
-  canonicalPublicContentPath,
-  collectionPath,
-  legacyLessonPath,
-  type PublicContentFamily,
-} from "./routes";
+import { canonicalPublicContentPath, collectionPath, type PublicContentFamily } from "./routes";
 
 type SearchResourceRow = RowDataPacket & {
   id: string;
@@ -70,9 +69,9 @@ function resultType(type: string, postType: string | null): SearchContentType {
   return isSearchContentType(type) ? type : "post";
 }
 
-function resultHref(type: SearchContentType, slug: string) {
+function resultHref(type: SearchContentType, slug: string, parentCourseSlug?: string | null) {
   if (type === "course") return collectionPath(slug);
-  if (type === "lesson") return legacyLessonPath(slug);
+  if (type === "lesson") return lessonCanonicalPathForRouteContext(slug, parentCourseSlug);
   if (type !== "post") return canonicalPublicContentPath(type as PublicContentFamily, slug);
   return `/${slug}`;
 }
@@ -127,7 +126,7 @@ export async function searchContent(
       params,
     );
 
-    return rows.map((row) => {
+    const normalizedRows = rows.map((row) => {
       const fields = fieldsFromJson(row.fields);
       const slug = stringField(fields, "slug") ?? row.id;
       const type = resultType(row.type, stringField(fields, "postType"));
@@ -138,9 +137,20 @@ export async function searchContent(
         title: stringField(fields, "title") ?? "Untitled",
         slug,
         description: descriptionField(fields),
-        href: resultHref(type, slug),
+        href: "",
       };
     });
+
+    const parentCourseSlugs = await parentCourseSlugsForLessonIds(
+      connection,
+      normalizedRows.filter((row) => row.type === "lesson").map((row) => row.id),
+    );
+
+    for (const row of normalizedRows) {
+      row.href = resultHref(row.type, row.slug, parentCourseSlugs.get(row.id));
+    }
+
+    return normalizedRows;
   } finally {
     await connection.end();
   }

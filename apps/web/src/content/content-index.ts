@@ -4,8 +4,12 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
+import {
+  lessonCanonicalPathForRouteContext,
+  parentCourseSlugsForLessonIds,
+} from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
-import { collectionPath, legacyLessonPath } from "./routes";
+import { collectionPath } from "./routes";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
 import { contentResourceSlugSql } from "./resource-slug";
 
@@ -173,15 +177,20 @@ function resourceWhereClause(family: ContentIndexFamily, alias = "resource") {
   };
 }
 
-function hrefForContentIndexItem(family: ContentIndexFamily, slug: string) {
+function hrefForContentIndexItem(
+  family: ContentIndexFamily,
+  slug: string,
+  parentCourseSlug?: string | null,
+) {
   if (family === "course") return collectionPath(slug);
-  if (family === "lesson") return legacyLessonPath(slug);
+  if (family === "lesson") return lessonCanonicalPathForRouteContext(slug, parentCourseSlug);
   return pathForPublicContentFamily(family, slug);
 }
 
 function toContentIndexItem(
   row: ContentIndexRow,
   family: ContentIndexFamily,
+  parentCourseSlug?: string | null,
 ): ContentIndexItem | null {
   const fields = fieldsFromJson(row.fields);
   const slug = stringField(fields, "slug");
@@ -194,7 +203,7 @@ function toContentIndexItem(
     title: stringField(fields, "title") ?? "Untitled",
     slug,
     description: descriptionField(fields),
-    href: hrefForContentIndexItem(family, slug),
+    href: hrefForContentIndexItem(family, slug, parentCourseSlug),
   };
 }
 
@@ -256,12 +265,20 @@ export async function getContentIndex(family: ContentIndexFamily): Promise<Conte
       where.params,
     );
 
+    const parentCourseSlugs =
+      family === "lesson"
+        ? await parentCourseSlugsForLessonIds(
+            connection,
+            rows.map((row) => row.id),
+          )
+        : new Map<string, string>();
+
     return {
       ...config,
       family,
       totalCount: Number(countRows[0]?.total ?? 0),
       items: rows
-        .map((row) => toContentIndexItem(row, family))
+        .map((row) => toContentIndexItem(row, family, parentCourseSlugs.get(row.id)))
         .filter((item): item is ContentIndexItem => item !== null),
     };
   } finally {
