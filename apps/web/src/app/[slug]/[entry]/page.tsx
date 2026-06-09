@@ -11,7 +11,7 @@ import { CourseLessonPageStatic, LessonAccessExperience } from "../../../content
 
 type CollectionEntryPageProps = {
   params: Promise<{
-    collection: string;
+    slug: string;
     entry: string;
   }>;
 };
@@ -20,7 +20,7 @@ async function routeParams(params: CollectionEntryPageProps["params"]) {
   const resolved = await params;
 
   return {
-    collection: decodeURIComponent(resolved.collection),
+    collection: decodeURIComponent(resolved.slug),
     entry: decodeURIComponent(resolved.entry),
   };
 }
@@ -42,7 +42,12 @@ function lessonInRouteContext(input: {
 }
 
 export function generateStaticParams() {
-  return getCourseLessonStaticParams();
+  return getCourseLessonStaticParams().then((params) =>
+    params.map((param) => ({
+      entry: param.entry,
+      slug: param.collection,
+    })),
+  );
 }
 
 export async function generateMetadata({ params }: CollectionEntryPageProps): Promise<Metadata> {
