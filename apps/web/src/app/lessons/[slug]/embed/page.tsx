@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { getLessonBySlug, getLessonStaticParams } from "../../../../content/lesson";
-import { LessonEmbedPageStatic } from "../../../../content/lesson-page";
+import { LessonAccessExperience, LessonEmbedPageStatic } from "../../../../content/lesson-page";
 import { legacyLessonEmbedPath } from "../../../../content/routes";
 
 type LessonEmbedPageProps = {
@@ -48,5 +48,10 @@ export default async function LessonEmbedPage({ params }: LessonEmbedPageProps) 
 
   if (!lesson) notFound();
 
-  return <LessonEmbedPageStatic lesson={lesson} />;
+  return (
+    <LessonEmbedPageStatic
+      accessComponent={<LessonAccessExperience lesson={lesson} />}
+      lesson={lesson}
+    />
+  );
 }

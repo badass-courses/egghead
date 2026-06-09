@@ -270,7 +270,12 @@ async function getLessonByWhereClause(input: {
   }
 }
 
-export function getLessonById(id: string): Promise<LessonForPage | null> {
+export async function getLessonById(id: string): Promise<LessonForPage | null> {
+  "use cache";
+  cacheLife("hours");
+  cacheTag("egghead-content");
+  cacheTag(`egghead-lesson-id:${id}`);
+
   return getLessonByWhereClause({
     params: [id],
     requestedSlug: id,
@@ -278,7 +283,7 @@ export function getLessonById(id: string): Promise<LessonForPage | null> {
   });
 }
 
-export function getLessonBySlug(slug: string): Promise<LessonForPage | null> {
+export async function getLessonBySlug(slug: string): Promise<LessonForPage | null> {
   "use cache";
   cacheLife("hours");
   cacheTag("egghead-content");

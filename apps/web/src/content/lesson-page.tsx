@@ -254,14 +254,18 @@ export async function CourseLessonPageStatic({
   );
 }
 
-export async function LessonEmbedPageStatic({ lesson }: { lesson: LessonForPage }) {
+export async function LessonEmbedPageStatic({
+  accessComponent,
+  lesson,
+}: {
+  accessComponent: ReactNode;
+  lesson: LessonForPage;
+}) {
   "use cache";
 
   return (
     <main className="egghead-embed">
-      <Suspense fallback={<LessonAccessFallback lesson={lesson} />}>
-        <LessonAccessExperience lesson={lesson} />
-      </Suspense>
+      <Suspense fallback={<LessonAccessFallback lesson={lesson} />}>{accessComponent}</Suspense>
     </main>
   );
 }
