@@ -2,36 +2,26 @@ import type { RowDataPacket } from "mysql2";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
-import { descriptionField, fieldsFromJson, stringField } from "./fields";
-import {
-  lessonCanonicalPathForRouteContext,
-  parentCourseSlugsForLessonIds,
-} from "./lesson-route-context";
+import { parentCourseSlugsForLessonIds } from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
 import { contentResourceSlugSql } from "./resource-slug";
-import { canonicalPublicContentPath, collectionPath, type PublicContentFamily } from "./routes";
+import {
+  searchDocumentFromResource,
+  searchDocumentTypeFromResource,
+  type SearchDocumentType,
+} from "./search-document";
 
 type SearchResourceRow = RowDataPacket & {
+  createdAt: Date;
   id: string;
   type: string;
+  updatedAt: Date;
   fields: unknown;
 };
 
 export type SearchResult = {
   id: string;
-  type:
-    | "article"
-    | "campaign"
-    | "case-study"
-    | "course"
-    | "guide"
-    | "lesson"
-    | "podcast"
-    | "post"
-    | "project"
-    | "success-story"
-    | "talk"
-    | "tip";
+  type: SearchDocumentType;
   title: string;
   slug: string;
   description: string;
@@ -54,27 +44,6 @@ const SEARCH_CONTENT_TYPE_VALUES = [
   "talk",
   "tip",
 ] as const satisfies SearchContentType[];
-
-const SEARCH_CONTENT_TYPES = new Set<string>(SEARCH_CONTENT_TYPE_VALUES);
-
-function isSearchContentType(value: string): value is SearchContentType {
-  return SEARCH_CONTENT_TYPES.has(value);
-}
-
-function resultType(type: string, postType: string | null): SearchContentType {
-  if (type === "course" || postType === "course") return "course";
-  if (type === "lesson" || postType === "lesson") return "lesson";
-  if (postType && isSearchContentType(postType)) return postType;
-  if (type === "post") return "post";
-  return isSearchContentType(type) ? type : "post";
-}
-
-function resultHref(type: SearchContentType, slug: string, parentCourseSlug?: string | null) {
-  if (type === "course") return collectionPath(slug);
-  if (type === "lesson") return lessonCanonicalPathForRouteContext(slug, parentCourseSlug);
-  if (type !== "post") return canonicalPublicContentPath(type as PublicContentFamily, slug);
-  return `/${slug}`;
-}
 
 export async function searchContent(
   term: string,
@@ -111,7 +80,7 @@ export async function searchContent(
     const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
     const [rows] = await connection.execute<SearchResourceRow[]>(
       `
-          SELECT resource.id, resource.type, resource.fields
+          SELECT resource.id, resource.type, resource.fields, resource.createdAt, resource.updatedAt
           FROM egghead_ContentResource resource
           WHERE resource.deletedAt IS NULL
             ${publishedResourceSql("resource")}
@@ -126,31 +95,26 @@ export async function searchContent(
       params,
     );
 
-    const normalizedRows = rows.map((row) => {
-      const fields = fieldsFromJson(row.fields);
-      const slug = stringField(fields, "slug") ?? row.id;
-      const type = resultType(row.type, stringField(fields, "postType"));
-
-      return {
-        id: row.id,
-        type,
-        title: stringField(fields, "title") ?? "Untitled",
-        slug,
-        description: descriptionField(fields),
-        href: "",
-      };
-    });
-
     const parentCourseSlugs = await parentCourseSlugsForLessonIds(
       connection,
-      normalizedRows.filter((row) => row.type === "lesson").map((row) => row.id),
+      rows.filter((row) => searchDocumentTypeFromResource(row) === "lesson").map((row) => row.id),
     );
 
-    for (const row of normalizedRows) {
-      row.href = resultHref(row.type, row.slug, parentCourseSlugs.get(row.id));
-    }
+    return rows.map((row) => {
+      const document = searchDocumentFromResource({
+        parentCourseSlug: parentCourseSlugs.get(row.id),
+        resource: row,
+      });
 
-    return normalizedRows;
+      return {
+        id: document.id,
+        type: document.type,
+        title: document.title,
+        slug: document.slug,
+        description: document.description,
+        href: document.path,
+      };
+    });
   } finally {
     await connection.end();
   }
