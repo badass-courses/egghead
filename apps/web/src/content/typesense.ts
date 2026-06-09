@@ -188,6 +188,10 @@ export async function ensureEggheadTypesenseCollection({
 
 function importLineFromJson(line: string): TypesenseImportLine {
   const parsed: unknown = JSON.parse(line);
+  return importLineFromUnknown(parsed);
+}
+
+function importLineFromUnknown(parsed: unknown): TypesenseImportLine {
   if (!parsed || typeof parsed !== "object") return {};
 
   const success =
@@ -200,7 +204,22 @@ function importLineFromJson(line: string): TypesenseImportLine {
   };
 }
 
+function summarizeImportLines(lines: TypesenseImportLine[]) {
+  return {
+    imported: lines.filter((line) => line.success === true).length,
+    failed: lines.filter((line) => line.success !== true).length,
+    errors: lines
+      .filter((line) => line.success !== true && line.error)
+      .slice(0, 5)
+      .map((line) => line.error ?? "unknown Typesense import error"),
+  };
+}
+
 function parseImportResult(result: unknown) {
+  if (Array.isArray(result)) {
+    return summarizeImportLines(result.map(importLineFromUnknown));
+  }
+
   if (typeof result !== "string") {
     return { imported: 0, failed: 0, errors: [] as string[] };
   }
@@ -211,14 +230,7 @@ function parseImportResult(result: unknown) {
     .filter(Boolean)
     .map(importLineFromJson);
 
-  return {
-    imported: lines.filter((line) => line.success === true).length,
-    failed: lines.filter((line) => line.success !== true).length,
-    errors: lines
-      .filter((line) => line.success !== true && line.error)
-      .slice(0, 5)
-      .map((line) => line.error ?? "unknown Typesense import error"),
-  };
+  return summarizeImportLines(lines);
 }
 
 export async function importEggheadTypesenseDocuments(documents: readonly SearchIndexDocument[]) {

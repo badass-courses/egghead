@@ -84,6 +84,7 @@ type TypesenseField = {
 
 type TypesenseCollectionSchema = {
   default_sorting_field: string;
+  enable_nested_fields?: boolean;
   fields: TypesenseField[];
   name: string;
 };
@@ -92,6 +93,7 @@ export const EGGHEAD_TYPESENSE_COLLECTION_NAME = "egghead_content_migration_v1";
 
 export const EGGHEAD_TYPESENSE_COLLECTION_SCHEMA: TypesenseCollectionSchema = {
   name: EGGHEAD_TYPESENSE_COLLECTION_NAME,
+  enable_nested_fields: true,
   fields: [
     { name: "id", type: "string" },
     { name: "title", type: "string" },

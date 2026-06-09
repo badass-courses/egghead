@@ -115,6 +115,11 @@ const checks = [
   assertField("schema exposes canonicalPath alias", "canonicalPath"),
   assertField("schema exposes legacy paths", "legacyPaths"),
   assertField("schema exposes parent resources", "parentResources"),
+  assertEqual(
+    "schema enables nested fields for parent resources",
+    EGGHEAD_TYPESENSE_COLLECTION_SCHEMA.enable_nested_fields === true,
+    true,
+  ),
   assertField("schema exposes course linkage", "courseLinked"),
   assertEqual(
     "postType lesson resources classify as lessons",
