@@ -4,6 +4,7 @@ import { cacheLife, cacheTag } from "next/cache";
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, markdownField, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
+import { contentResourceSlugSql } from "./resource-slug";
 import {
   canonicalPublicContentPath,
   legacyPublicContentPath,
@@ -59,6 +60,7 @@ export async function getPublicContentBySlug(
   const placeholders = families.map(() => "?").join(", ");
 
   try {
+    const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
     const [rows] = await connection.execute<PublicContentRow[]>(
       `
         SELECT
@@ -69,7 +71,7 @@ export async function getPublicContentBySlug(
         FROM egghead_ContentResource resource
         WHERE resource.deletedAt IS NULL
           ${publishedResourceSql("resource")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) = ?
+          AND ${resourceSlugSql} = ?
           AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${placeholders})
         ORDER BY resource.createdAt DESC
         LIMIT 1
@@ -122,18 +124,19 @@ export async function getPublicContentStaticParams(families: PublicContentFamily
   const placeholders = families.map(() => "?").join(", ");
 
   try {
+    const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
     const [rows] = await connection.execute<Array<RowDataPacket & { slug: string }>>(
       `
         SELECT resource_slug.slug
         FROM (
           SELECT
-            JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) AS slug,
+            ${resourceSlugSql} AS slug,
             resource.createdAt
           FROM egghead_ContentResource resource
           WHERE resource.deletedAt IS NULL
             ${publishedResourceSql("resource")}
-            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+            AND ${resourceSlugSql} IS NOT NULL
+            AND ${resourceSlugSql} != ''
             AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${placeholders})
         ) resource_slug
         GROUP BY resource_slug.slug

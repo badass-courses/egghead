@@ -15,6 +15,7 @@ import {
   publishedResourceSql,
   routeableLessonResourceSql,
 } from "./publication";
+import { contentResourceSlugSql } from "./resource-slug";
 import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
 import { collectionEntryPath, legacyLessonPath, standaloneContentPath } from "./routes";
 
@@ -227,11 +228,13 @@ function lessonFromRows(input: {
 }
 
 async function getLessonByWhereClause(input: {
+  connection?: Awaited<ReturnType<typeof createLocalMysqlConnection>>;
   params: string[];
   requestedSlug: string;
   whereClause: string;
 }): Promise<LessonForPage | null> {
-  const connection = await createLocalMysqlConnection();
+  const connection = input.connection ?? (await createLocalMysqlConnection());
+  const shouldCloseConnection = !input.connection;
 
   try {
     const [lessonRows] = await connection.execute<ContentResourceRow[]>(
@@ -266,7 +269,7 @@ async function getLessonByWhereClause(input: {
       videoResource,
     });
   } finally {
-    await connection.end();
+    if (shouldCloseConnection) await connection.end();
   }
 }
 
@@ -289,11 +292,20 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
   cacheTag("egghead-content");
   cacheTag(`egghead-lesson:${slug}`);
 
-  return getLessonByWhereClause({
-    params: [slug],
-    requestedSlug: slug,
-    whereClause: "JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) = ?",
-  });
+  const connection = await createLocalMysqlConnection();
+
+  try {
+    const lessonSlugSql = await contentResourceSlugSql(connection, "lesson");
+
+    return await getLessonByWhereClause({
+      connection,
+      params: [slug],
+      requestedSlug: slug,
+      whereClause: `${lessonSlugSql} = ?`,
+    });
+  } finally {
+    await connection.end();
+  }
 }
 
 export async function getLessonStaticParams() {
@@ -304,6 +316,7 @@ export async function getLessonStaticParams() {
   const connection = await createLocalMysqlConnection();
 
   try {
+    const lessonSlugSql = await contentResourceSlugSql(connection, "lesson");
     const [rows] = await connection.query<LessonStaticParamRow[]>(
       `
         WITH hot_lessons AS (
@@ -312,17 +325,17 @@ export async function getLessonStaticParams() {
         SELECT lesson_slug.slug
         FROM (
           SELECT
-            JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) AS slug,
+            ${lessonSlugSql} AS slug,
             lesson.createdAt,
             hot_lessons.popularityRank,
             hot_lessons.requests720h
           FROM egghead_ContentResource lesson
           LEFT JOIN hot_lessons
-            ON hot_lessons.slug = JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug'))
+            ON hot_lessons.slug = ${lessonSlugSql}
           WHERE lesson.deletedAt IS NULL
             ${routeableLessonResourceSql("lesson")}
-            AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) != ''
+            AND ${lessonSlugSql} IS NOT NULL
+            AND ${lessonSlugSql} != ''
             AND ${lessonResourceCondition("lesson")}
         ) lesson_slug
         GROUP BY lesson_slug.slug
@@ -349,19 +362,20 @@ export async function getStandaloneLessonStaticParams() {
   const connection = await createLocalMysqlConnection();
 
   try {
+    const lessonSlugSql = await contentResourceSlugSql(connection, "lesson");
     const [rows] = await connection.query<LessonStaticParamRow[]>(
       `
         SELECT lesson_slug.slug
         FROM (
           SELECT
             lesson.id,
-            JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) AS slug,
+            ${lessonSlugSql} AS slug,
             lesson.createdAt
           FROM egghead_ContentResource lesson
           WHERE lesson.deletedAt IS NULL
             ${routeableLessonResourceSql("lesson")}
-            AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) != ''
+            AND ${lessonSlugSql} IS NOT NULL
+            AND ${lessonSlugSql} != ''
             AND ${lessonResourceCondition("lesson")}
         ) lesson_slug
         WHERE NOT EXISTS (

@@ -7,6 +7,7 @@ import { descriptionField, fieldsFromJson, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
 import { collectionPath, legacyLessonPath } from "./routes";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
+import { contentResourceSlugSql } from "./resource-slug";
 
 export type ContentIndexFamily = "course" | "lesson" | PublicContentFamily;
 
@@ -227,14 +228,15 @@ export async function getContentIndex(family: ContentIndexFamily): Promise<Conte
   const limit = Math.max(1, Math.floor(config.limit));
 
   try {
+    const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
     const [countRows] = await connection.execute<CountRow[]>(
       `
         SELECT COUNT(*) AS total
         FROM egghead_ContentResource resource
         WHERE resource.deletedAt IS NULL
           ${publishedResourceSql("resource")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+          AND ${resourceSlugSql} IS NOT NULL
+          AND ${resourceSlugSql} != ''
           ${where.sql}
       `,
       where.params,
@@ -245,8 +247,8 @@ export async function getContentIndex(family: ContentIndexFamily): Promise<Conte
         FROM egghead_ContentResource resource
         WHERE resource.deletedAt IS NULL
           ${publishedResourceSql("resource")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+          AND ${resourceSlugSql} IS NOT NULL
+          AND ${resourceSlugSql} != ''
           ${where.sql}
         ORDER BY resource.createdAt DESC
         LIMIT ${limit}

@@ -4,6 +4,7 @@ import { cacheLife, cacheTag } from "next/cache";
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
+import { contentResourceSlugSql } from "./resource-slug";
 import {
   canonicalPublicContentPath,
   collectionPath,
@@ -108,14 +109,15 @@ export async function searchContent(
   ];
 
   try {
+    const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
     const [rows] = await connection.execute<SearchResourceRow[]>(
       `
           SELECT resource.id, resource.type, resource.fields
           FROM egghead_ContentResource resource
           WHERE resource.deletedAt IS NULL
             ${publishedResourceSql("resource")}
-            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+            AND ${resourceSlugSql} IS NOT NULL
+            AND ${resourceSlugSql} != ''
             AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${publicTypePlaceholders})
             ${typeClause}
             ${termClause}

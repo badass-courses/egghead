@@ -16,6 +16,7 @@ import {
   publishedResourceSql,
   routeableLessonResourceSql,
 } from "./publication";
+import { contentResourceSlugSql } from "./resource-slug";
 import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
 import { collectionEntryPath, collectionPath, legacyCoursePath } from "./routes";
 
@@ -204,13 +205,14 @@ export async function getCourseBySlug(slug: string): Promise<CourseForPage | nul
   const connection = await createLocalMysqlConnection();
 
   try {
+    const courseSlugSql = await contentResourceSlugSql(connection, "course");
     const [courseRows] = await connection.execute<ContentResourceRow[]>(
       `
         SELECT course.id, course.type, course.fields, course.createdAt, course.updatedAt
         FROM egghead_ContentResource course
         WHERE course.deletedAt IS NULL
           ${publishedResourceSql("course")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) = ?
+          AND ${courseSlugSql} = ?
           AND ${courseResourceCondition("course")}
         ORDER BY course.createdAt DESC
         LIMIT 1
@@ -306,18 +308,19 @@ export async function getCourseStaticParams() {
   const connection = await createLocalMysqlConnection();
 
   try {
+    const courseSlugSql = await contentResourceSlugSql(connection, "course");
     const [rows] = await connection.execute<Array<RowDataPacket & { slug: string }>>(
       `
         SELECT course_slug.slug
         FROM (
           SELECT
-            JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) AS slug,
+            ${courseSlugSql} AS slug,
             course.createdAt
           FROM egghead_ContentResource course
           WHERE course.deletedAt IS NULL
             ${publishedResourceSql("course")}
-            AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) != ''
+            AND ${courseSlugSql} IS NOT NULL
+            AND ${courseSlugSql} != ''
             AND ${courseResourceCondition("course")}
         ) course_slug
         GROUP BY course_slug.slug
@@ -339,6 +342,8 @@ export async function getCourseLessonStaticParams() {
   const connection = await createLocalMysqlConnection();
 
   try {
+    const courseSlugSql = await contentResourceSlugSql(connection, "course");
+    const lessonSlugSql = await contentResourceSlugSql(connection, "lesson");
     const [rows] = await connection.query<CourseLessonStaticParamRow[]>(
       `
         WITH hot_lessons AS (
@@ -347,8 +352,8 @@ export async function getCourseLessonStaticParams() {
         SELECT route.collection, route.entry
         FROM (
           SELECT
-            JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) AS collection,
-            JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) AS entry,
+            ${courseSlugSql} AS collection,
+            ${lessonSlugSql} AS entry,
             lesson.createdAt
           FROM egghead_ContentResourceResource directLink
           JOIN egghead_ContentResource course
@@ -365,8 +370,8 @@ export async function getCourseLessonStaticParams() {
           UNION ALL
 
           SELECT
-            JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) AS collection,
-            JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) AS entry,
+            ${courseSlugSql} AS collection,
+            ${lessonSlugSql} AS entry,
             lesson.createdAt
           FROM egghead_ContentResourceResource sectionLink
           JOIN egghead_ContentResource course
