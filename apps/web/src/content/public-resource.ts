@@ -73,7 +73,13 @@ export async function getPublicContentBySlug(
           ${publishedResourceSql("resource")}
           AND ${resourceSlugSql} = ?
           AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${placeholders})
-        ORDER BY resource.updatedAt DESC, resource.createdAt DESC, resource.id ASC
+        ORDER BY
+          CASE WHEN JSON_EXTRACT(resource.fields, '$.betaBodyFallbackBackfill') IS NULL THEN 0 ELSE 1 END ASC,
+          CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.contentManifestSource')) = 'coursebuilder_egghead_mysql' THEN 0 ELSE 1 END ASC,
+          CHAR_LENGTH(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.body')), JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.markdown')), '')) DESC,
+          resource.updatedAt DESC,
+          resource.createdAt DESC,
+          resource.id ASC
         LIMIT 1
       `,
       [slug, ...families],
