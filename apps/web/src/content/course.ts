@@ -214,7 +214,7 @@ export async function getCourseBySlug(slug: string): Promise<CourseForPage | nul
           ${publishedResourceSql("course")}
           AND ${courseSlugSql} = ?
           AND ${courseResourceCondition("course")}
-        ORDER BY course.createdAt DESC
+        ORDER BY course.updatedAt DESC, course.createdAt DESC, course.id ASC
         LIMIT 1
       `,
       [slug],

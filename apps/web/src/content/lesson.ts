@@ -24,6 +24,7 @@ type ContentResourceRow = RowDataPacket & {
   type: string;
   fields: unknown;
   createdAt: Date;
+  updatedAt: Date;
 };
 
 type ParentCourseRow = ContentResourceRow & {
@@ -239,7 +240,7 @@ async function getLessonByWhereClause(input: {
   try {
     const [lessonRows] = await connection.execute<ContentResourceRow[]>(
       `
-        SELECT lesson.id, lesson.type, lesson.fields, lesson.createdAt
+        SELECT lesson.id, lesson.type, lesson.fields, lesson.createdAt, lesson.updatedAt
         FROM egghead_ContentResource lesson
         WHERE lesson.deletedAt IS NULL
           ${routeableLessonResourceSql("lesson")}
@@ -251,7 +252,9 @@ async function getLessonByWhereClause(input: {
             WHEN 'retired' THEN 1
             ELSE 2
           END,
-          lesson.createdAt DESC
+          lesson.updatedAt DESC,
+          lesson.createdAt DESC,
+          lesson.id ASC
         LIMIT 1
       `,
       input.params,

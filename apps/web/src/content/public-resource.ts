@@ -73,7 +73,7 @@ export async function getPublicContentBySlug(
           ${publishedResourceSql("resource")}
           AND ${resourceSlugSql} = ?
           AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${placeholders})
-        ORDER BY resource.createdAt DESC
+        ORDER BY resource.updatedAt DESC, resource.createdAt DESC, resource.id ASC
         LIMIT 1
       `,
       [slug, ...families],
