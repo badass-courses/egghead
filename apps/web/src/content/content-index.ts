@@ -5,6 +5,7 @@ import { cacheLife, cacheTag } from "next/cache";
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
+import { collectionPath, legacyLessonPath } from "./routes";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
 
 export type ContentIndexFamily = "course" | "lesson" | PublicContentFamily;
@@ -172,8 +173,8 @@ function resourceWhereClause(family: ContentIndexFamily, alias = "resource") {
 }
 
 function hrefForContentIndexItem(family: ContentIndexFamily, slug: string) {
-  if (family === "course") return `/courses/${slug}`;
-  if (family === "lesson") return `/lessons/${slug}`;
+  if (family === "course") return collectionPath(slug);
+  if (family === "lesson") return legacyLessonPath(slug);
   return pathForPublicContentFamily(family, slug);
 }
 

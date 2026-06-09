@@ -16,11 +16,13 @@ import {
   routeableLessonResourceSql,
 } from "./publication";
 import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
+import { collectionEntryPath, legacyLessonPath, standaloneContentPath } from "./routes";
 
 type ContentResourceRow = RowDataPacket & {
   id: string;
   type: string;
   fields: unknown;
+  createdAt: Date;
 };
 
 type ParentCourseRow = ContentResourceRow & {
@@ -42,7 +44,11 @@ export type LessonForPage = {
   isProContent: boolean;
   courseLinked: boolean;
   parentCourseId: string | null;
+  parentCourseSlug: string | null;
+  parentCourseTitle: string | null;
   parentCourseLegacyRailsPlaylistId: number | null;
+  canonicalPath: string;
+  legacyPath: string;
   hasTranscript: boolean;
   hasSrt: boolean;
   state: string | null;
@@ -52,6 +58,14 @@ export type LessonForPage = {
   videoResourceId: string | null;
   videoMuxPlaybackId: string | null;
 };
+
+type LessonStaticParamRow = RowDataPacket & {
+  slug: string;
+};
+
+function sqlString(value: string) {
+  return `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
+}
 
 function hotLessonStaticParamSql() {
   if (HOT_LESSON_STATIC_PARAMS.length === 0) {
@@ -64,33 +78,170 @@ function hotLessonStaticParamSql() {
   ).join(" UNION ALL ");
 }
 
-function sqlString(value: string) {
-  return `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
+function lessonResourceCondition(alias: string) {
+  return `
+    (
+      ${alias}.type = 'lesson'
+      OR (
+        ${alias}.type = 'post'
+        AND JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.postType')) = 'lesson'
+      )
+    )
+  `;
 }
 
-export async function getLessonBySlug(slug: string): Promise<LessonForPage | null> {
-  "use cache";
-  cacheLife("hours");
-  cacheTag("egghead-content");
-  cacheTag(`egghead-lesson:${slug}`);
+function courseResourceCondition(alias: string) {
+  return `
+    (
+      ${alias}.type = 'course'
+      OR (
+        ${alias}.type = 'post'
+        AND JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.postType')) = 'course'
+      )
+    )
+  `;
+}
 
+async function parentCoursesForLesson(
+  connection: Awaited<ReturnType<typeof createLocalMysqlConnection>>,
+  lessonId: string,
+) {
+  const [rows] = await connection.execute<ParentCourseRow[]>(
+    `
+      SELECT parent.id, parent.type, parent.fields, parent.createdAt, directLink.position
+      FROM egghead_ContentResourceResource directLink
+      JOIN egghead_ContentResource parent
+        ON parent.id = directLink.resourceOfId
+       AND parent.deletedAt IS NULL
+       ${publishedResourceSql("parent")}
+      WHERE directLink.resourceId = ?
+        AND ${courseResourceCondition("parent")}
+
+      UNION ALL
+
+      SELECT parent.id, parent.type, parent.fields, parent.createdAt, sectionLink.position
+      FROM egghead_ContentResourceResource lessonLink
+      JOIN egghead_ContentResource section
+        ON section.id = lessonLink.resourceOfId
+       AND section.deletedAt IS NULL
+       ${publishedResourceSql("section")}
+      JOIN egghead_ContentResourceResource sectionLink
+        ON sectionLink.resourceId = section.id
+      JOIN egghead_ContentResource parent
+        ON parent.id = sectionLink.resourceOfId
+       AND parent.deletedAt IS NULL
+       ${publishedResourceSql("parent")}
+      WHERE lessonLink.resourceId = ?
+        AND section.type = 'section'
+        AND ${courseResourceCondition("parent")}
+
+      ORDER BY position ASC, createdAt DESC
+      LIMIT 1
+    `,
+    [lessonId, lessonId],
+  );
+
+  return rows[0] ?? null;
+}
+
+async function videoResourceForLesson(
+  connection: Awaited<ReturnType<typeof createLocalMysqlConnection>>,
+  lessonId: string,
+) {
+  const [rows] = await connection.execute<VideoResourceRow[]>(
+    `
+      SELECT video.id, video.type, video.fields, video.createdAt, link.position
+      FROM egghead_ContentResourceResource link
+      JOIN egghead_ContentResource video
+        ON video.id = link.resourceId
+       AND video.deletedAt IS NULL
+      WHERE link.resourceOfId = ?
+        AND video.type = 'videoResource'
+      ORDER BY link.position ASC
+      LIMIT 1
+    `,
+    [lessonId],
+  );
+
+  return rows[0] ?? null;
+}
+
+function lessonFromRows(input: {
+  lesson: ContentResourceRow;
+  parentCourse: ParentCourseRow | null;
+  requestedSlug: string;
+  videoResource: VideoResourceRow | null;
+}): LessonForPage {
+  const fields = fieldsFromJson(input.lesson.fields);
+  const parentCourseFields = input.parentCourse ? fieldsFromJson(input.parentCourse.fields) : {};
+  const videoFields = input.videoResource ? fieldsFromJson(input.videoResource.fields) : {};
+  const slug = stringField(fields, "slug") ?? input.requestedSlug;
+  const parentCourseSlug = stringField(parentCourseFields, "slug");
+  const muxPlaybackId =
+    stringField(fields, "muxPlaybackId") ?? stringField(videoFields, "muxPlaybackId");
+  const videoHlsUrl =
+    stringField(fields, "currentVideoHlsUrl") ??
+    stringField(videoFields, "currentVideoHlsUrl") ??
+    stringField(videoFields, "hlsUrl") ??
+    stringField(fields, "videoUrl") ??
+    stringField(videoFields, "videoUrl") ??
+    stringField(videoFields, "url") ??
+    (muxPlaybackId ? `https://stream.mux.com/${muxPlaybackId}.m3u8` : null);
+  const videoDashUrl =
+    stringField(fields, "currentVideoDashUrl") ?? stringField(videoFields, "currentVideoDashUrl");
+  const canonicalPath = parentCourseSlug
+    ? collectionEntryPath(parentCourseSlug, slug)
+    : standaloneContentPath(slug);
+
+  return {
+    id: input.lesson.id,
+    title: stringField(fields, "title") ?? "Untitled lesson",
+    slug,
+    description: excerptField(fields),
+    body: markdownField(fields),
+    duration: numberField(fields, "duration") ?? numberField(videoFields, "duration"),
+    freeForever: booleanField(fields, "freeForever"),
+    isProContent: booleanField(fields, "isProContent"),
+    courseLinked: Boolean(parentCourseSlug),
+    parentCourseId: input.parentCourse?.id ?? null,
+    parentCourseSlug,
+    parentCourseTitle: stringField(parentCourseFields, "title"),
+    parentCourseLegacyRailsPlaylistId: numberField(parentCourseFields, "legacyRailsPlaylistId"),
+    canonicalPath,
+    legacyPath: legacyLessonPath(slug),
+    hasTranscript:
+      booleanField(fields, "hasTranscript") ||
+      booleanField(fields, "transcriptSourceAvailable") ||
+      Boolean(stringField(fields, "transcript")),
+    hasSrt:
+      booleanField(fields, "hasSrt") ||
+      booleanField(fields, "srtSourceAvailable") ||
+      Boolean(stringField(fields, "srt")),
+    state: stringField(fields, "state"),
+    visibilityState: stringField(fields, "visibilityState"),
+    videoHlsUrl,
+    videoDashUrl,
+    videoResourceId: input.videoResource?.id ?? null,
+    videoMuxPlaybackId: muxPlaybackId,
+  };
+}
+
+async function getLessonByWhereClause(input: {
+  params: string[];
+  requestedSlug: string;
+  whereClause: string;
+}): Promise<LessonForPage | null> {
   const connection = await createLocalMysqlConnection();
 
   try {
     const [lessonRows] = await connection.execute<ContentResourceRow[]>(
       `
-        SELECT lesson.id, lesson.type, lesson.fields
+        SELECT lesson.id, lesson.type, lesson.fields, lesson.createdAt
         FROM egghead_ContentResource lesson
         WHERE lesson.deletedAt IS NULL
           ${routeableLessonResourceSql("lesson")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) = ?
-          AND (
-            lesson.type = 'lesson'
-            OR (
-              lesson.type = 'post'
-              AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.postType')) = 'lesson'
-            )
-          )
+          AND ${lessonResourceCondition("lesson")}
+          AND ${input.whereClause}
         ORDER BY
           CASE LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.state')), 'published'))
             WHEN 'published' THEN 0
@@ -100,90 +251,44 @@ export async function getLessonBySlug(slug: string): Promise<LessonForPage | nul
           lesson.createdAt DESC
         LIMIT 1
       `,
-      [slug],
+      input.params,
     );
     const lesson = lessonRows[0];
     if (!lesson) return null;
 
-    const [parentCourseRows] = await connection.execute<ParentCourseRow[]>(
-      `
-        SELECT parent.id, parent.type, parent.fields, link.position
-        FROM egghead_ContentResourceResource link
-        JOIN egghead_ContentResource parent
-          ON parent.id = link.resourceOfId
-         AND parent.deletedAt IS NULL
-         ${publishedResourceSql("parent")}
-        WHERE link.resourceId = ?
-          AND (
-            parent.type = 'course'
-            OR JSON_UNQUOTE(JSON_EXTRACT(parent.fields, '$.postType')) = 'course'
-          )
-        ORDER BY link.position ASC
-        LIMIT 1
-      `,
-      [lesson.id],
-    );
-    const [videoRows] = await connection.execute<VideoResourceRow[]>(
-      `
-        SELECT video.id, video.type, video.fields, link.position
-        FROM egghead_ContentResourceResource link
-        JOIN egghead_ContentResource video
-          ON video.id = link.resourceId
-         AND video.deletedAt IS NULL
-        WHERE link.resourceOfId = ?
-          AND video.type = 'videoResource'
-        ORDER BY link.position ASC
-        LIMIT 1
-      `,
-      [lesson.id],
-    );
-    const fields = fieldsFromJson(lesson.fields);
-    const parentCourse = parentCourseRows[0] ?? null;
-    const parentCourseFields = parentCourse ? fieldsFromJson(parentCourse.fields) : {};
-    const videoFields = videoRows[0] ? fieldsFromJson(videoRows[0].fields) : {};
-    const muxPlaybackId =
-      stringField(fields, "muxPlaybackId") ?? stringField(videoFields, "muxPlaybackId");
-    const videoHlsUrl =
-      stringField(fields, "currentVideoHlsUrl") ??
-      stringField(videoFields, "currentVideoHlsUrl") ??
-      stringField(videoFields, "hlsUrl") ??
-      stringField(fields, "videoUrl") ??
-      stringField(videoFields, "videoUrl") ??
-      stringField(videoFields, "url") ??
-      (muxPlaybackId ? `https://stream.mux.com/${muxPlaybackId}.m3u8` : null);
-    const videoDashUrl =
-      stringField(fields, "currentVideoDashUrl") ?? stringField(videoFields, "currentVideoDashUrl");
+    const parentCourse = await parentCoursesForLesson(connection, lesson.id);
+    const videoResource = await videoResourceForLesson(connection, lesson.id);
 
-    return {
-      id: lesson.id,
-      title: stringField(fields, "title") ?? "Untitled lesson",
-      slug: stringField(fields, "slug") ?? slug,
-      description: excerptField(fields),
-      body: markdownField(fields),
-      duration: numberField(fields, "duration") ?? numberField(videoFields, "duration"),
-      freeForever: booleanField(fields, "freeForever"),
-      isProContent: booleanField(fields, "isProContent"),
-      courseLinked: Boolean(parentCourse),
-      parentCourseId: parentCourse?.id ?? null,
-      parentCourseLegacyRailsPlaylistId: numberField(parentCourseFields, "legacyRailsPlaylistId"),
-      hasTranscript:
-        booleanField(fields, "hasTranscript") ||
-        booleanField(fields, "transcriptSourceAvailable") ||
-        Boolean(stringField(fields, "transcript")),
-      hasSrt:
-        booleanField(fields, "hasSrt") ||
-        booleanField(fields, "srtSourceAvailable") ||
-        Boolean(stringField(fields, "srt")),
-      state: stringField(fields, "state"),
-      visibilityState: stringField(fields, "visibilityState"),
-      videoHlsUrl,
-      videoDashUrl,
-      videoResourceId: videoRows[0]?.id ?? null,
-      videoMuxPlaybackId: muxPlaybackId,
-    };
+    return lessonFromRows({
+      lesson,
+      parentCourse,
+      requestedSlug: input.requestedSlug,
+      videoResource,
+    });
   } finally {
     await connection.end();
   }
+}
+
+export function getLessonById(id: string): Promise<LessonForPage | null> {
+  return getLessonByWhereClause({
+    params: [id],
+    requestedSlug: id,
+    whereClause: "lesson.id = ?",
+  });
+}
+
+export function getLessonBySlug(slug: string): Promise<LessonForPage | null> {
+  "use cache";
+  cacheLife("hours");
+  cacheTag("egghead-content");
+  cacheTag(`egghead-lesson:${slug}`);
+
+  return getLessonByWhereClause({
+    params: [slug],
+    requestedSlug: slug,
+    whereClause: "JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) = ?",
+  });
 }
 
 export async function getLessonStaticParams() {
@@ -194,7 +299,7 @@ export async function getLessonStaticParams() {
   const connection = await createLocalMysqlConnection();
 
   try {
-    const [rows] = await connection.query<Array<RowDataPacket & { slug: string }>>(
+    const [rows] = await connection.query<LessonStaticParamRow[]>(
       `
         WITH hot_lessons AS (
           ${hotLessonStaticParamSql()}
@@ -210,16 +315,10 @@ export async function getLessonStaticParams() {
           LEFT JOIN hot_lessons
             ON hot_lessons.slug = JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug'))
           WHERE lesson.deletedAt IS NULL
-            ${publishedResourceSql("lesson")}
+            ${routeableLessonResourceSql("lesson")}
             AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) IS NOT NULL
             AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) != ''
-            AND (
-              lesson.type = 'lesson'
-              OR (
-                lesson.type = 'post'
-                AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.postType')) = 'lesson'
-              )
-            )
+            AND ${lessonResourceCondition("lesson")}
         ) lesson_slug
         GROUP BY lesson_slug.slug
         ORDER BY
@@ -227,6 +326,68 @@ export async function getLessonStaticParams() {
           MIN(lesson_slug.popularityRank) ASC,
           MAX(lesson_slug.requests720h) DESC,
           MAX(lesson_slug.createdAt) DESC
+        LIMIT ${LESSON_STATIC_PARAM_LIMIT}
+      `,
+    );
+
+    return rows.map((row) => ({ slug: row.slug }));
+  } finally {
+    await connection.end();
+  }
+}
+
+export async function getStandaloneLessonStaticParams() {
+  "use cache";
+  cacheLife("hours");
+  cacheTag("egghead-standalone-lesson-static-params");
+
+  const connection = await createLocalMysqlConnection();
+
+  try {
+    const [rows] = await connection.query<LessonStaticParamRow[]>(
+      `
+        SELECT lesson_slug.slug
+        FROM (
+          SELECT
+            lesson.id,
+            JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) AS slug,
+            lesson.createdAt
+          FROM egghead_ContentResource lesson
+          WHERE lesson.deletedAt IS NULL
+            ${routeableLessonResourceSql("lesson")}
+            AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) IS NOT NULL
+            AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.slug')) != ''
+            AND ${lessonResourceCondition("lesson")}
+        ) lesson_slug
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM egghead_ContentResourceResource directLink
+          JOIN egghead_ContentResource parent
+            ON parent.id = directLink.resourceOfId
+           AND parent.deletedAt IS NULL
+           ${publishedResourceSql("parent")}
+          WHERE directLink.resourceId = lesson_slug.id
+            AND ${courseResourceCondition("parent")}
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM egghead_ContentResourceResource lessonLink
+          JOIN egghead_ContentResource section
+            ON section.id = lessonLink.resourceOfId
+           AND section.deletedAt IS NULL
+           ${publishedResourceSql("section")}
+          JOIN egghead_ContentResourceResource sectionLink
+            ON sectionLink.resourceId = section.id
+          JOIN egghead_ContentResource parent
+            ON parent.id = sectionLink.resourceOfId
+           AND parent.deletedAt IS NULL
+           ${publishedResourceSql("parent")}
+          WHERE lessonLink.resourceId = lesson_slug.id
+            AND section.type = 'section'
+            AND ${courseResourceCondition("parent")}
+        )
+        GROUP BY lesson_slug.slug
+        ORDER BY MAX(lesson_slug.createdAt) DESC
         LIMIT ${LESSON_STATIC_PARAM_LIMIT}
       `,
     );

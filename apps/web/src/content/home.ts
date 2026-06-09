@@ -4,6 +4,7 @@ import { cacheLife, cacheTag } from "next/cache";
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
+import { collectionPath } from "./routes";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
 
 const PUBLIC_CONTENT_FAMILIES = [
@@ -53,7 +54,7 @@ function toCourseItem(row: HomeResourceRow): HomeContentItem | null {
     title: stringField(fields, "title") ?? "Untitled course",
     slug,
     description: descriptionField(fields),
-    href: `/courses/${slug}`,
+    href: collectionPath(slug),
   };
 }
 

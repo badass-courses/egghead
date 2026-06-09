@@ -4,6 +4,12 @@ import { cacheLife, cacheTag } from "next/cache";
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
+import {
+  canonicalPublicContentPath,
+  collectionPath,
+  legacyLessonPath,
+  type PublicContentFamily,
+} from "./routes";
 
 type SearchResourceRow = RowDataPacket & {
   id: string;
@@ -64,16 +70,9 @@ function resultType(type: string, postType: string | null): SearchContentType {
 }
 
 function resultHref(type: SearchContentType, slug: string) {
-  if (type === "course") return `/courses/${slug}`;
-  if (type === "lesson") return `/lessons/${slug}`;
-  if (type === "tip") return `/tips/${slug}`;
-  if (type === "podcast") return `/podcasts/${slug}`;
-  if (type === "talk") return `/talks/${slug}`;
-  if (type === "case-study") return `/case-studies/${slug}`;
-  if (type === "success-story") return `/success-stories/${slug}`;
-  if (type === "guide") return `/guides/${slug}`;
-  if (type === "project") return `/projects/${slug}`;
-  if (type === "campaign") return `/campaigns/${slug}`;
+  if (type === "course") return collectionPath(slug);
+  if (type === "lesson") return legacyLessonPath(slug);
+  if (type !== "post") return canonicalPublicContentPath(type as PublicContentFamily, slug);
   return `/${slug}`;
 }
 

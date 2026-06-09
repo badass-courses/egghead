@@ -4,17 +4,13 @@ import { cacheLife, cacheTag } from "next/cache";
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, markdownField, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
+import {
+  canonicalPublicContentPath,
+  legacyPublicContentPath,
+  type PublicContentFamily,
+} from "./routes";
 
-export type PublicContentFamily =
-  | "article"
-  | "campaign"
-  | "case-study"
-  | "guide"
-  | "podcast"
-  | "project"
-  | "success-story"
-  | "talk"
-  | "tip";
+export type { PublicContentFamily } from "./routes";
 
 type PublicContentRow = RowDataPacket & {
   id: string;
@@ -30,6 +26,7 @@ export type PublicContentResource = {
   slug: string;
   description: string;
   body: string | null;
+  canonicalPath: string;
   imageUrl: string | null;
   mediaUrl: string | null;
   videoHlsUrl: string | null;
@@ -40,15 +37,11 @@ export type PublicContentResource = {
 };
 
 export function pathForPublicContentFamily(family: PublicContentFamily, slug: string) {
-  if (family === "article") return `/${slug}`;
-  if (family === "tip") return `/tips/${slug}`;
-  if (family === "podcast") return `/podcasts/${slug}`;
-  if (family === "talk") return `/talks/${slug}`;
-  if (family === "case-study") return `/case-studies/${slug}`;
-  if (family === "success-story") return `/success-stories/${slug}`;
-  if (family === "guide") return `/guides/${slug}`;
-  if (family === "project") return `/projects/${slug}`;
-  return `/campaigns/${slug}`;
+  return canonicalPublicContentPath(family, slug);
+}
+
+export function legacyPathForPublicContentFamily(family: PublicContentFamily, slug: string) {
+  return legacyPublicContentPath(family, slug);
 }
 
 export async function getPublicContentBySlug(
@@ -89,7 +82,8 @@ export async function getPublicContentBySlug(
     const fields = fieldsFromJson(resource.fields);
     const resourceSlug = stringField(fields, "slug") ?? slug;
     const path =
-      stringField(fields, "path") ?? pathForPublicContentFamily(resource.family, resourceSlug);
+      stringField(fields, "path") ??
+      legacyPathForPublicContentFamily(resource.family, resourceSlug);
 
     return {
       id: resource.id,
@@ -98,6 +92,7 @@ export async function getPublicContentBySlug(
       slug: resourceSlug,
       description: descriptionField(fields),
       body: markdownField(fields),
+      canonicalPath: pathForPublicContentFamily(resource.family, resourceSlug),
       imageUrl:
         stringField(fields, "imageUrl") ??
         stringField(fields, "image") ??

@@ -12,8 +12,9 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "phase0:imports": "tsx --tsconfig apps/web/tsconfig.json scripts/phase0-imports.ts",
+    "routing:v2-contract": "tsx --tsconfig apps/web/tsconfig.json scripts/routing-v2-contract.ts",
     "beta:runtime-guard": "tsx --tsconfig apps/web/tsconfig.json scripts/beta-runtime-guard.ts",
-    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm beta:runtime-guard",
+    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm beta:runtime-guard",
     "hooks:install": "lefthook install",
     "hooks:pre-commit": "lefthook run pre-commit --all-files"
   },
