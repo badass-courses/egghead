@@ -9,7 +9,17 @@ export const courseBuilderConfig = {
   basePath: "/api/coursebuilder",
   adapter: getCourseBuilderAdapter(),
   providers: [],
-  getCurrentUser,
+  getCurrentUser: async () => {
+    const user = await getCurrentUser();
+    if (!user) return null;
+    return {
+      ...user,
+      email: user.email ?? "",
+      memberships: null,
+      roles: [],
+      organizationRoles: [],
+    };
+  },
   authConfig,
   callbacks: {
     session: async (request) => ({
