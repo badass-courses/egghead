@@ -69,7 +69,7 @@ function CourseLessonList({ lessons }: { lessons: CourseForPage["lessons"] }) {
     <ol className="egghead-lesson-list">
       {lessons.map((lesson, index) => (
         <li key={lesson.id} className="egghead-lesson-row">
-          <Link href={lesson.canonicalPath}>
+          <Link href={lesson.canonicalPath} prefetch={true}>
             <span className="egghead-lesson-index">{String(index + 1).padStart(2, "0")}</span>
             <span>
               <span className="egghead-lesson-title">{lesson.title}</span>

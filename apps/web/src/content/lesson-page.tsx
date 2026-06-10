@@ -172,6 +172,7 @@ function CourseLessonLink({
         className={active ? "egghead-collection-nav-link-active" : undefined}
         data-active-lesson={active ? "true" : "false"}
         href={lesson.canonicalPath}
+        prefetch={true}
       >
         <span>{lesson.title}</span>
         {lesson.duration ? <small>{Math.round(lesson.duration / 60)} min</small> : null}
@@ -194,7 +195,7 @@ export function CourseLessonNavigation({
 
   return (
     <aside className="egghead-collection-nav" aria-label={`${course.title} lessons`}>
-      <Link className="egghead-collection-nav-title" href={course.canonicalPath}>
+      <Link className="egghead-collection-nav-title" href={course.canonicalPath} prefetch={true}>
         {course.title}
       </Link>
       {directLessons.length > 0 ? (
