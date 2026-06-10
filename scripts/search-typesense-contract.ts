@@ -9,6 +9,10 @@ import {
   searchDocumentFromResource,
   searchDocumentTypeFromResource,
 } from "../apps/web/src/content/search-document";
+import {
+  contentTypeFromSearchParams,
+  searchTermFromRoute,
+} from "../apps/web/src/content/search-route";
 import { getEggheadTypesenseConfig } from "../apps/web/src/content/typesense";
 
 function assertEqual(
@@ -212,6 +216,43 @@ const checks = [
   ),
   assertEqual("typesense dependency is declared", hasTypesenseDependency(), true),
   assertEqual("guarded typesense index script exists", typesenseIndexScriptExists(), true),
+  assertEqual(
+    "path segment search decodes percent spaces",
+    searchTermFromRoute({
+      params: { all: ["react%20beautiful%20dnd"] },
+      searchParams: {},
+    }),
+    "react beautiful dnd",
+  ),
+  assertEqual(
+    "path segment search joins slash split terms",
+    searchTermFromRoute({
+      params: { all: ["react", "beautiful", "dnd"] },
+      searchParams: {},
+    }),
+    "react beautiful dnd",
+  ),
+  assertEqual(
+    "path segment search treats plus as a space",
+    searchTermFromRoute({
+      params: { all: ["react+beautiful+dnd"] },
+      searchParams: {},
+    }),
+    "react beautiful dnd",
+  ),
+  assertEqual(
+    "query param search term takes precedence",
+    searchTermFromRoute({
+      params: { all: ["ignored"] },
+      searchParams: { q: "react beautiful dnd" },
+    }),
+    "react beautiful dnd",
+  ),
+  assertEqual(
+    "search type is trimmed",
+    contentTypeFromSearchParams({ type: " podcast " }),
+    "podcast",
+  ),
 ];
 
 console.log(
