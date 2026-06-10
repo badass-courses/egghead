@@ -8,6 +8,12 @@ import {
 } from "../../../content/course";
 import { getLessonById, type LessonForPage } from "../../../content/lesson";
 import { CourseLessonPageStatic, LessonAccessExperience } from "../../../content/lesson-page";
+import {
+  getPodcastEpisode,
+  getPodcastEpisodeStaticParams,
+  getPodcastShowBySlug,
+} from "../../../content/podcast";
+import { PodcastEpisodePageStatic } from "../../../content/podcast-page";
 
 type CollectionEntryPageProps = {
   params: Promise<{
@@ -42,11 +48,12 @@ function lessonInRouteContext(input: {
 }
 
 export function generateStaticParams() {
-  return getCourseLessonStaticParams().then((params) =>
-    params.map((param) => ({
-      entry: param.entry,
-      slug: param.collection,
-    })),
+  return Promise.all([getCourseLessonStaticParams(), getPodcastEpisodeStaticParams()]).then(
+    ([courseLessons, podcastEpisodes]) =>
+      [...courseLessons, ...podcastEpisodes].map((param) => ({
+        entry: param.entry,
+        slug: param.collection,
+      })),
   );
 }
 
@@ -55,26 +62,45 @@ export async function generateMetadata({ params }: CollectionEntryPageProps): Pr
   const course = await getCourseBySlug(collection);
   const courseLesson = course ? getCourseLesson(course, entry) : null;
 
-  if (!course || !courseLesson) {
+  if (course && courseLesson) {
+    const lesson = await getLessonById(courseLesson.id);
+
     return {
-      title: "Lesson not found | egghead",
+      title: `${lesson?.title ?? courseLesson.title} | ${course.title} | egghead`,
+      description: lesson?.description ?? courseLesson.description,
+      alternates: {
+        canonical: `https://egghead.io${courseLesson.canonicalPath}`,
+      },
+      openGraph: {
+        title: lesson?.title ?? courseLesson.title,
+        description: lesson?.description ?? courseLesson.description,
+        url: `https://egghead.io${courseLesson.canonicalPath}`,
+        type: "article",
+      },
     };
   }
 
-  const lesson = await getLessonById(courseLesson.id);
+  const podcastShow = await getPodcastShowBySlug(collection);
+  const podcastEpisode = podcastShow ? getPodcastEpisode(podcastShow, entry) : null;
+
+  if (podcastShow && podcastEpisode) {
+    return {
+      title: `${podcastEpisode.title} | ${podcastShow.title} | egghead`,
+      description: podcastEpisode.description,
+      alternates: {
+        canonical: `https://egghead.io${podcastEpisode.canonicalPath}`,
+      },
+      openGraph: {
+        title: podcastEpisode.title,
+        description: podcastEpisode.description,
+        url: `https://egghead.io${podcastEpisode.canonicalPath}`,
+        type: "article",
+      },
+    };
+  }
 
   return {
-    title: `${lesson?.title ?? courseLesson.title} | ${course.title} | egghead`,
-    description: lesson?.description ?? courseLesson.description,
-    alternates: {
-      canonical: `https://egghead.io${courseLesson.canonicalPath}`,
-    },
-    openGraph: {
-      title: lesson?.title ?? courseLesson.title,
-      description: lesson?.description ?? courseLesson.description,
-      url: `https://egghead.io${courseLesson.canonicalPath}`,
-      type: "article",
-    },
+    title: "Content not found | egghead",
   };
 }
 
@@ -83,23 +109,32 @@ export default async function CollectionEntryPage({ params }: CollectionEntryPag
   const course = await getCourseBySlug(collection);
   const courseLesson = course ? getCourseLesson(course, entry) : null;
 
-  if (!course || !courseLesson) notFound();
+  if (course && courseLesson) {
+    const lesson = await getLessonById(courseLesson.id);
 
-  const lesson = await getLessonById(courseLesson.id);
+    if (!lesson) notFound();
 
-  if (!lesson) notFound();
+    const contextualLesson = lessonInRouteContext({
+      canonicalPath: courseLesson.canonicalPath,
+      course,
+      lesson,
+    });
 
-  const contextualLesson = lessonInRouteContext({
-    canonicalPath: courseLesson.canonicalPath,
-    course,
-    lesson,
-  });
+    return (
+      <CourseLessonPageStatic
+        accessComponent={<LessonAccessExperience lesson={contextualLesson} />}
+        course={course}
+        lesson={contextualLesson}
+      />
+    );
+  }
 
-  return (
-    <CourseLessonPageStatic
-      accessComponent={<LessonAccessExperience lesson={contextualLesson} />}
-      course={course}
-      lesson={contextualLesson}
-    />
-  );
+  const podcastShow = await getPodcastShowBySlug(collection);
+  const podcastEpisode = podcastShow ? getPodcastEpisode(podcastShow, entry) : null;
+
+  if (podcastShow && podcastEpisode) {
+    return <PodcastEpisodePageStatic episode={podcastEpisode} show={podcastShow} />;
+  }
+
+  return notFound();
 }

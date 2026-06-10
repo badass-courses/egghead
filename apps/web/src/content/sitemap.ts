@@ -7,6 +7,7 @@ import { contentResourceSlugSql } from "./resource-slug";
 import { publishedResourceSql, routeableLessonResourceSql } from "./publication";
 import {
   STANDALONE_PUBLIC_CONTENT_FAMILIES,
+  canonicalPodcastPath,
   canonicalPublicContentPath,
   collectionPath,
   standaloneContentPath,
@@ -270,11 +271,21 @@ async function publicContentRows(
   const families = [...STANDALONE_PUBLIC_CONTENT_FAMILIES];
   const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
   const familySql = `COALESCE(${jsonString("resource", "postType")}, resource.type)`;
-  const [rows] = await connection.execute<Array<SitemapRow & { family: PublicContentFamily }>>(
+  const [rows] = await connection.execute<
+    Array<
+      SitemapRow & {
+        contentResourceKind: string | null;
+        family: PublicContentFamily;
+        podcastShowSlug: string | null;
+      }
+    >
+  >(
     `
       SELECT
         ${familySql} AS family,
         ${resourceSlugSql} AS path,
+        ${jsonString("resource", "contentResourceKind")} AS contentResourceKind,
+        ${jsonString("resource", "podcastShowSlug")} AS podcastShowSlug,
         MAX(resource.updatedAt) AS updatedAt
       FROM egghead_ContentResource resource
       WHERE resource.deletedAt IS NULL
@@ -282,7 +293,7 @@ async function publicContentRows(
         AND ${resourceSlugSql} IS NOT NULL
         AND ${resourceSlugSql} != ''
         AND ${familySql} IN (${placeholders(families)})
-      GROUP BY ${familySql}, ${resourceSlugSql}
+      GROUP BY ${familySql}, ${resourceSlugSql}, ${jsonString("resource", "contentResourceKind")}, ${jsonString("resource", "podcastShowSlug")}
       ORDER BY MAX(resource.updatedAt) DESC
     `,
     families,
@@ -292,7 +303,9 @@ async function publicContentRows(
     .filter((row) => row.path)
     .map((row) =>
       sitemapEntry(
-        canonicalPublicContentPath(row.family, row.path ?? ""),
+        row.family === "podcast"
+          ? canonicalPodcastPath(row.path ?? "", row.podcastShowSlug, row.contentResourceKind)
+          : canonicalPublicContentPath(row.family, row.path ?? ""),
         row.updatedAt,
         row.family === "article" ? 0.8 : 0.7,
       ),

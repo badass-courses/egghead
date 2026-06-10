@@ -3,6 +3,7 @@ import { lessonCanonicalPathForRouteContext } from "../apps/web/src/content/less
 import { lessonRequiresAccess } from "../apps/web/src/content/lesson-access";
 import { LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/publication";
 import {
+  canonicalPodcastPath,
   canonicalPublicContentPath,
   collectionEntryPath,
   collectionPath,
@@ -49,6 +50,29 @@ const checks = [
     "tip canonical path is root slug",
     canonicalPublicContentPath("tip", "css-grid-tip"),
     "/css-grid-tip",
+  ),
+  assertEqual(
+    "podcast show canonical path is root show slug",
+    canonicalPodcastPath("developer-chats", null, "podcast-show"),
+    "/developer-chats",
+  ),
+  assertEqual(
+    "podcast episode canonical path is show child",
+    canonicalPodcastPath(
+      "alex-reardon-on-balancing-work-life-and-large-side-projects",
+      "developer-chats",
+      "podcast-episode",
+    ),
+    "/developer-chats/alex-reardon-on-balancing-work-life-and-large-side-projects",
+  ),
+  assertEqual(
+    "podcast without show evidence remains root single",
+    canonicalPodcastPath(
+      "full-stack-signals-in-solid-ai-development-and-the-future-of-web-frameworks~moysy",
+      null,
+      "podcast",
+    ),
+    "/full-stack-signals-in-solid-ai-development-and-the-future-of-web-frameworks~moysy",
   ),
   assertEqual(
     "legacy course path is preserved",
@@ -109,6 +133,7 @@ console.log(
     invariant: {
       canonicalCoursePages: "/:collectionSlug",
       canonicalCollectionLessons: "/:collectionSlug/:entrySlug",
+      canonicalPodcastEpisodes: "/:podcastShowSlug/:episodeSlug",
       standaloneSingles: "/:slug",
       legacyUrlsPreserved: true,
       lessonStaticParamLimit: LESSON_STATIC_PARAM_LIMIT,

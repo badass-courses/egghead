@@ -33,6 +33,18 @@ export function collectionEntryPath(collectionSlug: string, entrySlug: string) {
   return `/${collectionSlug}/${entrySlug}`;
 }
 
+export function canonicalPodcastPath(
+  slug: string,
+  podcastShowSlug?: string | null,
+  contentResourceKind?: string | null,
+) {
+  if (podcastShowSlug && contentResourceKind !== "podcast-show") {
+    return collectionEntryPath(podcastShowSlug, slug);
+  }
+
+  return standaloneContentPath(slug);
+}
+
 export function legacyCoursePath(slug: string) {
   return `/courses/${slug}`;
 }

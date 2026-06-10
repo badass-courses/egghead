@@ -7,6 +7,7 @@ import {
 } from "./fields";
 import { lessonCanonicalPathForRouteContext } from "./lesson-route-context";
 import {
+  canonicalPodcastPath,
   canonicalPublicContentPath,
   collectionPath,
   legacyCoursePath,
@@ -182,7 +183,14 @@ export function searchDocumentFromResource(input: SearchDocumentInput): SearchIn
   const fields = fieldsFromJson(input.resource.fields);
   const type = searchDocumentType(input.resource.type, stringField(fields, "postType"));
   const slug = stringField(fields, "slug") ?? input.resource.id;
-  const path = canonicalPathForSearchDocument(type, slug, input.parentCourseSlug);
+  const path =
+    type === "podcast"
+      ? canonicalPodcastPath(
+          slug,
+          stringField(fields, "podcastShowSlug"),
+          stringField(fields, "contentResourceKind"),
+        )
+      : canonicalPathForSearchDocument(type, slug, input.parentCourseSlug);
   const description = descriptionField(fields);
   const summary = stringField(fields, "summary") ?? stringField(fields, "description") ?? "";
   const body = markdownField(fields) ?? "";

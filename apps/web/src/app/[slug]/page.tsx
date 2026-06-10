@@ -5,6 +5,8 @@ import { getCourseBySlug, getCourseStaticParams } from "../../content/course";
 import { CoursePageStatic } from "../../content/course-page";
 import { getLessonBySlug, getStandaloneLessonStaticParams } from "../../content/lesson";
 import { LessonAccessExperience, StandaloneLessonPageStatic } from "../../content/lesson-page";
+import { getPodcastShowBySlug, getPodcastShowStaticParams } from "../../content/podcast";
+import { PodcastShowPageStatic } from "../../content/podcast-page";
 import {
   getPublicContentBySlug,
   getPublicContentStaticParams,
@@ -38,13 +40,19 @@ async function slugFromParams(params: RootContentPageProps["params"]) {
 }
 
 export async function generateStaticParams() {
-  const [courses, standaloneLessons, publicResources] = await Promise.all([
+  const [courses, podcastShows, standaloneLessons, publicResources] = await Promise.all([
     getCourseStaticParams(),
+    getPodcastShowStaticParams(),
     getStandaloneLessonStaticParams(),
     getPublicContentStaticParams([...STANDALONE_PUBLIC_CONTENT_FAMILIES]),
   ]);
 
-  return uniqueStaticParams([...courses, ...standaloneLessons, ...publicResources]);
+  return uniqueStaticParams([
+    ...courses,
+    ...podcastShows,
+    ...standaloneLessons,
+    ...publicResources,
+  ]);
 }
 
 export async function generateMetadata({ params }: RootContentPageProps): Promise<Metadata> {
@@ -62,6 +70,24 @@ export async function generateMetadata({ params }: RootContentPageProps): Promis
         title: course.title,
         description: course.description,
         url: `https://egghead.io${course.canonicalPath}`,
+        type: "article",
+      },
+    };
+  }
+
+  const podcastShow = await getPodcastShowBySlug(slug);
+
+  if (podcastShow) {
+    return {
+      title: `${podcastShow.title} | egghead`,
+      description: podcastShow.description,
+      alternates: {
+        canonical: `https://egghead.io${podcastShow.canonicalPath}`,
+      },
+      openGraph: {
+        title: podcastShow.title,
+        description: podcastShow.description,
+        url: `https://egghead.io${podcastShow.canonicalPath}`,
         type: "article",
       },
     };
@@ -116,11 +142,19 @@ export default async function RootContentPage({ params }: RootContentPageProps) 
 
   if (course) return <CoursePageStatic course={course} />;
 
+  const podcastShow = await getPodcastShowBySlug(slug);
+
+  if (podcastShow) return <PodcastShowPageStatic show={podcastShow} />;
+
   const publicResource = await getPublicContentBySlug(slug, [
     ...STANDALONE_PUBLIC_CONTENT_FAMILIES,
   ] satisfies PublicContentFamily[]);
 
   if (publicResource) {
+    if (publicResource.canonicalPath !== `/${slug}`) {
+      permanentRedirect(publicResource.canonicalPath);
+    }
+
     return renderPublicContentRoute({
       eyebrow: publicResource.family,
       families: [publicResource.family],

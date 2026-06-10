@@ -6,6 +6,7 @@ import { descriptionField, fieldsFromJson, markdownField, stringField } from "./
 import { publishedResourceSql } from "./publication";
 import { contentResourceSlugSql } from "./resource-slug";
 import {
+  canonicalPodcastPath,
   canonicalPublicContentPath,
   legacyPublicContentPath,
   type PublicContentFamily,
@@ -33,6 +34,8 @@ export type PublicContentResource = {
   videoHlsUrl: string | null;
   videoDashUrl: string | null;
   thumbnailUrl: string | null;
+  contentResourceKind: string | null;
+  podcastShowSlug: string | null;
   sourcePath: string;
   sourceDisposition: string;
 };
@@ -89,6 +92,8 @@ export async function getPublicContentBySlug(
 
     const fields = fieldsFromJson(resource.fields);
     const resourceSlug = stringField(fields, "slug") ?? slug;
+    const contentResourceKind = stringField(fields, "contentResourceKind");
+    const podcastShowSlug = stringField(fields, "podcastShowSlug");
     const path =
       stringField(fields, "path") ??
       legacyPathForPublicContentFamily(resource.family, resourceSlug);
@@ -100,7 +105,10 @@ export async function getPublicContentBySlug(
       slug: resourceSlug,
       description: descriptionField(fields),
       body: markdownField(fields),
-      canonicalPath: pathForPublicContentFamily(resource.family, resourceSlug),
+      canonicalPath:
+        resource.family === "podcast"
+          ? canonicalPodcastPath(resourceSlug, podcastShowSlug, contentResourceKind)
+          : pathForPublicContentFamily(resource.family, resourceSlug),
       imageUrl:
         stringField(fields, "imageUrl") ??
         stringField(fields, "image") ??
@@ -110,6 +118,8 @@ export async function getPublicContentBySlug(
       videoHlsUrl: stringField(fields, "currentVideoHlsUrl") ?? stringField(fields, "hlsUrl"),
       videoDashUrl: stringField(fields, "currentVideoDashUrl"),
       thumbnailUrl: stringField(fields, "thumbnailUrl") ?? stringField(fields, "thumbUrl"),
+      contentResourceKind,
+      podcastShowSlug,
       sourcePath: path,
       sourceDisposition:
         stringField(fields, "contentManifestSource") ?? "coursebuilder_public_content",

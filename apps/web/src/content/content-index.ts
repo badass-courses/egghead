@@ -9,7 +9,7 @@ import {
   parentCourseSlugsForLessonIds,
 } from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
-import { collectionPath } from "./routes";
+import { canonicalPodcastPath, collectionPath } from "./routes";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
 import { contentResourceSlugSql } from "./resource-slug";
 
@@ -181,9 +181,12 @@ function hrefForContentIndexItem(
   family: ContentIndexFamily,
   slug: string,
   parentCourseSlug?: string | null,
+  podcastShowSlug?: string | null,
+  contentResourceKind?: string | null,
 ) {
   if (family === "course") return collectionPath(slug);
   if (family === "lesson") return lessonCanonicalPathForRouteContext(slug, parentCourseSlug);
+  if (family === "podcast") return canonicalPodcastPath(slug, podcastShowSlug, contentResourceKind);
   return pathForPublicContentFamily(family, slug);
 }
 
@@ -194,6 +197,8 @@ function toContentIndexItem(
 ): ContentIndexItem | null {
   const fields = fieldsFromJson(row.fields);
   const slug = stringField(fields, "slug");
+  const contentResourceKind = stringField(fields, "contentResourceKind");
+  const podcastShowSlug = stringField(fields, "podcastShowSlug");
 
   if (!slug) return null;
 
@@ -203,7 +208,13 @@ function toContentIndexItem(
     title: stringField(fields, "title") ?? "Untitled",
     slug,
     description: descriptionField(fields),
-    href: hrefForContentIndexItem(family, slug, parentCourseSlug),
+    href: hrefForContentIndexItem(
+      family,
+      slug,
+      parentCourseSlug,
+      podcastShowSlug,
+      contentResourceKind,
+    ),
   };
 }
 

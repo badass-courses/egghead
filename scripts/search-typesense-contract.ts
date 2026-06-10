@@ -101,6 +101,22 @@ const standaloneLesson = searchDocumentFromResource({
   },
 });
 
+const podcastEpisode = searchDocumentFromResource({
+  resource: {
+    createdAt: "2026-01-05T00:00:00.000Z",
+    fields: {
+      contentResourceKind: "podcast-episode",
+      podcastShowSlug: "developer-chats",
+      postType: "podcast",
+      slug: "alex-reardon-on-balancing-work-life-and-large-side-projects",
+      title: "Alex Reardon on Balancing Work, Life, and Large Side Projects",
+    },
+    id: "podcast_alex_reardon",
+    type: "post",
+    updatedAt: "2026-01-06T00:00:00.000Z",
+  },
+});
+
 const checks = [
   assertEqual(
     "typesense collection name is migration scoped",
@@ -180,6 +196,16 @@ const checks = [
     0,
   ),
   assertEqual(
+    "podcast episode path uses show child route",
+    podcastEpisode.path,
+    "/developer-chats/alex-reardon-on-balancing-work-life-and-large-side-projects",
+  ),
+  assertIncludes(
+    "podcast episode preserves legacy podcast path as metadata",
+    podcastEpisode.legacyPaths,
+    "/podcasts/alex-reardon-on-balancing-work-life-and-large-side-projects",
+  ),
+  assertEqual(
     "runtime config defaults to migration collection",
     getEggheadTypesenseConfig().collectionName,
     EGGHEAD_TYPESENSE_COLLECTION_NAME,
@@ -195,6 +221,7 @@ console.log(
     invariant: {
       collectionName: EGGHEAD_TYPESENSE_COLLECTION_NAME,
       indexedResultUrlField: "path",
+      podcastEpisodeUrlShape: "/:podcastShowSlug/:episodeSlug",
       legacyUrlsPreservedAsMetadata: true,
       liveTypesenseDependencyAdded: hasTypesenseDependency(),
       guardedTypesenseIndexScriptAdded: typesenseIndexScriptExists(),
