@@ -1,0 +1,9 @@
+{
+	"crons": [
+		{
+			"path": "/api/cron",
+			"schedule": "*/5 * * * *"
+		}
+	],
+	"installCommand": "npx -y pnpm@11.3.0 install"
+}

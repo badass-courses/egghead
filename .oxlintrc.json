@@ -16,5 +16,6 @@
   },
   "env": {
     "builtin": true
-  }
+  },
+  "ignorePatterns": ["apps/builder-egghead/**"]
 }

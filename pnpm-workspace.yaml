@@ -2,17 +2,24 @@ packages:
   - "apps/*"
   - "packages/*"
 
+overrides:
+  "@internationalized/date": "3.12.2"
+
 onlyBuiltDependencies:
   - "@swc/core"
   - "esbuild"
   - "protobufjs"
   - "sharp"
+  - "typesense-instantsearch-adapter"
+  - "workerd"
 allowBuilds:
   "@swc/core": true
   esbuild: true
   lefthook: true
   protobufjs: true
   sharp: true
+  typesense-instantsearch-adapter: true
+  workerd: true
 minimumReleaseAgeExclude:
   - "@typescript/native-preview-darwin-arm64@7.0.0-dev.20260607.1"
   - "@typescript/native-preview-darwin-x64@7.0.0-dev.20260607.1"
