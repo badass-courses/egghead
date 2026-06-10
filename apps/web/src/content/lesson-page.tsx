@@ -11,6 +11,32 @@ import { LessonMuxPlayer } from "./lesson-mux-player";
 import type { LessonForPage } from "./lesson";
 import { MarkdownContent } from "./markdown-content";
 
+function LessonVideoPlaceholder({
+  accessState = "pending",
+  children,
+  lesson,
+  videoState = "pending",
+}: {
+  accessState?: string;
+  children?: ReactNode;
+  lesson: LessonForPage;
+  videoState?: string;
+}) {
+  return (
+    <div
+      className="egghead-video-placeholder"
+      data-access-state={accessState}
+      data-video-poster={lesson.videoPosterUrl ? "static" : "none"}
+      data-video-state={videoState}
+      style={
+        lesson.videoPosterUrl ? { backgroundImage: `url(${lesson.videoPosterUrl})` } : undefined
+      }
+    >
+      {children}
+    </div>
+  );
+}
+
 function LessonFacts({
   accessReason,
   accessRequired,
@@ -52,11 +78,7 @@ function LessonFacts({
 function LessonAccessFallback({ lesson }: { lesson: LessonForPage }) {
   return (
     <>
-      <div
-        className="egghead-video-placeholder"
-        data-access-state="pending"
-        data-video-state="pending"
-      />
+      <LessonVideoPlaceholder lesson={lesson} />
 
       <LessonFacts
         accessReason="pending"
@@ -68,14 +90,15 @@ function LessonAccessFallback({ lesson }: { lesson: LessonForPage }) {
 }
 
 export async function LessonAccessExperience({ lesson }: { lesson: LessonForPage }) {
-  const videoUrl = lesson.videoHlsUrl ?? lesson.videoDashUrl;
-  const requestHeaders = await headers();
-  const currentUser = await getCurrentUserFromRequest(
-    new Request("http://egghead.local/lesson", { headers: requestHeaders }),
-    { legacyRailsPlaylistId: lesson.parentCourseLegacyRailsPlaylistId },
-  );
   const accessRequired = lessonRequiresAccess(lesson);
-  const accessGranted = !accessRequired || currentUser.contentAccess?.granted === true;
+  const videoUrl = lesson.videoHlsUrl ?? lesson.videoDashUrl;
+  const currentUser = accessRequired
+    ? await getCurrentUserFromRequest(
+        new Request("http://egghead.local/lesson", { headers: await headers() }),
+        { legacyRailsPlaylistId: lesson.parentCourseLegacyRailsPlaylistId },
+      )
+    : null;
+  const accessGranted = !accessRequired || currentUser?.contentAccess?.granted === true;
   const playbackId = lesson.videoMuxPlaybackId;
   const canWatch = Boolean((playbackId || videoUrl) && accessGranted);
   const videoState = canWatch
@@ -89,6 +112,7 @@ export async function LessonAccessExperience({ lesson }: { lesson: LessonForPage
       {canWatch && playbackId ? (
         <LessonMuxPlayer
           playbackId={playbackId}
+          poster={lesson.videoPosterUrl}
           title={lesson.title}
           videoId={lesson.videoResourceId ?? lesson.id}
         />
@@ -99,16 +123,17 @@ export async function LessonAccessExperience({ lesson }: { lesson: LessonForPage
           controls
           data-access-state={accessRequired ? "granted" : "free"}
           data-video-state="allowed"
+          poster={lesson.videoPosterUrl ?? undefined}
           preload="metadata"
           src={videoUrl}
         >
           <track kind="captions" />
         </video>
       ) : (
-        <div
-          className="egghead-video-placeholder"
-          data-access-state={accessGranted ? "granted" : "denied"}
-          data-video-state={videoState}
+        <LessonVideoPlaceholder
+          accessState={accessGranted ? "granted" : "denied"}
+          lesson={lesson}
+          videoState={videoState}
         >
           {videoState === "gated" ? (
             <div className="egghead-video-placeholder-content">
@@ -119,11 +144,11 @@ export async function LessonAccessExperience({ lesson }: { lesson: LessonForPage
               </Link>
             </div>
           ) : null}
-        </div>
+        </LessonVideoPlaceholder>
       )}
 
       <LessonFacts
-        accessReason={accessRequired ? (currentUser.contentAccess?.reason ?? "denied") : "free"}
+        accessReason={accessRequired ? (currentUser?.contentAccess?.reason ?? "denied") : "free"}
         accessRequired={accessRequired}
         lesson={lesson}
       />

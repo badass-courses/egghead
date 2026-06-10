@@ -14,6 +14,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <link href="https://image.mux.com" rel="preconnect" />
+        <link href="https://stream.mux.com" rel="preconnect" />
+      </head>
       <body>{children}</body>
     </html>
   );

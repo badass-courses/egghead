@@ -57,6 +57,7 @@ export type LessonForPage = {
   visibilityState: string | null;
   videoHlsUrl: string | null;
   videoDashUrl: string | null;
+  videoPosterUrl: string | null;
   videoResourceId: string | null;
   videoMuxPlaybackId: string | null;
 };
@@ -102,6 +103,10 @@ function courseResourceCondition(alias: string) {
       )
     )
   `;
+}
+
+function muxThumbnailUrl(playbackId: string | null) {
+  return playbackId ? `https://image.mux.com/${playbackId}/thumbnail.webp?time=0` : null;
 }
 
 async function parentCoursesForLesson(
@@ -191,6 +196,15 @@ function lessonFromRows(input: {
     (muxPlaybackId ? `https://stream.mux.com/${muxPlaybackId}.m3u8` : null);
   const videoDashUrl =
     stringField(fields, "currentVideoDashUrl") ?? stringField(videoFields, "currentVideoDashUrl");
+  const fallbackPosterUrl =
+    stringField(fields, "thumbnailUrl") ??
+    stringField(videoFields, "thumbnailUrl") ??
+    stringField(fields, "thumbUrl") ??
+    stringField(videoFields, "thumbUrl") ??
+    stringField(fields, "imageUrl") ??
+    stringField(videoFields, "imageUrl") ??
+    stringField(fields, "ogImage") ??
+    stringField(videoFields, "ogImage");
   const canonicalPath = parentCourseSlug
     ? collectionEntryPath(parentCourseSlug, slug)
     : standaloneContentPath(slug);
@@ -223,6 +237,7 @@ function lessonFromRows(input: {
     visibilityState: stringField(fields, "visibilityState"),
     videoHlsUrl,
     videoDashUrl,
+    videoPosterUrl: muxThumbnailUrl(muxPlaybackId) ?? fallbackPosterUrl,
     videoResourceId: input.videoResource?.id ?? null,
     videoMuxPlaybackId: muxPlaybackId,
   };
