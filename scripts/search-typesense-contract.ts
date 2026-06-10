@@ -241,6 +241,14 @@ const checks = [
     "react beautiful dnd",
   ),
   assertEqual(
+    "path segment search treats encoded plus as a space",
+    searchTermFromRoute({
+      params: { all: ["react%2Bbeautiful%2Bdnd"] },
+      searchParams: {},
+    }),
+    "react beautiful dnd",
+  ),
+  assertEqual(
     "query param search term takes precedence",
     searchTermFromRoute({
       params: { all: ["ignored"] },

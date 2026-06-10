@@ -15,7 +15,7 @@ function decodeSearchSegment(value: string) {
   const plusAsSpace = value.replaceAll("+", " ");
 
   try {
-    return decodeURIComponent(plusAsSpace);
+    return decodeURIComponent(plusAsSpace).replaceAll("+", " ");
   } catch {
     return plusAsSpace;
   }
