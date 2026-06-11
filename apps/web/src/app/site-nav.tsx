@@ -17,7 +17,8 @@ const NAV_LINKS = [
   { href: "/blog", label: "Articles" },
 ];
 
-function isActive(pathname: string, href: string) {
+function isActive(pathname: string | null, href: string) {
+  if (pathname === null) return false;
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
@@ -52,8 +53,17 @@ function EggIcon() {
   );
 }
 
+/* usePathname() counts as request data under cacheComponents, so the
+   layout renders <SiteNav/> inside <Suspense fallback={<SiteNavView
+   pathname={null}/>}> — same shelf, just no raised key until we know
+   which page we're on. */
 export function SiteNav() {
   const pathname = usePathname();
+
+  return <SiteNavView pathname={pathname} />;
+}
+
+export function SiteNavView({ pathname }: { pathname: string | null }) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
 
