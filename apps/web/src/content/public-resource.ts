@@ -4,17 +4,15 @@ import { cacheLife, cacheTag } from "next/cache";
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, markdownField, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
+import { contentResourceSlugSql } from "./resource-slug";
+import {
+  canonicalPodcastPath,
+  canonicalPublicContentPath,
+  legacyPublicContentPath,
+  type PublicContentFamily,
+} from "./routes";
 
-export type PublicContentFamily =
-  | "article"
-  | "campaign"
-  | "case-study"
-  | "guide"
-  | "podcast"
-  | "project"
-  | "success-story"
-  | "talk"
-  | "tip";
+export type { PublicContentFamily } from "./routes";
 
 type PublicContentRow = RowDataPacket & {
   id: string;
@@ -30,25 +28,24 @@ export type PublicContentResource = {
   slug: string;
   description: string;
   body: string | null;
+  canonicalPath: string;
   imageUrl: string | null;
   mediaUrl: string | null;
   videoHlsUrl: string | null;
   videoDashUrl: string | null;
   thumbnailUrl: string | null;
+  contentResourceKind: string | null;
+  podcastShowSlug: string | null;
   sourcePath: string;
   sourceDisposition: string;
 };
 
 export function pathForPublicContentFamily(family: PublicContentFamily, slug: string) {
-  if (family === "article") return `/${slug}`;
-  if (family === "tip") return `/tips/${slug}`;
-  if (family === "podcast") return `/podcasts/${slug}`;
-  if (family === "talk") return `/talks/${slug}`;
-  if (family === "case-study") return `/case-studies/${slug}`;
-  if (family === "success-story") return `/success-stories/${slug}`;
-  if (family === "guide") return `/guides/${slug}`;
-  if (family === "project") return `/projects/${slug}`;
-  return `/campaigns/${slug}`;
+  return canonicalPublicContentPath(family, slug);
+}
+
+export function legacyPathForPublicContentFamily(family: PublicContentFamily, slug: string) {
+  return legacyPublicContentPath(family, slug);
 }
 
 export async function getPublicContentBySlug(
@@ -66,6 +63,7 @@ export async function getPublicContentBySlug(
   const placeholders = families.map(() => "?").join(", ");
 
   try {
+    const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
     const [rows] = await connection.execute<PublicContentRow[]>(
       `
         SELECT
@@ -76,9 +74,15 @@ export async function getPublicContentBySlug(
         FROM egghead_ContentResource resource
         WHERE resource.deletedAt IS NULL
           ${publishedResourceSql("resource")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) = ?
+          AND ${resourceSlugSql} = ?
           AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${placeholders})
-        ORDER BY resource.createdAt DESC
+        ORDER BY
+          CASE WHEN JSON_EXTRACT(resource.fields, '$.betaBodyFallbackBackfill') IS NULL THEN 0 ELSE 1 END ASC,
+          CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.contentManifestSource')) = 'coursebuilder_egghead_mysql' THEN 0 ELSE 1 END ASC,
+          CHAR_LENGTH(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.body')), JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.markdown')), '')) DESC,
+          resource.updatedAt DESC,
+          resource.createdAt DESC,
+          resource.id ASC
         LIMIT 1
       `,
       [slug, ...families],
@@ -88,8 +92,11 @@ export async function getPublicContentBySlug(
 
     const fields = fieldsFromJson(resource.fields);
     const resourceSlug = stringField(fields, "slug") ?? slug;
+    const contentResourceKind = stringField(fields, "contentResourceKind");
+    const podcastShowSlug = stringField(fields, "podcastShowSlug");
     const path =
-      stringField(fields, "path") ?? pathForPublicContentFamily(resource.family, resourceSlug);
+      stringField(fields, "path") ??
+      legacyPathForPublicContentFamily(resource.family, resourceSlug);
 
     return {
       id: resource.id,
@@ -98,6 +105,10 @@ export async function getPublicContentBySlug(
       slug: resourceSlug,
       description: descriptionField(fields),
       body: markdownField(fields),
+      canonicalPath:
+        resource.family === "podcast"
+          ? canonicalPodcastPath(resourceSlug, podcastShowSlug, contentResourceKind)
+          : pathForPublicContentFamily(resource.family, resourceSlug),
       imageUrl:
         stringField(fields, "imageUrl") ??
         stringField(fields, "image") ??
@@ -107,6 +118,8 @@ export async function getPublicContentBySlug(
       videoHlsUrl: stringField(fields, "currentVideoHlsUrl") ?? stringField(fields, "hlsUrl"),
       videoDashUrl: stringField(fields, "currentVideoDashUrl"),
       thumbnailUrl: stringField(fields, "thumbnailUrl") ?? stringField(fields, "thumbUrl"),
+      contentResourceKind,
+      podcastShowSlug,
       sourcePath: path,
       sourceDisposition:
         stringField(fields, "contentManifestSource") ?? "coursebuilder_public_content",
@@ -127,18 +140,19 @@ export async function getPublicContentStaticParams(families: PublicContentFamily
   const placeholders = families.map(() => "?").join(", ");
 
   try {
+    const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
     const [rows] = await connection.execute<Array<RowDataPacket & { slug: string }>>(
       `
         SELECT resource_slug.slug
         FROM (
           SELECT
-            JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) AS slug,
+            ${resourceSlugSql} AS slug,
             resource.createdAt
           FROM egghead_ContentResource resource
           WHERE resource.deletedAt IS NULL
             ${publishedResourceSql("resource")}
-            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
-            AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+            AND ${resourceSlugSql} IS NOT NULL
+            AND ${resourceSlugSql} != ''
             AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${placeholders})
         ) resource_slug
         GROUP BY resource_slug.slug

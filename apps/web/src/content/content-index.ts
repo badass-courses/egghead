@@ -4,8 +4,14 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
+import {
+  lessonCanonicalPathForRouteContext,
+  parentCourseSlugsForLessonIds,
+} from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
+import { canonicalPodcastPath, collectionPath } from "./routes";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
+import { contentResourceSlugSql } from "./resource-slug";
 
 export type ContentIndexFamily = "course" | "lesson" | PublicContentFamily;
 
@@ -171,18 +177,28 @@ function resourceWhereClause(family: ContentIndexFamily, alias = "resource") {
   };
 }
 
-function hrefForContentIndexItem(family: ContentIndexFamily, slug: string) {
-  if (family === "course") return `/courses/${slug}`;
-  if (family === "lesson") return `/lessons/${slug}`;
+function hrefForContentIndexItem(
+  family: ContentIndexFamily,
+  slug: string,
+  parentCourseSlug?: string | null,
+  podcastShowSlug?: string | null,
+  contentResourceKind?: string | null,
+) {
+  if (family === "course") return collectionPath(slug);
+  if (family === "lesson") return lessonCanonicalPathForRouteContext(slug, parentCourseSlug);
+  if (family === "podcast") return canonicalPodcastPath(slug, podcastShowSlug, contentResourceKind);
   return pathForPublicContentFamily(family, slug);
 }
 
 function toContentIndexItem(
   row: ContentIndexRow,
   family: ContentIndexFamily,
+  parentCourseSlug?: string | null,
 ): ContentIndexItem | null {
   const fields = fieldsFromJson(row.fields);
   const slug = stringField(fields, "slug");
+  const contentResourceKind = stringField(fields, "contentResourceKind");
+  const podcastShowSlug = stringField(fields, "podcastShowSlug");
 
   if (!slug) return null;
 
@@ -192,7 +208,13 @@ function toContentIndexItem(
     title: stringField(fields, "title") ?? "Untitled",
     slug,
     description: descriptionField(fields),
-    href: hrefForContentIndexItem(family, slug),
+    href: hrefForContentIndexItem(
+      family,
+      slug,
+      parentCourseSlug,
+      podcastShowSlug,
+      contentResourceKind,
+    ),
   };
 }
 
@@ -226,14 +248,15 @@ export async function getContentIndex(family: ContentIndexFamily): Promise<Conte
   const limit = Math.max(1, Math.floor(config.limit));
 
   try {
+    const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
     const [countRows] = await connection.execute<CountRow[]>(
       `
         SELECT COUNT(*) AS total
         FROM egghead_ContentResource resource
         WHERE resource.deletedAt IS NULL
           ${publishedResourceSql("resource")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+          AND ${resourceSlugSql} IS NOT NULL
+          AND ${resourceSlugSql} != ''
           ${where.sql}
       `,
       where.params,
@@ -244,8 +267,8 @@ export async function getContentIndex(family: ContentIndexFamily): Promise<Conte
         FROM egghead_ContentResource resource
         WHERE resource.deletedAt IS NULL
           ${publishedResourceSql("resource")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+          AND ${resourceSlugSql} IS NOT NULL
+          AND ${resourceSlugSql} != ''
           ${where.sql}
         ORDER BY resource.createdAt DESC
         LIMIT ${limit}
@@ -253,12 +276,20 @@ export async function getContentIndex(family: ContentIndexFamily): Promise<Conte
       where.params,
     );
 
+    const parentCourseSlugs =
+      family === "lesson"
+        ? await parentCourseSlugsForLessonIds(
+            connection,
+            rows.map((row) => row.id),
+          )
+        : new Map<string, string>();
+
     return {
       ...config,
       family,
       totalCount: Number(countRows[0]?.total ?? 0),
       items: rows
-        .map((row) => toContentIndexItem(row, family))
+        .map((row) => toContentIndexItem(row, family, parentCourseSlugs.get(row.id)))
         .filter((item): item is ContentIndexItem => item !== null),
     };
   } finally {

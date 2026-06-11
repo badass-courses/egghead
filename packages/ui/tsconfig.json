@@ -2,7 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "moduleResolution": "bundler"
+    "moduleResolution": "bundler",
+    "paths": {
+      "@/lib/utils": ["./src/utils.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "registry/**/*.ts", "registry/**/*.tsx"],
   "exclude": ["node_modules"]

@@ -1,5 +1,4 @@
 import Image from "next/image";
-
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
@@ -23,7 +22,7 @@ export async function PublicContentPage({
           eyebrow={eyebrow}
           title={resource.title}
         />
-        {(resource.videoHlsUrl ?? resource.videoDashUrl) ? (
+        {resource.videoHlsUrl || resource.videoDashUrl ? (
           <video
             aria-label={`${resource.title} video`}
             className="egghead-video"

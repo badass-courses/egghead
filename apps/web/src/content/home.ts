@@ -4,6 +4,8 @@ import { cacheLife, cacheTag } from "next/cache";
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
 import { publishedResourceSql } from "./publication";
+import { contentResourceSlugSql } from "./resource-slug";
+import { collectionPath } from "./routes";
 import { pathForPublicContentFamily, type PublicContentFamily } from "./public-resource";
 
 const PUBLIC_CONTENT_FAMILIES = [
@@ -53,7 +55,7 @@ function toCourseItem(row: HomeResourceRow): HomeContentItem | null {
     title: stringField(fields, "title") ?? "Untitled course",
     slug,
     description: descriptionField(fields),
-    href: `/courses/${slug}`,
+    href: collectionPath(slug),
   };
 }
 
@@ -83,6 +85,8 @@ export async function getHomeContent(): Promise<HomeContent> {
   const publicFamilyPlaceholders = PUBLIC_CONTENT_FAMILIES.map(() => "?").join(", ");
 
   try {
+    const courseSlugSql = await contentResourceSlugSql(connection, "course");
+    const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
     const [courseRows] = await connection.execute<HomeResourceRow[]>(
       `
         SELECT
@@ -92,8 +96,8 @@ export async function getHomeContent(): Promise<HomeContent> {
         FROM egghead_ContentResource course
         WHERE course.deletedAt IS NULL
           ${publishedResourceSql("course")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(course.fields, '$.slug')) != ''
+          AND ${courseSlugSql} IS NOT NULL
+          AND ${courseSlugSql} != ''
           AND (
             course.type = 'course'
             OR (
@@ -115,8 +119,8 @@ export async function getHomeContent(): Promise<HomeContent> {
         FROM egghead_ContentResource resource
         WHERE resource.deletedAt IS NULL
           ${publishedResourceSql("resource")}
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) IS NOT NULL
-          AND JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')) != ''
+          AND ${resourceSlugSql} IS NOT NULL
+          AND ${resourceSlugSql} != ''
           AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${publicFamilyPlaceholders})
         ORDER BY resource.createdAt DESC
         LIMIT 10

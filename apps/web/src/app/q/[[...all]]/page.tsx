@@ -4,30 +4,26 @@ import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
 import { searchContent } from "../../../content/search";
+import {
+  contentTypeFromSearchParams,
+  searchTermFromRoute,
+  type SearchRouteParams,
+  type SearchRouteSearchParams,
+} from "../../../content/search-route";
 
 type SearchPageProps = {
-  params: Promise<{
-    all?: string[];
-  }>;
-  searchParams: Promise<{
-    q?: string | string[];
-    type?: string | string[];
-  }>;
+  params: Promise<SearchRouteParams>;
+  searchParams: Promise<SearchRouteSearchParams>;
 };
-
-function firstValue(value: string | string[] | undefined) {
-  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
-}
 
 async function searchTermFromProps(props: SearchPageProps) {
   const [params, searchParams] = await Promise.all([props.params, props.searchParams]);
-  const pathTerm = params.all?.join(" ") ?? "";
-  return firstValue(searchParams.q) || pathTerm;
+  return searchTermFromRoute({ params, searchParams });
 }
 
 async function contentTypeFromProps(props: SearchPageProps) {
   const searchParams = await props.searchParams;
-  return firstValue(searchParams.type);
+  return contentTypeFromSearchParams(searchParams);
 }
 
 export async function generateMetadata(props: SearchPageProps): Promise<Metadata> {
