@@ -52,14 +52,6 @@ import {
 } from '../egghead'
 import { writeNewPostToDatabase } from '../posts-new-query'
 import { createNewPostVersion } from '../posts-version-query'
-import {
-	removeLessonFromSanityCourse,
-	replaceSanityLessonResources,
-	syncSanityResourceInstructor,
-	updateSanityCourseMetadata,
-	updateSanityLesson,
-	writeTagsToSanityResource,
-} from '../sanity-content-query'
 import { EggheadTag } from '../tags'
 import { upsertPostToTypeSense } from '../typesense/post'
 import { getPost } from './read'
@@ -195,7 +187,7 @@ export async function updatePost(
 
 /**
  * Adds a tag to a post
- * Updates both egghead and sanity representations
+ * Updates egghead taggings
  */
 export async function addTagToPost(postId: string, tagId: string) {
 	await db.insert(contentResourceTagTable).values({
@@ -203,7 +195,6 @@ export async function addTagToPost(postId: string, tagId: string) {
 		tagId,
 	})
 	await writeLegacyTaggingsToEgghead(postId)
-	await writeTagsToSanityResource(postId)
 
 	const post = await db.query.contentResource.findFirst({
 		where: eq(contentResource.id, postId),
@@ -275,7 +266,7 @@ export async function updatePostTags(postId: string, tags: EggheadTag[]) {
 
 /**
  * Removes a tag from a post
- * Updates both egghead and sanity representations
+ * Updates egghead taggings
  */
 export async function removeTagFromPost(postId: string, tagId: string) {
 	const post = await db.query.contentResource.findFirst({
@@ -291,7 +282,6 @@ export async function removeTagFromPost(postId: string, tagId: string) {
 			),
 		)
 	await writeLegacyTaggingsToEgghead(postId)
-	await writeTagsToSanityResource(postId)
 
 	if (post?.fields?.primaryTagId === tagId) {
 		await db
@@ -313,7 +303,7 @@ export async function removeTagFromPost(postId: string, tagId: string) {
 
 /**
  * Updates the instructor for a post
- * Manages authorization and syncs with egghead and sanity
+ * Manages authorization and syncs with egghead
  */
 export async function updatePostInstructor(postId: string, userId: string) {
 	const { ability, session } = await getServerAuthSession()
@@ -333,7 +323,6 @@ export async function updatePostInstructor(postId: string, userId: string) {
 
 	try {
 		await syncEggheadResourceInstructor(postId, userId)
-		await syncSanityResourceInstructor(postId, userId)
 	} catch (error) {
 		console.error(
 			`Error syncing egghead resource instructor with id ${userId} for post ${postId}, rolling db back to id ${originalPost?.createdById}`,
@@ -449,18 +438,6 @@ export async function writePostUpdateToDatabase(input: {
 			accessState: access ? 'pro' : 'free',
 		})
 
-		await updateSanityCourseMetadata({
-			eggheadPlaylistId: currentPost.fields.eggheadPlaylistId,
-			title: postUpdate.fields.title,
-			slug: postSlug,
-			sharedId: postGuid,
-			description: postUpdate.fields.body ?? '',
-			productionProcessState: postUpdate.fields.state,
-			accessLevel: postUpdate.fields.access,
-			searchIndexingState: postUpdate.fields.visibility,
-			image: postUpdate.fields.image || '',
-		})
-
 		if (action === 'publish') {
 			await setPlaylistPublishedAt(
 				currentPost.fields.eggheadPlaylistId,
@@ -486,16 +463,6 @@ export async function writePostUpdateToDatabase(input: {
 
 	if (!updatedPost) {
 		throw new Error(`Post with id ${currentPost.id} not found.`)
-	}
-
-	await updateSanityLesson(currentPost.fields.eggheadLessonId, updatedPost)
-
-	if (currentPost.fields.eggheadLessonId) {
-		await replaceSanityLessonResources({
-			post: updatedPost,
-			eggheadLessonId: currentPost.fields.eggheadLessonId,
-			videoResourceId: videoResourceId,
-		})
 	}
 
 	const newContentHash = generateContentHash(updatedPost)

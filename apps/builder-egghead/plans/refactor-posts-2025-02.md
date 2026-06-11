@@ -5,8 +5,7 @@
 After examining the codebase, the following issues need to be addressed:
 
 - `posts-query.ts` is a massive 1,000+ line file with mixed responsibilities
-- External service calls to Egghead, Sanity, and TypeSense are scattered
-  throughout
+- External service calls to Egghead and TypeSense are scattered throughout
 - Redundant validation logic exists in multiple places
 - Function naming is inconsistent, making the codebase hard to navigate
 - Post operations like updates involve 16+ function calls, making debugging
@@ -115,7 +114,7 @@ steps:
 
 **Plan Next Phases Based On:**
 
-- Complexity of remaining external services
+- Complexity of remaining service integrations
 - Interdependencies between functions
 - Team capacity and priorities
 
@@ -208,7 +207,6 @@ Depending on the success of initial phases, we may continue with:
 1. **Extract Remaining External Services:**
 
    - Egghead API integration
-   - Sanity integration
 
 2. **Extract Write Operations:**
 
