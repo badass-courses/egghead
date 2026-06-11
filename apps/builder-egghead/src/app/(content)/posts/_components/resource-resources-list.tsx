@@ -15,8 +15,6 @@ import {
 	createPost,
 	removePostFromCoursePost,
 } from '@/lib/posts-query'
-import { addLessonToSanityCourse } from '@/lib/sanity-content-query'
-
 import type { ContentResource } from '@coursebuilder/core/schemas'
 import { Button, useToast } from '@coursebuilder/ui'
 
@@ -158,11 +156,6 @@ export function ResourceResourcesList({
 
 		if (resourceItem) {
 			await addEggheadLessonToPlaylist({
-				eggheadLessonId: resourceItem.resource.fields?.eggheadLessonId,
-				eggheadPlaylistId: resource.fields?.eggheadPlaylistId,
-			})
-
-			await addLessonToSanityCourse({
 				eggheadLessonId: resourceItem.resource.fields?.eggheadLessonId,
 				eggheadPlaylistId: resource.fields?.eggheadPlaylistId,
 			})

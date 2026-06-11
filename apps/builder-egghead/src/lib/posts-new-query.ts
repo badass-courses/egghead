@@ -6,7 +6,6 @@ import {
 	contributionTypes,
 } from '@/db/schema'
 import { Post } from '@/lib/posts'
-import { sanityWriteClient } from '@/server/sanity-write-client'
 import { guid } from '@coursebuilder/utils/guid'
 import slugify from '@sindresorhus/slugify'
 import { eq } from 'drizzle-orm'
@@ -24,15 +23,6 @@ import {
 } from './errors/post-errors'
 import { getPost } from './posts-query'
 import { createNewPostVersion } from './posts-version-query'
-import { SanityLessonDocumentSchema } from './sanity-content'
-import {
-	createSanityCourse,
-	getSanityCollaborator,
-	replaceSanityLessonResources,
-	updateSanityLesson,
-} from './sanity-content-query'
-import { SanityCourseSchema } from './sanity/schemas'
-import { loadEggheadInstructorForUser } from './users'
 
 const NewPostInputSchema = z.object({
 	title: z.string().min(1, 'Title is required'),
@@ -88,7 +78,7 @@ export async function writeNewPostToDatabase(
 			}
 		}
 
-		// Step 2: Create external resources (egghead lesson/playlist + Sanity doc)
+		// Step 2: Create external egghead resources
 		const { eggheadLessonId, eggheadPlaylistId } =
 			await createExternalResources({
 				title,
@@ -122,12 +112,8 @@ export async function writeNewPostToDatabase(
 			await updateExternalSystems({
 				post,
 				postType,
-				postGuid,
 				eggheadLessonId,
-				eggheadPlaylistId,
-				videoResourceId,
 				videoResource,
-				createdById,
 			})
 
 			// Step 6: Create version
@@ -199,20 +185,6 @@ async function createExternalResources({
 			if (!eggheadLessonId) {
 				throw new Error('No lesson ID returned')
 			}
-
-			const lesson = SanityLessonDocumentSchema.parse({
-				_id: `lesson-${eggheadLessonId}`,
-				_type: 'lesson',
-				title,
-				accessLevel: 'pro',
-				slug: {
-					_type: 'slug',
-					current: `${slugify(title)}~${postGuid}`,
-				},
-				railsLessonId: eggheadLessonId,
-			})
-
-			await sanityWriteClient.create(lesson)
 		} catch (error) {
 			throw new ExternalServiceError('egghead', 'create lesson', error, {
 				title,
@@ -324,78 +296,24 @@ async function handleContributions({
 async function updateExternalSystems({
 	post,
 	postType,
-	postGuid,
 	eggheadLessonId,
-	eggheadPlaylistId,
-	videoResourceId,
 	videoResource,
-	createdById,
 }: {
 	post: Post
 	postType: string
-	postGuid: string
 	eggheadLessonId: number | null
-	eggheadPlaylistId: number | null
-	videoResourceId?: string
 	videoResource: any
-	createdById: string
 }) {
 	const isLessonType = TYPES_WITH_LESSONS.includes(postType as any)
-	const isPlaylistType = TYPES_WITH_PLAYLISTS.includes(postType as any)
 
 	try {
-		if (isLessonType && eggheadLessonId) {
-			await Promise.all(
-				[
-					updateSanityLesson(eggheadLessonId, post),
-					replaceSanityLessonResources({
-						post,
-						eggheadLessonId,
-						videoResourceId,
-					}),
-					videoResource &&
-						db
-							.insert(contentResourceResource)
-							.values({ resourceOfId: post.id, resourceId: videoResource.id }),
-				].filter(Boolean),
-			)
-		}
-
-		if (isPlaylistType && eggheadPlaylistId) {
-			const instructor = await loadEggheadInstructorForUser(createdById)
-
-			if (!instructor) {
-				throw new Error(`egghead instructor not found [id: ${createdById}]`)
-			}
-
-			const contributor = await getSanityCollaborator(instructor.id)
-			const { fields } = post
-			const coursePayload = SanityCourseSchema.safeParse({
-				title: fields?.title,
-				slug: {
-					current: fields?.slug,
-					_type: 'slug',
-				},
-				description: fields?.body,
-				collaborators: [contributor],
-				searchIndexingState: 'hidden',
-				accessLevel: 'pro',
-				productionProcessState: 'new',
-				sharedId: postGuid,
-				railsCourseId: eggheadPlaylistId,
-				image: fields?.image,
-			})
-
-			if (!coursePayload.success) {
-				throw new Error('Invalid course payload', {
-					cause: coursePayload.error.flatten().fieldErrors,
-				})
-			}
-
-			await createSanityCourse(coursePayload.data)
+		if (isLessonType && eggheadLessonId && videoResource) {
+			await db
+				.insert(contentResourceResource)
+				.values({ resourceOfId: post.id, resourceId: videoResource.id })
 		}
 	} catch (error) {
-		throw new ExternalServiceError('sanity', 'update external systems', error, {
+		throw new DatabaseError('update post resources', error, {
 			postId: post.id,
 			postType,
 		})

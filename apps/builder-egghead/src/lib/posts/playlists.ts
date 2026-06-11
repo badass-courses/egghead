@@ -10,7 +10,6 @@ import { ContentResource } from '@coursebuilder/core/schemas'
 import { last } from '@coursebuilder/nodash'
 
 import { EGGHEAD_API_V1_BASE_URL, getEggheadToken } from '../egghead'
-import { reorderResourcesInSanityCourse } from '../sanity-content-query'
 import { updatePostInTypeSense } from '../typesense/post'
 import { getPost } from './read'
 
@@ -346,7 +345,7 @@ async function reorderEggheadPlaylistItems(
 }
 
 /**
- * Updates positions of multiple resources, syncing with both Sanity and Egghead
+ * Updates positions of multiple resources, syncing with Egghead
  *
  * @param input - Array of position input items
  * @returns The response from reordering Egghead playlist items
@@ -394,11 +393,6 @@ export const updateResourcePositions = async (input: positionInputItem[]) => {
 					)
 			}
 		}
-	})
-
-	await reorderResourcesInSanityCourse({
-		resources: input,
-		parentResourceId: input?.[0]?.currentParentResourceId ?? '',
 	})
 
 	const response = await reorderEggheadPlaylistItems(

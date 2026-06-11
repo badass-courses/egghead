@@ -18,7 +18,7 @@ export async function PublicContentPage({
   return (
     <Container as="main" size="narrow">
       <SectionHeader description={resource.description} eyebrow={eyebrow} title={resource.title} />
-      {(resource.videoHlsUrl ?? resource.videoDashUrl) ? (
+      {resource.videoHlsUrl || resource.videoDashUrl ? (
         <video
           aria-label={`${resource.title} video`}
           className="egghead-video breakout"

@@ -55,28 +55,11 @@ export const TipsUpdatedEventSchema = z.object({
 
 export type TipsUpdatedEvent = z.infer<typeof TipsUpdatedEventSchema>
 
-// export const sanityWriteClient = createClient({
-// 	projectId: process.env.NEXT_PUBLIC_SANITY_PROJECT_ID,
-// 	dataset: process.env.NEXT_PUBLIC_SANITY_DATASET_ID || 'production',
-// 	useCdn: false, // `false` if you want to ensure fresh data
-// 	apiVersion: process.env.NEXT_PUBLIC_SANITY_API_VERSION,
-// 	token: process.env.SANITY_EDITOR_TOKEN,
-// })
-
 export const migrateTipsToPosts = inngest.createFunction(
 	{ id: 'migrate-tips-to-posts', name: 'Migrate Tips to Posts' },
 	{ event: TIPS_UPDATED_EVENT },
 	async ({ event, step }) => {
-		const tips = await step.run('Load tips from sanity', async () => {
-			// const tips = await sanityWriteClient.fetch(`*[_type == "tip"]{
-			//   ...,
-			//   "resources": resources[]->,
-			//   "collaborators": collaborators[]->,
-			//   "softwareLibraries": softwareLibraries[]{
-			//     ...,
-			//     "library": library->
-			//   }
-			// }`)
+		const tips = await step.run('Load migrated tips', async () => {
 			return [] as any
 		})
 

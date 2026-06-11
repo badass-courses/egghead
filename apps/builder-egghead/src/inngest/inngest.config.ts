@@ -9,8 +9,6 @@ import { instructorInviteCreated } from './functions/instructor-invite-created'
 import { migrateTipsToPosts } from './functions/migrate-tips-to-posts'
 import { notifySlack } from './functions/notify-slack-for-post'
 import { postEventPurchase } from './functions/post-event-purchase'
-import { syncLessonToSanity } from './functions/sanity/sync-lesson-to-sanity'
-import { syncVideoResourceToSanity } from './functions/sanity/sync-video-resource-to-sanity'
 import { syncPostToEgghead } from './functions/sync-post-to-egghead'
 import { syncPostsToEggheadLessons } from './functions/sync-posts-to-egghead-lessons'
 import {
@@ -28,8 +26,6 @@ export const inngestConfig = {
 		imageResourceCreated,
 		syncPostToEgghead,
 		migrateTipsToPosts,
-		syncLessonToSanity,
-		syncVideoResourceToSanity,
 		notifySlack,
 		syncVideoResourceData,
 		syncPostsToEggheadLessons,

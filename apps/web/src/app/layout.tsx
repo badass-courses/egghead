@@ -32,6 +32,10 @@ export default function RootLayout({
 }>) {
   return (
     <html className={`${varelaRound.variable} ${caveat.variable}`} id="top" lang="en">
+      <head>
+        <link href="https://image.mux.com" rel="preconnect" />
+        <link href="https://stream.mux.com" rel="preconnect" />
+      </head>
       <body>
         <Suspense fallback={<SiteNavView pathname={null} />}>
           <SiteNav />

@@ -2,11 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { PublicContentPage } from "./public-resource-page";
-import {
-  getPublicContentBySlug,
-  pathForPublicContentFamily,
-  type PublicContentFamily,
-} from "./public-resource";
+import { getPublicContentBySlug, type PublicContentFamily } from "./public-resource";
 
 export async function getPublicContentMetadata({
   canonicalPrefix,
@@ -21,9 +17,7 @@ export async function getPublicContentMetadata({
 }): Promise<Metadata> {
   const resource = await getPublicContentBySlug(slug, families);
   const title = resource?.title ?? "Public resource not found";
-  const canonicalPath = resource
-    ? pathForPublicContentFamily(resource.family, resource.slug)
-    : `${canonicalPrefix}/${slug}`;
+  const canonicalPath = resource ? resource.canonicalPath : `${canonicalPrefix}/${slug}`;
 
   return {
     title: `${title} | egghead`,

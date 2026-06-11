@@ -11,7 +11,7 @@ export class PostCreationError extends Error {
 
 export class ExternalServiceError extends PostCreationError {
 	constructor(
-		service: 'egghead' | 'sanity',
+		service: 'egghead',
 		operation: string,
 		cause?: unknown,
 		context?: Record<string, unknown>,
