@@ -3,9 +3,9 @@ import type { ComponentPropsWithoutRef } from "react";
 import { cn } from "../utils";
 
 const stackGap = {
-  loose: "gap-10",
-  normal: "gap-6",
   tight: "gap-3",
+  normal: "gap-6",
+  loose: "gap-flow",
 } as const;
 
 export function Stack({
@@ -28,19 +28,11 @@ export function SectionHeader({
   description?: string;
 }) {
   return (
-    <header className="grid gap-4">
-      {eyebrow ? (
-        <p className="m-0 text-[0.8125rem] font-semibold leading-tight tracking-normal text-muted-foreground uppercase">
-          {eyebrow}
-        </p>
-      ) : null}
-      <h1 className="m-0 max-w-4xl text-3xl font-semibold leading-tight tracking-normal text-foreground sm:text-4xl">
-        {title}
-      </h1>
+    <header className="grid gap-3">
+      {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
+      <h1 className="text-balance text-4xl font-extrabold tracking-tight">{title}</h1>
       {description ? (
-        <p className="m-0 max-w-3xl text-base leading-7 text-muted-foreground sm:text-lg">
-          {description}
-        </p>
+        <p className="max-w-prose text-pretty text-lg text-muted-foreground">{description}</p>
       ) : null}
     </header>
   );

@@ -1,0 +1,61 @@
+/*
+ * Layout system: content-grid with named tracks (full / breakout / content).
+ * Children default to the content track; placement modifiers opt out.
+ * Width is controlled by CSS variables, not props:
+ *   --content-max          reading measure (default 65ch)
+ *   --content-breakout-max breakout width (default 85ch)
+ *   --content-gutter       side padding when constrained
+ */
+
+@layer components {
+  .content-grid {
+    --_gutter: var(--content-gutter, var(--spacing-gutter, 1rem));
+    --_content-max: var(--content-max, 65ch);
+    --_breakout-max: var(--content-breakout-max, 85ch);
+    --_inner: max(0px, calc(100% - (var(--_gutter) * 2)));
+    --_content-w: min(var(--_content-max), var(--_inner));
+    --_breakout-w: max(var(--_content-w), min(var(--_breakout-max), var(--_inner)));
+    --_pad: max(0px, calc((var(--_breakout-w) - var(--_content-w)) / 2));
+
+    display: grid;
+    grid-template-columns:
+      [full-start] minmax(0, 1fr)
+      [breakout-start] minmax(0, var(--_pad))
+      [content-start] var(--_content-w) [content-end]
+      minmax(0, var(--_pad))
+      [breakout-end]
+      minmax(0, 1fr) [full-end];
+
+    /* Keep natural row heights when the grid is min-height-stretched
+       (e.g. main { min-height: 100dvh } on short pages) */
+    align-content: start;
+  }
+
+  .content-grid > * {
+    grid-column: content;
+  }
+
+  /* Width presets, set via data-width on the grid element */
+  .content-grid[data-width="wide"] {
+    --content-max: 70rem;
+    --content-breakout-max: 74rem;
+  }
+}
+
+/* Placement modifiers — @utility so responsive variants (lg:breakout) work */
+
+@utility breakout {
+  grid-column: breakout;
+}
+
+@utility full-width {
+  grid-column: full;
+}
+
+/* Intrinsic card grid: columns derive from how many items fit, not from
+   viewport breakpoints. Override the minimum via --min-item. */
+@utility auto-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--min-item, 16rem)), 1fr));
+  gap: var(--auto-grid-gap, var(--spacing-gutter, 1rem));
+}

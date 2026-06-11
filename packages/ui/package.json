@@ -6,26 +6,22 @@
     "**/*.css"
   ],
   "exports": {
-    "./button": "./src/primitives/button.tsx",
+    "./button": "./src/components/button.tsx",
     "./container": "./src/components/container.tsx",
+    "./eggo-mark": "./src/components/eggo-mark.tsx",
+    "./globals.css": "./src/styles/globals.css",
     "./registry": "./registry.json",
     "./structure": "./src/components/structure.tsx",
-    "./styles.css": "./src/styles.css",
     "./utils": "./src/utils.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "typecheck:tsgo": "tsgo --noEmit -p tsconfig.json"
   },
-  "dependencies": {
-    "@radix-ui/react-slot": "^1.2.5",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.0",
-    "tailwind-merge": "^3.6.0"
-  },
   "devDependencies": {
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
+    "tailwindcss": "^4.3.0",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {

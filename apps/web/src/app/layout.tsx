@@ -1,6 +1,24 @@
 import type { Metadata } from "next";
-import "@egghead/ui/styles.css";
-import "./globals.css";
+import { Caveat, Varela_Round } from "next/font/google";
+import { Suspense } from "react";
+
+import "@egghead/ui/globals.css";
+import "./components.css";
+
+import { SiteFooter } from "./site-footer";
+import { SiteNav, SiteNavView } from "./site-nav";
+
+const varelaRound = Varela_Round({
+  subsets: ["latin"],
+  weight: "400",
+  variable: "--font-varela",
+});
+
+const caveat = Caveat({
+  subsets: ["latin"],
+  weight: ["600", "700"],
+  variable: "--font-caveat",
+});
 
 export const metadata: Metadata = {
   title: "egghead",
@@ -13,12 +31,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html className={`${varelaRound.variable} ${caveat.variable}`} id="top" lang="en">
       <head>
         <link href="https://image.mux.com" rel="preconnect" />
         <link href="https://stream.mux.com" rel="preconnect" />
       </head>
-      <body>{children}</body>
+      <body>
+        <Suspense fallback={<SiteNavView pathname={null} />}>
+          <SiteNav />
+        </Suspense>
+        {children}
+        <SiteFooter />
+      </body>
     </html>
   );
 }
