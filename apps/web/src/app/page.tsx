@@ -34,6 +34,10 @@ function familyLabel(family: string) {
   return family.replace(/-/g, " ");
 }
 
+function lessonCountLabel(count: number) {
+  return `${count} ${count === 1 ? "lesson" : "lessons"}`;
+}
+
 function ListCard({
   children,
   title,
@@ -78,7 +82,7 @@ function ContentRow({ item }: { item: HomeContentItem }) {
             />
             {item.lessonCount ? (
               <span className="absolute right-1.5 bottom-1 rounded bg-black/60 px-1 text-[10px] font-bold text-cream">
-                {item.lessonCount} lessons
+                {lessonCountLabel(item.lessonCount)}
               </span>
             ) : null}
           </span>
@@ -107,7 +111,7 @@ function ContentRow({ item }: { item: HomeContentItem }) {
 
         {!item.imageUrl && item.lessonCount ? (
           <span className="shrink-0 text-sm font-bold text-muted-foreground">
-            {item.lessonCount} {item.lessonCount === 1 ? "lesson" : "lessons"}
+            {lessonCountLabel(item.lessonCount)}
           </span>
         ) : null}
 
@@ -123,7 +127,7 @@ function ContentRow({ item }: { item: HomeContentItem }) {
 }
 
 function statLabel(value: number) {
-  if (value >= 1000) return `${Math.floor(value / 100) * 100}`.replace(/(\d)(?=(\d{3})$)/, "$1,");
+  if (value >= 1000) return (Math.floor(value / 100) * 100).toLocaleString("en-US");
   if (value >= 100) return `${Math.floor(value / 10) * 10}`;
   return `${value}`;
 }
