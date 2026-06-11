@@ -4,7 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense, type ReactNode } from "react";
 import { Container } from "@egghead/ui/container";
-import { SectionHeader, Stack } from "@egghead/ui/structure";
+import { SectionHeader } from "@egghead/ui/structure";
 
 import {
   getLessonBySlug,
@@ -59,7 +59,7 @@ function LessonAccessFallback({ lesson }: { lesson: LessonForPage }) {
   return (
     <>
       <div
-        className="egghead-video-placeholder"
+        className="egghead-video-placeholder breakout"
         data-access-state="pending"
         data-video-state="pending"
       />
@@ -135,7 +135,7 @@ async function LessonAccessExperience({ lesson }: { lesson: LessonForPage }) {
       ) : canWatch && videoUrl ? (
         <video
           aria-label={`${lesson.title} video`}
-          className="egghead-video"
+          className="egghead-video breakout"
           controls
           data-access-state={accessRequired ? "granted" : "free"}
           data-video-state="allowed"
@@ -146,13 +146,13 @@ async function LessonAccessExperience({ lesson }: { lesson: LessonForPage }) {
         </video>
       ) : (
         <div
-          className="egghead-video-placeholder"
+          className="egghead-video-placeholder breakout"
           data-access-state={accessGranted ? "granted" : "denied"}
           data-video-state={videoState}
         >
           {videoState === "gated" ? (
             <div className="egghead-video-placeholder-content">
-              <p className="egghead-eyebrow">Access required</p>
+              <p className="eyebrow">Access required</p>
               <p>This lesson is available with an active egghead membership.</p>
               <Link data-access-cta="login-or-subscribe" href="/login">
                 Sign in or subscribe
@@ -182,12 +182,10 @@ async function LessonPageStatic({
 
   return (
     <Container as="main" size="narrow">
-      <Stack gap="loose">
-        <SectionHeader description={lesson.description} eyebrow="Lesson" title={lesson.title} />
+      <SectionHeader description={lesson.description} eyebrow="Lesson" title={lesson.title} />
 
-        <Suspense fallback={<LessonAccessFallback lesson={lesson} />}>{accessComponent}</Suspense>
-        <MarkdownContent label="Lesson body">{lesson.body}</MarkdownContent>
-      </Stack>
+      <Suspense fallback={<LessonAccessFallback lesson={lesson} />}>{accessComponent}</Suspense>
+      <MarkdownContent label="Lesson body">{lesson.body}</MarkdownContent>
     </Container>
   );
 }

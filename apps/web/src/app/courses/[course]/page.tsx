@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Container } from "@egghead/ui/container";
-import { SectionHeader, Stack } from "@egghead/ui/structure";
+import { SectionHeader } from "@egghead/ui/structure";
 
 import {
   getCourseBySlug,
@@ -55,50 +55,48 @@ async function CoursePageStatic({ course }: { course: CourseForPage }) {
 
   return (
     <Container as="main" size="wide">
-      <Stack gap="loose">
-        <SectionHeader description={course.description} eyebrow="Course" title={course.title} />
-        <MarkdownContent label="Course body">{course.body}</MarkdownContent>
+      <SectionHeader description={course.description} eyebrow="Course" title={course.title} />
+      <MarkdownContent label="Course body">{course.body}</MarkdownContent>
 
-        <dl className="egghead-course-facts" aria-label="Course facts">
+      <dl className="egghead-course-facts" aria-label="Course facts">
+        <div>
+          <dt>Lessons</dt>
+          <dd>{course.lessonCount}</dd>
+        </div>
+        {course.instructorName ? (
           <div>
-            <dt>Lessons</dt>
-            <dd>{course.lessonCount}</dd>
+            <dt>Instructor</dt>
+            <dd>{course.instructorName}</dd>
           </div>
-          {course.instructorName ? (
-            <div>
-              <dt>Instructor</dt>
-              <dd>{course.instructorName}</dd>
-            </div>
-          ) : null}
-          {course.accessState ? (
-            <div>
-              <dt>Access</dt>
-              <dd>{course.accessState}</dd>
-            </div>
-          ) : null}
-        </dl>
+        ) : null}
+        {course.accessState ? (
+          <div>
+            <dt>Access</dt>
+            <dd>{course.accessState}</dd>
+          </div>
+        ) : null}
+      </dl>
 
-        <section className="egghead-lesson-section" aria-labelledby="course-lessons">
-          <h2 id="course-lessons">Lessons</h2>
-          <ol className="egghead-lesson-list">
-            {course.lessons.map((lesson, index) => (
-              <li key={lesson.id} className="egghead-lesson-row">
-                <a href={`/lessons/${lesson.slug}`}>
-                  <span className="egghead-lesson-index">{String(index + 1).padStart(2, "0")}</span>
-                  <span>
-                    <span className="egghead-lesson-title">{lesson.title}</span>
-                    {lesson.duration ? (
-                      <span className="egghead-lesson-duration">
-                        {Math.round(lesson.duration / 60)} min
-                      </span>
-                    ) : null}
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ol>
-        </section>
-      </Stack>
+      <section className="egghead-lesson-section" aria-labelledby="course-lessons">
+        <h2 id="course-lessons">Lessons</h2>
+        <ol className="egghead-lesson-list">
+          {course.lessons.map((lesson, index) => (
+            <li key={lesson.id} className="egghead-lesson-row">
+              <a href={`/lessons/${lesson.slug}`}>
+                <span className="egghead-lesson-index">{String(index + 1).padStart(2, "0")}</span>
+                <span>
+                  <span className="egghead-lesson-title">{lesson.title}</span>
+                  {lesson.duration ? (
+                    <span className="egghead-lesson-duration">
+                      {Math.round(lesson.duration / 60)} min
+                    </span>
+                  ) : null}
+                </span>
+              </a>
+            </li>
+          ))}
+        </ol>
+      </section>
     </Container>
   );
 }

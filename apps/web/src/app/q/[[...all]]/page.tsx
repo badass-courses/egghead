@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
-import { SectionHeader, Stack } from "@egghead/ui/structure";
+import { SectionHeader } from "@egghead/ui/structure";
 
 import { searchContent } from "../../../content/search";
 
@@ -113,11 +113,9 @@ function SearchFallback() {
 export default function SearchPage(props: SearchPageProps) {
   return (
     <Container as="main" size="wide">
-      <Stack gap="loose">
-        <Suspense fallback={<SearchFallback />}>
-          <SearchResults {...props} />
-        </Suspense>
-      </Stack>
+      <Suspense fallback={<SearchFallback />}>
+        <SearchResults {...props} />
+      </Suspense>
     </Container>
   );
 }

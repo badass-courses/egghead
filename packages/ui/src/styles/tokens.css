@@ -52,7 +52,7 @@
   /* ── Fluid space (gutter: side padding · flow: between blocks · section: page rhythm) ── */
   --spacing-gutter: clamp(1rem, 0.6rem + 2vw, 2rem);
   --spacing-flow: clamp(1.75rem, 1.25rem + 2.5vw, 3rem);
-  --spacing-section: clamp(3rem, 2rem + 5vw, 7rem);
+  --spacing-section: clamp(3rem, 2rem + 5vw, 2rem);
 
   /* ── Radius (kit uses xl/2xl/full plus this in-between) ───── */
   --radius-xl2: 1.25rem;
@@ -111,6 +111,8 @@
   --gradient-yolk: linear-gradient(180deg, #ffd968 0%, #f7c948 45%, #efb838 100%);
   --gradient-navy: linear-gradient(180deg, #2b3d52 0%, #1e2a38 55%, #18222e 100%);
   --gradient-surface: linear-gradient(180deg, #fffdf6 0%, #fbf3e0 100%);
+  /* one step lighter than surface — raised keys sitting on a surface */
+  --gradient-raised: linear-gradient(180deg, #fffefc 0%, #fdf8ec 100%);
   --gradient-well: linear-gradient(180deg, #fdf8ec 0%, #f3e8ce 100%);
   --gradient-rust: linear-gradient(180deg, #b5604e 0%, #a05040 55%, #8f4536 100%);
   --gradient-sky: linear-gradient(180deg, #c2e2ee 0%, #a8d4e2 60%, #95c6d7 100%);
@@ -200,6 +202,7 @@
 
     --gradient-navy: linear-gradient(180deg, #344660 0%, #243246 55%, #1c2839 100%);
     --gradient-surface: linear-gradient(180deg, #28394e 0%, #1e2c3e 100%);
+    --gradient-raised: linear-gradient(180deg, #35485e 0%, #2a3c50 100%);
     --gradient-well: linear-gradient(180deg, #22303f 0%, #141e2a 100%);
 
     --texture-glow: radial-gradient(

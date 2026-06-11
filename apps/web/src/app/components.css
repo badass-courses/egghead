@@ -1,0 +1,464 @@
+/*
+ * Shared content patterns for the egghead web app.
+ * Plain CSS over @egghead/ui tokens — app-level, not design-system-level.
+ */
+
+/* ── Markdown prose ──────────────────────────────────────────── */
+
+.egghead-prose {
+  display: grid;
+  gap: 1.125rem;
+  padding-top: var(--spacing-flow);
+  border-top: 1px solid var(--color-border);
+}
+
+.egghead-prose > * {
+  margin: 0;
+}
+
+.egghead-prose p,
+.egghead-prose li {
+  max-width: 65ch;
+  color: var(--color-muted-foreground);
+}
+
+.egghead-prose h2,
+.egghead-prose h3 {
+  max-width: 65ch;
+  margin-top: 0.875rem;
+  color: var(--color-foreground);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+
+.egghead-prose h2 {
+  font-size: var(--text-2xl);
+}
+
+.egghead-prose h3 {
+  font-size: var(--text-xl);
+}
+
+.egghead-prose a {
+  color: var(--color-foreground);
+  font-weight: 700;
+  text-decoration-color: var(--color-yolk-deep);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.egghead-prose a:hover {
+  background: color-mix(in srgb, var(--color-yolk) 30%, transparent);
+}
+
+.egghead-prose ul,
+.egghead-prose ol {
+  display: grid;
+  gap: 0.5rem;
+  padding-left: 1.4rem;
+}
+
+.egghead-prose blockquote {
+  max-width: 65ch;
+  padding-left: 1.125rem;
+  color: var(--color-muted-foreground);
+  border-left: 3px solid var(--color-rust);
+}
+
+.egghead-prose pre {
+  max-width: 100%;
+  padding: 1.125rem;
+  overflow: auto;
+  color: var(--color-foreground);
+  background: var(--color-well);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.875rem;
+  box-shadow: var(--shadow-well);
+}
+
+.egghead-prose code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+}
+
+.egghead-prose :not(pre) > code {
+  padding: 0.125em 0.4em;
+  background: var(--color-well);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+}
+
+/* ── Media ───────────────────────────────────────────────────── */
+
+.egghead-public-image,
+.egghead-video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: var(--color-navy);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl2);
+  box-shadow: var(--shadow-card-deep);
+}
+
+.egghead-video {
+  display: block;
+  overflow: hidden;
+}
+
+.egghead-audio {
+  width: 100%;
+}
+
+.egghead-video-placeholder {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background-image: var(--gradient-navy);
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  border-radius: var(--radius-xl2);
+  box-shadow: var(--shadow-card-deep);
+}
+
+.egghead-video-placeholder-content {
+  display: grid;
+  gap: 0.75rem;
+  place-content: center;
+  height: 100%;
+  padding: 1.5rem;
+  color: var(--color-cream);
+  text-align: center;
+}
+
+.egghead-video-placeholder-content a {
+  color: var(--color-yolk);
+  font-weight: 800;
+  text-underline-offset: 3px;
+}
+
+/* ── Home: search well + browse chips ────────────────────────── */
+
+.egghead-home-search {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.375rem 0.375rem 0.375rem 1.25rem;
+  background: var(--color-well);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 9999px;
+  box-shadow: var(--shadow-well);
+}
+
+.egghead-home-search:focus-within {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 3px;
+}
+
+.egghead-home-search input {
+  flex: 1;
+  min-width: 0;
+  padding-block: 0.625rem;
+  color: var(--color-foreground);
+  font: inherit;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+}
+
+.egghead-home-search input:focus-visible {
+  outline: none;
+}
+
+.egghead-home-search input::placeholder {
+  color: color-mix(in srgb, var(--color-foreground) 40%, transparent);
+}
+
+.egghead-home-search button {
+  flex-shrink: 0;
+  padding: 0.6875rem 1.375rem 0.5625rem;
+  color: var(--color-yolk-foreground);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  background-image: var(--gradient-yolk);
+  border: 1px solid color-mix(in srgb, var(--color-yolk-shadow) 40%, transparent);
+  border-radius: 9999px;
+  box-shadow: var(--shadow-btn);
+  transition:
+    transform 80ms var(--ease-out-quad),
+    box-shadow 120ms var(--ease-out-quad),
+    filter 120ms var(--ease-out-quad);
+}
+
+@media (hover: hover) {
+  .egghead-home-search button:hover {
+    filter: brightness(var(--press-brightness));
+    box-shadow: var(--shadow-btn-hover);
+  }
+}
+
+.egghead-home-search button:active {
+  transform: translateY(2px);
+  box-shadow: var(--shadow-btn-press);
+}
+
+.egghead-home-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.egghead-home-nav a {
+  flex: 1 1 8.5rem;
+  min-width: 0;
+  padding: 0.875rem 1rem 0.75rem;
+  overflow-wrap: anywhere;
+  color: inherit;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+  background-image: var(--gradient-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-btn-ghost);
+  transition:
+    transform 80ms var(--ease-out-quad),
+    box-shadow 120ms var(--ease-out-quad),
+    filter 120ms var(--ease-out-quad);
+}
+
+@media (hover: hover) {
+  .egghead-home-nav a:hover {
+    filter: brightness(var(--press-brightness));
+  }
+}
+
+.egghead-home-nav a:active {
+  transform: translateY(2px);
+  box-shadow: var(--shadow-btn-press);
+}
+
+/* ── Home sections ───────────────────────────────────────────── */
+
+.egghead-home-section {
+  display: grid;
+  gap: 1.125rem;
+}
+
+.egghead-home-section-header {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.egghead-home-section-header h2,
+.egghead-home-section-header p {
+  margin: 0;
+}
+
+.egghead-home-section-header h2 {
+  font-size: var(--text-3xl);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+
+.egghead-home-section-header p {
+  max-width: 65ch;
+  color: var(--color-muted-foreground);
+}
+
+/* ── Facts (course + lesson metadata) ────────────────────────── */
+
+.egghead-course-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.egghead-course-facts div {
+  min-width: 0;
+  padding: 1rem 1.125rem;
+  background-image: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+  box-shadow: var(--shadow-card);
+}
+
+.egghead-course-facts dt {
+  margin: 0 0 0.375rem;
+  color: var(--color-rust);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.egghead-course-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-foreground);
+  font-weight: 700;
+}
+
+/* ── Lesson list (course page) ───────────────────────────────── */
+
+.egghead-lesson-section {
+  display: grid;
+  gap: 1.125rem;
+}
+
+.egghead-lesson-section h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.egghead-lesson-list {
+  display: grid;
+  padding: 0.375rem;
+  margin: 0;
+  list-style: none;
+  background-image: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl2);
+  box-shadow: var(--shadow-card);
+}
+
+.egghead-lesson-row {
+  margin: 0;
+}
+
+.egghead-lesson-row + .egghead-lesson-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.egghead-lesson-row a {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+  gap: 0.875rem;
+  align-items: baseline;
+  padding: 1rem 1.125rem;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 0.875rem;
+}
+
+.egghead-lesson-row a:hover {
+  background: var(--color-well);
+}
+
+.egghead-lesson-index {
+  color: var(--color-rust);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.egghead-lesson-title {
+  display: block;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+.egghead-lesson-duration {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--color-muted-foreground);
+  font-size: var(--text-sm);
+}
+
+/* ── Result cards (search, home content sections) ────────────── */
+
+.egghead-search-results {
+  display: grid;
+  gap: 0.875rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.egghead-search-results li {
+  margin: 0;
+}
+
+.egghead-search-results a {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1.25rem 1.375rem;
+  color: inherit;
+  text-decoration: none;
+  background-image: var(--gradient-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+  box-shadow: var(--shadow-card);
+  transition:
+    transform 120ms var(--ease-out-quad),
+    box-shadow 120ms var(--ease-out-quad);
+}
+
+@media (hover: hover) {
+  .egghead-search-results a:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-card-deep);
+  }
+}
+
+.egghead-search-results a:active {
+  transform: translateY(0);
+}
+
+.egghead-search-type {
+  color: var(--color-rust);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.egghead-search-title {
+  overflow-wrap: anywhere;
+  font-size: var(--text-xl);
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.egghead-search-description {
+  display: -webkit-box;
+  max-width: 65ch;
+  overflow: hidden;
+  color: var(--color-muted-foreground);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+/* ── Account ─────────────────────────────────────────────────── */
+
+.egghead-login-state {
+  display: grid;
+  gap: 0.5rem;
+  padding-block: 1.125rem;
+  border-block: 1px solid var(--color-border);
+}
+
+.egghead-login-state p {
+  margin: 0;
+}
+
+/* ── Empty state: a hand-written note ────────────────────────── */
+
+.egghead-empty-state {
+  max-width: 28rem;
+  padding: 1.25rem 1.375rem;
+  margin: 0;
+  color: var(--color-muted-foreground);
+  font-family: var(--font-hand);
+  font-size: 1.4rem;
+  line-height: 1.3;
+  background: var(--color-well);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 1rem;
+  transform: rotate(-0.4deg);
+}

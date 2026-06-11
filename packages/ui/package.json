@@ -6,10 +6,12 @@
     "**/*.css"
   ],
   "exports": {
+    "./button": "./src/components/button.tsx",
     "./container": "./src/components/container.tsx",
+    "./eggo-mark": "./src/components/eggo-mark.tsx",
+    "./globals.css": "./src/styles/globals.css",
     "./registry": "./registry.json",
     "./structure": "./src/components/structure.tsx",
-    "./styles.css": "./src/styles.css",
     "./utils": "./src/utils.ts"
   },
   "scripts": {

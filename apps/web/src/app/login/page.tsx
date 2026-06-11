@@ -1,8 +1,9 @@
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
-import { SectionHeader, Stack } from "@egghead/ui/structure";
+import { SectionHeader } from "@egghead/ui/structure";
 
 import { isGithubAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUserFromRequest } from "../../coursebuilder/current-user";
@@ -19,7 +20,7 @@ async function CurrentLoginState() {
 
   return (
     <div className="egghead-login-state">
-      <p className="egghead-eyebrow">Signed in</p>
+      <p className="eyebrow">Signed in</p>
       <p>
         {currentUser.user.access.granted
           ? "Membership access active"
@@ -43,29 +44,27 @@ export default function LoginPage() {
 
   return (
     <Container as="main" size="narrow">
-      <Stack gap="loose">
-        <SectionHeader
-          description="Use your GitHub account to continue."
-          eyebrow="Account"
-          title="Sign in to egghead"
-        />
+      <SectionHeader
+        description="Use your GitHub account to continue."
+        eyebrow="Account"
+        title="Sign in to egghead"
+      />
 
-        <Suspense fallback={null}>
-          <CurrentLoginState />
-        </Suspense>
+      <Suspense fallback={null}>
+        <CurrentLoginState />
+      </Suspense>
 
-        {githubAuthConfigured ? (
-          <form action={signInWithGithub} className="egghead-login-actions">
-            <button className="egghead-login-button" type="submit">
-              Continue with GitHub
-            </button>
-          </form>
-        ) : (
-          <p className="egghead-empty-state">
-            GitHub sign-in is not configured for this environment.
-          </p>
-        )}
-      </Stack>
+      {githubAuthConfigured ? (
+        <form action={signInWithGithub} className="grid max-w-xs gap-3">
+          <Button type="submit" variant="yolk">
+            Continue with GitHub
+          </Button>
+        </form>
+      ) : (
+        <p className="egghead-empty-state">
+          GitHub sign-in is not configured for this environment.
+        </p>
+      )}
     </Container>
   );
 }

@@ -7,9 +7,15 @@ type ContainerProps<T extends ElementType> = {
   size?: "narrow" | "wide";
 } & Omit<ComponentPropsWithoutRef<T>, "as">;
 
+/**
+ * Page-level content grid. Children land in the reading-measure track by
+ * default; opt out per child with `breakout` or `full-width`. Width comes
+ * from CSS variables (`--content-max`), not props — `size` only picks a
+ * preset. Vertical rhythm between children is built in via gap.
+ */
 export function Container<T extends ElementType = "div">({
   as,
-  size = "wide",
+  size = "narrow",
   className,
   ...props
 }: ContainerProps<T>) {
@@ -17,7 +23,8 @@ export function Container<T extends ElementType = "div">({
 
   return (
     <Component
-      className={cn("egghead-container", `egghead-container-${size}`, className)}
+      className={cn("content-grid gap-y-flow py-section", className)}
+      data-width={size}
       {...props}
     />
   );

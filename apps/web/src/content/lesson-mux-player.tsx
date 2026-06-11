@@ -13,7 +13,7 @@ export function LessonMuxPlayer({
 }) {
   return (
     <MuxPlayer
-      className="egghead-video"
+      className="egghead-video breakout"
       data-video-state="allowed"
       defaultHiddenCaptions
       maxResolution="2160p"

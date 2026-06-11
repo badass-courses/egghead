@@ -1,5 +1,6 @@
+import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
-import { SectionHeader, Stack } from "@egghead/ui/structure";
+import { SectionHeader } from "@egghead/ui/structure";
 
 import { signOut } from "../../server/auth";
 
@@ -12,19 +13,17 @@ async function signOutOfEgghead() {
 export default function LogoutPage() {
   return (
     <Container as="main" size="narrow">
-      <Stack gap="loose">
-        <SectionHeader
-          description="End your current egghead session."
-          eyebrow="Account"
-          title="Sign out"
-        />
+      <SectionHeader
+        description="End your current egghead session."
+        eyebrow="Account"
+        title="Sign out"
+      />
 
-        <form action={signOutOfEgghead} className="egghead-login-actions">
-          <button className="egghead-login-button" type="submit">
-            Sign out
-          </button>
-        </form>
-      </Stack>
+      <form action={signOutOfEgghead} className="grid max-w-xs gap-3">
+        <Button type="submit" variant="ghost">
+          Sign out
+        </Button>
+      </form>
     </Container>
   );
 }

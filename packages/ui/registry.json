@@ -4,14 +4,55 @@
   "homepage": "https://egghead.io",
   "items": [
     {
+      "name": "egghead-utils",
+      "type": "registry:lib",
+      "title": "Egghead utils",
+      "description": "Minimal class-name join helper used by all egghead components.",
+      "files": [
+        {
+          "path": "src/utils.ts",
+          "type": "registry:lib",
+          "target": "egghead/utils.ts"
+        }
+      ]
+    },
+    {
       "name": "egghead-tokens",
       "type": "registry:style",
       "title": "Egghead tokens",
-      "description": "Sparse black/white light-dark tokens for the standalone Egghead app.",
+      "description": "Brand tokens for the standalone Egghead app: paper/ink semantic colors with light/dark, tactile shadows, gradients, fluid type and space scales, motion.",
       "files": [
         {
-          "path": "registry/egghead/tokens.css",
-          "type": "registry:style"
+          "path": "src/styles/tokens.css",
+          "type": "registry:style",
+          "target": "egghead/styles/tokens.css"
+        }
+      ]
+    },
+    {
+      "name": "egghead-layout",
+      "type": "registry:style",
+      "title": "Egghead layout system",
+      "description": "Content grid with named tracks (full/breakout/content), placement utilities, and an intrinsic auto-grid.",
+      "files": [
+        {
+          "path": "src/styles/layout.css",
+          "type": "registry:style",
+          "target": "egghead/styles/layout.css"
+        }
+      ]
+    },
+    {
+      "name": "egghead-container",
+      "type": "registry:component",
+      "title": "Egghead container",
+      "description": "Page-level content-grid wrapper with width presets and built-in vertical rhythm.",
+      "registryDependencies": ["egghead-utils"],
+      "files": [
+        {
+          "path": "src/components/container.tsx",
+          "type": "registry:component",
+          "target": "egghead/components/container.tsx"
         }
       ]
     },
@@ -20,10 +61,39 @@
       "type": "registry:component",
       "title": "Egghead structure primitives",
       "description": "Minimal typography and structure primitives for professional CourseBuilder surfaces.",
+      "registryDependencies": ["egghead-utils"],
       "files": [
         {
-          "path": "registry/egghead/structure.tsx",
-          "type": "registry:component"
+          "path": "src/components/structure.tsx",
+          "type": "registry:component",
+          "target": "egghead/components/structure.tsx"
+        }
+      ]
+    },
+    {
+      "name": "egghead-button",
+      "type": "registry:component",
+      "title": "Egghead button",
+      "description": "Tactile brand button with yolk, navy, ghost, and rust variants.",
+      "registryDependencies": ["egghead-utils"],
+      "files": [
+        {
+          "path": "src/components/button.tsx",
+          "type": "registry:component",
+          "target": "egghead/components/button.tsx"
+        }
+      ]
+    },
+    {
+      "name": "egghead-eggo-mark",
+      "type": "registry:component",
+      "title": "Eggo logomark",
+      "description": "Official egghead eggo logomark as an inline SVG component.",
+      "files": [
+        {
+          "path": "src/components/eggo-mark.tsx",
+          "type": "registry:component",
+          "target": "egghead/components/eggo-mark.tsx"
         }
       ]
     }
