@@ -5,8 +5,6 @@ import { accounts } from '@/db/schema'
 import { env } from '@/env.mjs'
 import { USER_CREATED_EVENT } from '@/inngest/events/user-created'
 import { inngest } from '@/inngest/inngest.server'
-import { validateProfileForSanity } from '@/lib/instructor'
-import { syncInstructorToSanity } from '@/lib/instructor-query'
 import { addRoleToUser } from '@/lib/users'
 import GithubProvider from '@auth/core/providers/github'
 import TwitterProvider from '@auth/core/providers/twitter'
@@ -83,7 +81,6 @@ export const authOptions: NextAuthConfig = {
 
 			if (user.id && profile.roles.includes('instructor')) {
 				await addRoleToUser(user.id, 'contributor')
-				await syncInstructorToSanity(validateProfileForSanity(params.profile))
 			}
 		},
 	},

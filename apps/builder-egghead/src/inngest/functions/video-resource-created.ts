@@ -50,8 +50,6 @@ export const syncVideoResourceData = inngest.createFunction(
 				const hlsUrl = `https://stream.mux.com/${videoResource.muxPlaybackId}.m3u8`
 				const duration = videoResource.duration ?? 0
 
-				// TODO: also write to Sanity?
-
 				if (parentResource.fields.eggheadLessonId) {
 					await eggheadPgQuery(
 						`UPDATE lessons SET
