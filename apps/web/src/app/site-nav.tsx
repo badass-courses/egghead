@@ -1,8 +1,9 @@
 "use client";
 
+import Form from "next/form";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EggoMark } from "@egghead/ui/eggo-mark";
 import { cn } from "@egghead/ui/utils";
 
@@ -66,6 +67,7 @@ export function SiteNav() {
 export function SiteNavView({ pathname }: { pathname: string | null }) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setMenuOpen(false);
@@ -75,7 +77,16 @@ export function SiteNavView({ pathname }: { pathname: string | null }) {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        router.push("/q");
+
+        // Focus the nav search where it exists (desktop); otherwise go
+        // to the search page, which focuses its own input.
+        const input = searchRef.current;
+        if (input && input.offsetParent !== null) {
+          input.focus();
+          input.select();
+        } else {
+          router.push("/q");
+        }
       }
     }
 
@@ -119,16 +130,22 @@ export function SiteNavView({ pathname }: { pathname: string | null }) {
             })}
           </div>
 
-          <Link
-            className="ml-auto hidden w-56 items-center gap-2.5 rounded-full border border-border-strong bg-well px-4 py-2 text-muted-foreground shadow-well lg:flex"
-            href="/q"
+          <Form
+            action="/q"
+            className="ml-auto hidden w-56 items-center gap-2.5 rounded-full border border-border-strong bg-well px-4 py-2 text-muted-foreground shadow-well focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring lg:flex"
           >
             <SearchIcon />
-            <span className="text-sm font-semibold text-foreground/35">Search…</span>
+            <input
+              aria-label="Search egghead"
+              className="w-full min-w-0 bg-transparent text-sm font-semibold text-foreground outline-none placeholder:text-foreground/35"
+              name="q"
+              placeholder="Search…"
+              ref={searchRef}
+            />
             <kbd className="ml-auto rounded-md border border-border-strong bg-surface-grad px-1.5 py-0.5 text-[10px] font-extrabold text-muted-foreground shadow-btn-ghost">
               ⌘K
             </kbd>
-          </Link>
+          </Form>
 
           <Link
             aria-label="Search"
