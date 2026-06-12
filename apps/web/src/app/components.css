@@ -543,8 +543,11 @@
     box-shadow 120ms var(--ease-out-quad);
 }
 
+/* Hover on the static li, lift the link: if the moving element is also
+   the hover target, pointers at its bottom edge flip in/out of hover and
+   the card jitters up and down. */
 @media (hover: hover) {
-  .egghead-search-results a:hover {
+  .egghead-search-results li:hover a {
     transform: translateY(-2px);
     box-shadow: var(--shadow-card-deep);
   }
