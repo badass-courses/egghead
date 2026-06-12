@@ -3,6 +3,7 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { descriptionField, fieldsFromJson, stringField } from "./fields";
+import { lessonFreeForeverSql } from "./lesson-access";
 import { publishedResourceSql } from "./publication";
 import { contentResourceSlugSql } from "./resource-slug";
 import { collectionPath } from "./routes";
@@ -181,7 +182,7 @@ export async function getHomeContent(): Promise<HomeContent> {
                   AND JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.postType')) = 'lesson'
                 )
               )
-              AND JSON_EXTRACT(lesson.fields, '$.freeForever') = CAST('true' AS JSON)
+              AND ${lessonFreeForeverSql("lesson")}
             ORDER BY link.position ASC, lesson.createdAt ASC
             LIMIT 1
           ) AS muxPlaybackId,

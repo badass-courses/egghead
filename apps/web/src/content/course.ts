@@ -16,6 +16,7 @@ import {
   publishedResourceSql,
   routeableLessonResourceSql,
 } from "./publication";
+import { lessonFreeForeverFromFields } from "./lesson-access";
 import { contentResourceSlugSql } from "./resource-slug";
 import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
 import { collectionEntryPath, collectionPath, legacyCoursePath } from "./routes";
@@ -136,7 +137,7 @@ function toLesson(row: LinkedResourceRow, courseSlug: string): CourseLesson | nu
     description: excerptField(fields),
     duration: numberField(fields, "duration"),
     position: row.position,
-    freeForever: booleanField(fields, "freeForever"),
+    freeForever: lessonFreeForeverFromFields(fields),
     isProContent: booleanField(fields, "isProContent"),
     sectionId: row.sectionId,
     canonicalPath: collectionEntryPath(courseSlug, slug),

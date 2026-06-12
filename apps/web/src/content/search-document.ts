@@ -5,6 +5,7 @@ import {
   markdownField,
   stringField,
 } from "./fields";
+import { lessonFreeForeverFromFields } from "./lesson-access";
 import { lessonCanonicalPathForRouteContext } from "./lesson-route-context";
 import {
   canonicalPodcastPath,
@@ -212,7 +213,8 @@ export function searchDocumentFromResource(input: SearchDocumentInput): SearchIn
     courseLinked: type === "lesson" && Boolean(input.parentCourseSlug),
     created_at_timestamp: timestampMs(input.resource.createdAt),
     description,
-    freeForever: booleanField(fields, "freeForever"),
+    freeForever:
+      type === "lesson" ? lessonFreeForeverFromFields(fields) : booleanField(fields, "freeForever"),
     id: input.resource.id,
     isProContent: booleanField(fields, "isProContent"),
     legacyPaths: uniqueLegacyPaths(legacyPathsForSearchDocument(type, slug), path),
