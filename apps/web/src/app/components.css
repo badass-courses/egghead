@@ -66,6 +66,35 @@
   padding-left: 1.4rem;
 }
 
+/* Preflight strips list-style; bring markers back with brand ink:
+   yolk dots for bullets, rust numerals for steps. */
+.egghead-prose ul {
+  list-style: disc;
+}
+
+.egghead-prose ol {
+  list-style: decimal;
+}
+
+.egghead-prose ul li::marker {
+  color: var(--color-yolk-deep);
+}
+
+.egghead-prose ol li::marker {
+  color: var(--color-rust);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.egghead-prose li > ul,
+.egghead-prose li > ol {
+  margin-top: 0.5rem;
+}
+
+.egghead-prose li > ul {
+  list-style: circle;
+}
+
 .egghead-prose blockquote {
   max-width: 65ch;
   padding-left: 1.125rem;
@@ -73,10 +102,16 @@
   border-left: 3px solid var(--color-rust);
 }
 
+/* The pre is the rounded frame; the inner code element scrolls. With the
+   scrollbar on the (vertically inset) code, its ends stay clear of the
+   corner curves instead of getting clipped by them. */
 .egghead-prose pre {
   max-width: 100%;
-  padding: 1.125rem;
-  overflow: auto;
+  /* The frame keeps a small inset on the scrollbar sides (bottom and
+     inline) so the bar floats clear of the corners; the rest of the
+     spacing lives on the code, inside the scroll area. */
+  padding: 1.125rem 0.5rem 0.5rem;
+  overflow: hidden;
   color: var(--color-foreground);
   background: var(--color-well);
   border: 1px solid var(--color-border-strong);
@@ -84,9 +119,138 @@
   box-shadow: var(--shadow-well);
 }
 
+.egghead-prose pre code {
+  display: block;
+  padding: 0 0.625rem 0.625rem;
+  overflow: auto;
+  /* Quiet scrollbars: thin thumb in muted ink, no track — adapts to the
+     cream well in light and the navy well at night. */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-muted-foreground) 35%, transparent) transparent;
+}
+
 .egghead-prose code {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
   font-size: 0.92em;
+}
+
+/* Shiki dual theme: light colors are inline; at night the emitted
+   --shiki-dark* variables take over. */
+@media (prefers-color-scheme: dark) {
+  .egghead-prose .shiki,
+  .egghead-prose .shiki span {
+    color: var(--shiki-dark) !important;
+    font-style: var(--shiki-dark-font-style) !important;
+    font-weight: var(--shiki-dark-font-weight) !important;
+    background-color: var(--shiki-dark-bg) !important;
+  }
+}
+
+/* ── Code blocks: copy key + terminal window chrome ──────────── */
+
+.egghead-code {
+  position: relative;
+  /* Grid-item min-width is auto: without this, a wide pre stretches the
+     prose column and the whole page scrolls horizontally. */
+  min-width: 0;
+  max-width: 100%;
+}
+
+.egghead-code-copy {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--color-muted-foreground);
+  cursor: pointer;
+  background-image: var(--gradient-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.625rem;
+  box-shadow: var(--shadow-btn-ghost);
+  transition:
+    opacity 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.egghead-code-copy:active {
+  box-shadow: var(--shadow-btn-press);
+  translate: 0 1px;
+}
+
+.egghead-code-copy[data-copied] {
+  color: var(--color-sage-foreground);
+  border-color: var(--color-sage-line);
+}
+
+/* Plain blocks: the key floats in the corner, shows on hover/focus. */
+.egghead-code > .egghead-code-copy {
+  position: absolute;
+  top: 0.625rem;
+  right: 0.625rem;
+  opacity: 0;
+}
+
+.egghead-code:hover > .egghead-code-copy,
+.egghead-code:focus-within > .egghead-code-copy {
+  opacity: 1;
+}
+
+/* Terminal blocks: a mac window bar sits on top of the pre. */
+.egghead-code-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.625rem 0.5rem 1rem;
+  background-image: var(--gradient-surface);
+  border: 1px solid var(--color-border-strong);
+  border-bottom: 0;
+  border-radius: 0.875rem 0.875rem 0 0;
+}
+
+.egghead-code-bar .egghead-code-copy {
+  margin-left: auto;
+}
+
+.egghead-code-bar-title {
+  color: var(--color-muted-foreground);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.egghead-code-dots {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.egghead-code-dots i {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.4) inset;
+}
+
+.egghead-code-dots i:nth-child(1) {
+  background: #ff5f57;
+  border: 1px solid #e0443e;
+}
+
+.egghead-code-dots i:nth-child(2) {
+  background: #febc2e;
+  border: 1px solid #d89c20;
+}
+
+.egghead-code-dots i:nth-child(3) {
+  background: #28c840;
+  border: 1px solid #1aab29;
+}
+
+.egghead-code[data-terminal] pre {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .egghead-prose :not(pre) > code {
@@ -131,12 +295,18 @@
 .egghead-video-placeholder {
   width: 100%;
   aspect-ratio: 16 / 9;
+  overflow: hidden;
   background-image: var(--gradient-navy);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
   border: 1px solid rgba(0, 0, 0, 0.4);
   border-radius: var(--radius-xl2);
   box-shadow: var(--shadow-card-deep);
 }
 
+/* Gate message reads on a navy scrim over the (blurred) poster, never on
+   the raw screenshot. */
 .egghead-video-placeholder-content {
   display: grid;
   gap: 0.75rem;
@@ -145,6 +315,21 @@
   padding: 1.5rem;
   color: var(--color-cream);
   text-align: center;
+  background: color-mix(in srgb, var(--color-navy) 45%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.egghead-video-placeholder-content .egghead-eyebrow {
+  color: color-mix(in srgb, var(--color-cream) 65%, transparent);
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.egghead-video-placeholder-content p:not(.egghead-eyebrow) {
+  max-width: 34ch;
+  margin: 0 auto;
+  font-weight: 700;
+  text-wrap: balance;
 }
 
 .egghead-video-placeholder-content a {

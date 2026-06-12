@@ -1,5 +1,7 @@
 import ReactMarkdown from "react-markdown";
 
+import { MarkdownPre } from "./code-block";
+
 export async function MarkdownContent({
   children,
   label = "Content",
@@ -13,7 +15,7 @@ export async function MarkdownContent({
 
   return (
     <section aria-label={label} className="egghead-prose egghead-markdown">
-      <ReactMarkdown>{children}</ReactMarkdown>
+      <ReactMarkdown components={{ pre: MarkdownPre }}>{children}</ReactMarkdown>
     </section>
   );
 }
