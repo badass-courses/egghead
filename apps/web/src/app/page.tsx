@@ -38,6 +38,34 @@ function lessonCountLabel(count: number) {
   return `${count} ${count === 1 ? "lesson" : "lessons"}`;
 }
 
+/* Hand-drawn marker swipe behind a word: two overlapping wobbly passes
+   with tapered, overshooting ends — like a real highlighter dragged
+   twice. preserveAspectRatio="none" stretches it to the word. */
+function MarkerHighlight({ children }: { children: ReactNode }) {
+  return (
+    <span className="relative inline-block">
+      {children}
+      <svg
+        aria-hidden
+        className="absolute bottom-[0.04em] left-[-0.22em] -z-10 h-[0.68em] w-[calc(100%+0.44em)] rotate-[-1.5deg] text-marker"
+        preserveAspectRatio="none"
+        viewBox="0 0 230 38"
+      >
+        <path
+          d="M7 20 C 14 13, 40 9.5, 74 8.2 C 112 6.8, 154 7.6, 192 10 C 207 11, 219 13, 226 15.5 C 227.5 18.5, 225 22.5, 221 24 C 198 21.6, 166 21.6, 130 22.8 C 94 24, 50 26.6, 23 28.8 C 13 29.6, 6.5 28.2, 5 25.8 C 3.8 23.8, 4.5 21.8, 7 20 Z"
+          fill="currentColor"
+          opacity="var(--marker-pass-strong)"
+        />
+        <path
+          d="M16 25 C 42 20.4, 88 17.4, 132 17.6 C 164 17.8, 198 19.8, 217 22.6 C 218.5 25, 216.5 28.6, 212 29.8 C 179 27.4, 137 28, 99 30 C 67 31.6, 35 33.6, 18 33.8 C 12.5 33.8, 10.8 31.6, 11.5 29.2 C 12 27.4, 14 25.8, 16 25 Z"
+          fill="currentColor"
+          opacity="var(--marker-pass-soft)"
+        />
+      </svg>
+    </span>
+  );
+}
+
 function ListCard({
   children,
   title,
@@ -174,15 +202,7 @@ function Hero({
         <h1 className="text-5xl font-black tracking-tight" style={{ lineHeight: 1.04 }}>
           Learn the tools
           <br />
-          that{" "}
-          <span className="relative inline-block">
-            compound
-            <span
-              aria-hidden
-              className="absolute inset-x-[-2px] bottom-1.5 -z-10 h-4 rotate-[-1deg] rounded-sm bg-yolk/50"
-            />
-          </span>
-          .
+          that <MarkerHighlight>compound</MarkerHighlight>.
         </h1>
 
         <p className="max-w-md text-lg font-semibold text-muted-foreground">

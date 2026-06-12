@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Caveat, Varela_Round } from "next/font/google";
+import { Caveat, Nunito } from "next/font/google";
 import { Suspense } from "react";
 
 import "@egghead/ui/globals.css";
@@ -8,10 +8,9 @@ import "./components.css";
 import { SiteFooter } from "./site-footer";
 import { SiteNav, SiteNavView } from "./site-nav";
 
-const varelaRound = Varela_Round({
+const nunito = Nunito({
   subsets: ["latin"],
-  weight: "400",
-  variable: "--font-varela",
+  variable: "--font-nunito",
 });
 
 const caveat = Caveat({
@@ -31,7 +30,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html className={`${varelaRound.variable} ${caveat.variable}`} id="top" lang="en">
+    <html className={`${nunito.variable} ${caveat.variable}`} id="top" lang="en">
       <head>
         <link href="https://image.mux.com" rel="preconnect" />
         <link href="https://stream.mux.com" rel="preconnect" />

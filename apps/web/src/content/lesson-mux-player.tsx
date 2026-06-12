@@ -1,6 +1,9 @@
 "use client";
 
 import MuxPlayer from "@mux/mux-player-react";
+import { useRef, type ComponentRef } from "react";
+
+import { usePauseWhenHidden } from "./use-pause-when-hidden";
 
 export function LessonMuxPlayer({
   playbackId,
@@ -13,8 +16,17 @@ export function LessonMuxPlayer({
   title: string;
   videoId: string;
 }) {
+  const playerRef = useRef<ComponentRef<typeof MuxPlayer>>(null);
+
+  usePauseWhenHidden(playerRef);
+
   return (
     <MuxPlayer
+      ref={playerRef}
+      // Remount per video: client-side navigation between lessons can
+      // reuse this component instance, and mux-player keeps the old
+      // stream's audio running when playback-id changes mid-playback.
+      key={playbackId}
       className="egghead-video breakout"
       data-video-state="allowed"
       defaultHiddenCaptions

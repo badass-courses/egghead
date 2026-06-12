@@ -13,6 +13,11 @@
   --color-yolk-foreground: #1e2a38;
   --color-sky: #a8d4e2;
   --color-sage: #9dbe8d;
+  /* Completed/"done" state (resource-list.html: bg-sage/30 border-sage
+     text-[#5C7A4C]; dark values below from resource-list-dark.html) */
+  --color-sage-wash: rgba(157, 190, 141, 0.3);
+  --color-sage-line: #9dbe8d;
+  --color-sage-foreground: #5c7a4c;
   --color-rust-deep: #7e3c2e;
 
   /* ── Semantic (light values; dark overrides below) ────────── */
@@ -28,6 +33,8 @@
   --color-border-strong: #e2d5b4;
   --color-border-soft: #efe4c8;
   --color-ring: #1e2a38;
+  /* marker swipe behind headline words: yolk on paper, darker-than-bg ink at night */
+  --color-marker: #f7c948;
 
   /* ── Fluid type scale (rem-anchored so user font-size scaling works) ── */
   --text-xs: clamp(0.75rem, 0.72rem + 0.15vw, 0.8125rem);
@@ -57,8 +64,8 @@
   /* ── Radius (kit uses xl/2xl/full plus this in-between) ───── */
   --radius-xl2: 1.25rem;
 
-  /* ── Fonts (apps provide --font-varela / --font-caveat via next/font) ── */
-  --font-sans: var(--font-varela, "Varela Round"), ui-rounded, system-ui, sans-serif;
+  /* ── Fonts (apps provide --font-nunito / --font-caveat via next/font) ── */
+  --font-sans: var(--font-nunito, "Nunito"), ui-rounded, system-ui, sans-serif;
   --font-hand: var(--font-caveat, "Caveat"), cursive;
 
   /* ── Easing ────────────────────────────────────────────────── */
@@ -130,6 +137,11 @@
      light, white/5 dark) */
   --hover-wash: rgba(255, 255, 255, 0.5);
 
+  /* Marker swipe pass opacities (a dark ink on a dark bg needs to be
+     much denser than yolk on paper to read) */
+  --marker-pass-strong: 0.5;
+  --marker-pass-soft: 0.38;
+
   --duration-fast: 200ms;
   --duration: 400ms;
   --duration-slow: 800ms;
@@ -172,6 +184,9 @@
     --color-border-strong: #36485f;
     --color-border-soft: rgba(154, 171, 192, 0.18);
     --color-ring: #ede4d3;
+    --color-marker: #7e3c2e;
+    --marker-pass-strong: 0.6;
+    --marker-pass-soft: 0.42;
 
     --shadow-btn:
       0 1px 0 rgba(255, 255, 255, 0.55) inset, 0 3px 0 #b8860f, 0 8px 14px -3px rgba(0, 0, 0, 0.55);
@@ -214,5 +229,9 @@
 
     --press-brightness: 1.08;
     --hover-wash: rgba(255, 255, 255, 0.05);
+
+    --color-sage-wash: rgba(157, 190, 141, 0.15);
+    --color-sage-line: rgba(157, 190, 141, 0.5);
+    --color-sage-foreground: #9dbe8d;
   }
 }

@@ -87,7 +87,10 @@ function PodcastEpisodeNavigation({
   show: PodcastShowForPage;
 }) {
   return (
-    <aside className="egghead-collection-nav" aria-label={`${show.title} episodes`}>
+    <aside
+      className="egghead-collection-nav min-[960px]:sticky-rail min-[960px]:overflow-y-auto min-[960px]:overscroll-contain scroll-fade"
+      aria-label={`${show.title} episodes`}
+    >
       <Link className="egghead-collection-nav-title" href={show.canonicalPath}>
         {show.title}
       </Link>

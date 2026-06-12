@@ -7,7 +7,11 @@ import {
   getCourseLessonStaticParams,
 } from "../../../content/course";
 import { getLessonById, type LessonForPage } from "../../../content/lesson";
-import { CourseLessonPageStatic, LessonAccessExperience } from "../../../content/lesson-page";
+import {
+  CourseLessonPageStatic,
+  LessonFactsExperience,
+  LessonPlayerExperience,
+} from "../../../content/lesson-page";
 import {
   getPodcastEpisode,
   getPodcastEpisodeStaticParams,
@@ -122,9 +126,10 @@ export default async function CollectionEntryPage({ params }: CollectionEntryPag
 
     return (
       <CourseLessonPageStatic
-        accessComponent={<LessonAccessExperience lesson={contextualLesson} />}
         course={course}
+        factsComponent={<LessonFactsExperience lesson={contextualLesson} />}
         lesson={contextualLesson}
+        playerComponent={<LessonPlayerExperience lesson={contextualLesson} />}
       />
     );
   }

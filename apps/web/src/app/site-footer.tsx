@@ -85,7 +85,10 @@ export function SiteFooter() {
                   <path d="M12.6 0h2.45l-5.35 6.12L16 16h-4.93l-3.86-5.05L2.8 16H.35l5.72-6.54L0 0h5.06l3.49 4.62L12.6 0zm-.86 14.53h1.36L4.32 1.39H2.86l8.88 13.14z" />
                 </svg>
               </SocialKey>
-              <SocialKey href="https://www.youtube.com/eggheadio" label="YouTube">
+              <SocialKey
+                href="https://www.youtube.com/channel/UCdJrlj2GPlSD5MdRIxuUItA"
+                label="YouTube"
+              >
                 <svg fill="currentColor" height="14" viewBox="0 0 20 14" width="18">
                   <path d="M19.6 2.2A2.5 2.5 0 0 0 17.8.4C16.2 0 10 0 10 0S3.8 0 2.2.4A2.5 2.5 0 0 0 .4 2.2 26 26 0 0 0 0 7a26 26 0 0 0 .4 4.8 2.5 2.5 0 0 0 1.8 1.8c1.6.4 7.8.4 7.8.4s6.2 0 7.8-.4a2.5 2.5 0 0 0 1.8-1.8A26 26 0 0 0 20 7a26 26 0 0 0-.4-4.8zM8 10V4l5.2 3L8 10z" />
                 </svg>

@@ -1,12 +1,21 @@
 import { headers } from "next/headers";
 import Link from "next/link";
-import { Suspense, type ReactNode } from "react";
+import { cache, Suspense, type ReactNode } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
+import {
+  ResourceListHeader,
+  ResourceListHeaderEyebrow,
+  ResourceListHeaderMeta,
+  ResourceListHeaderTitle,
+} from "@egghead/ui/resource-list";
+
 import { getCurrentUserFromRequest } from "../coursebuilder/current-user";
-import type { CourseForPage, CourseLesson } from "./course";
+import type { CourseForPage } from "./course";
+import { CourseCurriculum, courseDurationLabel } from "./course-lesson-list";
 import { lessonRequiresAccess } from "./lesson-access";
+import { LessonHtmlVideo } from "./lesson-html-video";
 import { LessonMuxPlayer } from "./lesson-mux-player";
 import type { LessonForPage } from "./lesson";
 import { MarkdownContent } from "./markdown-content";
@@ -89,9 +98,11 @@ function LessonAccessFallback({ lesson }: { lesson: LessonForPage }) {
   );
 }
 
-export async function LessonAccessExperience({ lesson }: { lesson: LessonForPage }) {
+/* One access resolution per request: the player and the facts render as
+   separate dynamic islands (so the page can place them apart), but they
+   share this cached lookup instead of fetching the user twice. */
+const resolveLessonAccess = cache(async (lesson: LessonForPage) => {
   const accessRequired = lessonRequiresAccess(lesson);
-  const videoUrl = lesson.videoHlsUrl ?? lesson.videoDashUrl;
   const currentUser = accessRequired
     ? await getCurrentUserFromRequest(
         new Request("http://egghead.local/lesson", { headers: await headers() }),
@@ -99,6 +110,13 @@ export async function LessonAccessExperience({ lesson }: { lesson: LessonForPage
       )
     : null;
   const accessGranted = !accessRequired || currentUser?.contentAccess?.granted === true;
+
+  return { accessGranted, accessRequired, currentUser };
+});
+
+export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage }) {
+  const { accessGranted, accessRequired } = await resolveLessonAccess(lesson);
+  const videoUrl = lesson.videoHlsUrl ?? lesson.videoDashUrl;
   const playbackId = lesson.videoMuxPlaybackId;
   const canWatch = Boolean((playbackId || videoUrl) && accessGranted);
   const videoState = canWatch
@@ -117,18 +135,12 @@ export async function LessonAccessExperience({ lesson }: { lesson: LessonForPage
           videoId={lesson.videoResourceId ?? lesson.id}
         />
       ) : canWatch && videoUrl ? (
-        <video
-          aria-label={`${lesson.title} video`}
-          className="egghead-video"
-          controls
-          data-access-state={accessRequired ? "granted" : "free"}
-          data-video-state="allowed"
+        <LessonHtmlVideo
+          accessState={accessRequired ? "granted" : "free"}
           poster={lesson.videoPosterUrl ?? undefined}
-          preload="metadata"
           src={videoUrl}
-        >
-          <track kind="captions" />
-        </video>
+          title={lesson.title}
+        />
       ) : (
         <LessonVideoPlaceholder
           accessState={accessGranted ? "granted" : "denied"}
@@ -146,41 +158,36 @@ export async function LessonAccessExperience({ lesson }: { lesson: LessonForPage
           ) : null}
         </LessonVideoPlaceholder>
       )}
-
-      <LessonFacts
-        accessReason={accessRequired ? (currentUser?.contentAccess?.reason ?? "denied") : "free"}
-        accessRequired={accessRequired}
-        lesson={lesson}
-      />
     </>
   );
 }
 
-function CourseLessonLink({
-  activeLessonSlug,
-  lesson,
-}: {
-  activeLessonSlug: string;
-  lesson: CourseLesson;
-}) {
-  const active = lesson.slug === activeLessonSlug;
+export async function LessonFactsExperience({ lesson }: { lesson: LessonForPage }) {
+  const { accessRequired, currentUser } = await resolveLessonAccess(lesson);
 
   return (
-    <li className="egghead-collection-nav-item">
-      <Link
-        aria-current={active ? "page" : undefined}
-        className={active ? "egghead-collection-nav-link-active" : undefined}
-        data-active-lesson={active ? "true" : "false"}
-        href={lesson.canonicalPath}
-        prefetch={true}
-      >
-        <span>{lesson.title}</span>
-        {lesson.duration ? <small>{Math.round(lesson.duration / 60)} min</small> : null}
-      </Link>
-    </li>
+    <LessonFacts
+      accessReason={accessRequired ? (currentUser?.contentAccess?.reason ?? "denied") : "free"}
+      accessRequired={accessRequired}
+      lesson={lesson}
+    />
   );
 }
 
+export function LessonAccessExperience({ lesson }: { lesson: LessonForPage }) {
+  return (
+    <>
+      <LessonPlayerExperience lesson={lesson} />
+      <LessonFactsExperience lesson={lesson} />
+    </>
+  );
+}
+
+/* Lesson rail: sits flush against the player and matches its height
+   exactly. The absolutely positioned card takes no part in the grid
+   row's height (the player's aspect ratio decides it) and drops its
+   left rounding/border so player + curriculum read as one unit. Below
+   960px the rail stacks under the player at natural height. */
 export function CourseLessonNavigation({
   activeLessonSlug,
   course,
@@ -188,37 +195,32 @@ export function CourseLessonNavigation({
   activeLessonSlug: string;
   course: CourseForPage;
 }) {
-  const sectionedLessonIds = new Set(
-    course.sections.flatMap((section) => section.lessons.map((lesson) => lesson.id)),
-  );
-  const directLessons = course.lessons.filter((lesson) => !sectionedLessonIds.has(lesson.id));
+  const duration = courseDurationLabel(course.lessons);
 
   return (
-    <aside className="egghead-collection-nav" aria-label={`${course.title} lessons`}>
-      <Link className="egghead-collection-nav-title" href={course.canonicalPath} prefetch={true}>
-        {course.title}
-      </Link>
-      {directLessons.length > 0 ? (
-        <ol className="egghead-collection-nav-list">
-          {directLessons.map((lesson) => (
-            <CourseLessonLink activeLessonSlug={activeLessonSlug} key={lesson.id} lesson={lesson} />
-          ))}
-        </ol>
-      ) : null}
-      {course.sections.map((section) => (
-        <section className="egghead-collection-nav-section" key={section.id}>
-          <h2>{section.title}</h2>
-          <ol className="egghead-collection-nav-list">
-            {section.lessons.map((lesson) => (
-              <CourseLessonLink
-                activeLessonSlug={activeLessonSlug}
-                key={lesson.id}
-                lesson={lesson}
-              />
-            ))}
-          </ol>
-        </section>
-      ))}
+    <aside className="relative min-w-0" aria-label={`${course.title} lessons`}>
+      <CourseCurriculum
+        activeLessonSlug={activeLessonSlug}
+        className="min-[960px]:absolute min-[960px]:inset-0 min-[960px]:rounded-l-none min-[960px]:border-l-0"
+        course={course}
+        header={
+          <ResourceListHeader>
+            <ResourceListHeaderEyebrow>Course</ResourceListHeaderEyebrow>
+            <ResourceListHeaderTitle
+              as={Link}
+              className="text-inherit no-underline transition-colors hover:text-rust"
+              href={course.canonicalPath}
+              prefetch={true}
+            >
+              {course.title}
+            </ResourceListHeaderTitle>
+            <ResourceListHeaderMeta>
+              {course.lessonCount} {course.lessonCount === 1 ? "lesson" : "lessons"}
+              {duration ? ` · ${duration}` : null}
+            </ResourceListHeaderMeta>
+          </ResourceListHeader>
+        }
+      />
     </aside>
   );
 }
@@ -258,24 +260,47 @@ export async function StandaloneLessonPageStatic({
 }
 
 export async function CourseLessonPageStatic({
-  accessComponent,
   course,
+  factsComponent,
   lesson,
+  playerComponent,
 }: {
-  accessComponent: ReactNode;
   course: CourseForPage;
+  factsComponent: ReactNode;
   lesson: LessonForPage;
+  playerComponent: ReactNode;
 }) {
   "use cache";
 
   return (
-    <Container as="main" size="wide">
-      <div className="egghead-collection-lesson-layout">
-        <div className="egghead-collection-lesson-main">
-          <LessonMain accessComponent={accessComponent} eyebrow="Course lesson" lesson={lesson} />
+    <Container as="main" size="wide" className="pt-4">
+      <Stack gap="loose">
+        <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-0">
+          <div className="egghead-lesson-player-cell min-w-0">
+            <Suspense fallback={<LessonVideoPlaceholder lesson={lesson} />}>
+              {playerComponent}
+            </Suspense>
+          </div>
+          <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
         </div>
-        <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
-      </div>
+        <SectionHeader
+          description={lesson.description}
+          eyebrow="Course lesson"
+          title={lesson.title}
+        />
+        <Suspense
+          fallback={
+            <LessonFacts
+              accessReason="pending"
+              accessRequired={lessonRequiresAccess(lesson)}
+              lesson={lesson}
+            />
+          }
+        >
+          {factsComponent}
+        </Suspense>
+        <MarkdownContent label="Lesson body">{lesson.body}</MarkdownContent>
+      </Stack>
     </Container>
   );
 }

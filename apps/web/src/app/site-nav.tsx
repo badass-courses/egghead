@@ -107,7 +107,7 @@ export function SiteNavView({ pathname }: { pathname: string | null }) {
                   className={cn(
                     "rounded-full text-sm",
                     active
-                      ? "border border-border-strong bg-raised-grad px-4 pt-[9px] pb-[7px] font-extrabold text-foreground shadow-btn-ghost"
+                      ? "border border-border-strong bg-raised-grad px-4 py-2 font-extrabold text-foreground shadow-btn-ghost"
                       : "press px-4 py-2 font-bold text-muted-foreground hover:bg-(--hover-wash) hover:text-foreground",
                   )}
                   href={link.href}

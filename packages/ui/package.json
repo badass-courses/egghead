@@ -11,12 +11,17 @@
     "./eggo-mark": "./src/components/eggo-mark.tsx",
     "./globals.css": "./src/styles/globals.css",
     "./registry": "./registry.json",
+    "./resource-list": "./src/components/resource-list.tsx",
     "./structure": "./src/components/structure.tsx",
     "./utils": "./src/utils.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "typecheck:tsgo": "tsgo --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@types/react": "19.2.7",

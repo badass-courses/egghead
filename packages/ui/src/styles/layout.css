@@ -52,6 +52,77 @@
   grid-column: full;
 }
 
+/* Scroll fade: thin scrollbar plus edge fades on a scrollable element.
+   Where scroll-driven animations are supported, each fade appears only
+   when there is more content in that direction — no fade at rest on
+   short content, no faded first row while scrolled to the top. Browsers
+   without support just get the thin scrollbar. The mask stops short of
+   the scrollbar gutter (a second, fully opaque layer covers that strip)
+   so the scrollbar never fades with the content. Tune via
+   --scroll-fade-size and --scroll-fade-gutter. */
+
+@property --scroll-fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --scroll-fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes scroll-fade-edges {
+  0% {
+    --scroll-fade-top: 0px;
+    --scroll-fade-bottom: var(--scroll-fade-size, 2rem);
+  }
+  100% {
+    --scroll-fade-top: var(--scroll-fade-size, 2rem);
+    --scroll-fade-bottom: 0px;
+  }
+}
+
+@utility scroll-fade {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+
+  @supports (animation-timeline: scroll(self)) {
+    mask-image:
+      linear-gradient(
+        to bottom,
+        transparent,
+        black var(--scroll-fade-top),
+        black calc(100% - var(--scroll-fade-bottom)),
+        transparent
+      ),
+      linear-gradient(black, black);
+    mask-position:
+      left top,
+      right top;
+    mask-size:
+      calc(100% - var(--scroll-fade-gutter, 12px)) 100%,
+      var(--scroll-fade-gutter, 12px) 100%;
+    mask-repeat: no-repeat;
+    animation: scroll-fade-edges linear both;
+    animation-timeline: scroll(self);
+  }
+}
+
+/* Sticky rail: sidebar that pins below the floating site nav and caps its
+   height to the viewport. The app sets --sticky-rail-top to nav height +
+   gap (see components.css); --sticky-rail-gap pads the bottom edge. Use
+   with a responsive variant when the rail only exists on wide layouts,
+   e.g. min-[960px]:sticky-rail. Deliberately no overflow: clipping here
+   would cut off child card shadows — either scroll an inner viewport
+   (resource-list) or add overflow-y-auto on the rail itself. */
+@utility sticky-rail {
+  position: sticky;
+  top: var(--sticky-rail-top, 1.5rem);
+  max-height: calc(100dvh - var(--sticky-rail-top, 1.5rem) - var(--sticky-rail-gap, 1.5rem));
+}
+
 /* Intrinsic card grid: columns derive from how many items fit, not from
    viewport breakpoints. Override the minimum via --min-item. */
 @utility auto-grid {
