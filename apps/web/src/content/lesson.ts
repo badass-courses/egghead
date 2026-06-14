@@ -15,7 +15,7 @@ import {
   publishedResourceSql,
   routeableLessonResourceSql,
 } from "./publication";
-import { lessonFreeForeverFromFields } from "./lesson-access";
+import { lessonFreeForeverFromFields, lessonHasRailsProContentSignal } from "./lesson-access";
 import { contentResourceSlugSql } from "./resource-slug";
 import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
 import { collectionEntryPath, legacyLessonPath, standaloneContentPath } from "./routes";
@@ -34,6 +34,11 @@ type ParentCourseRow = ContentResourceRow & {
 
 type VideoResourceRow = ContentResourceRow & {
   position: number;
+};
+
+type SameSlugRailsTruthRow = RowDataPacket & {
+  freeRows: number | string | null;
+  proRows: number | string | null;
 };
 
 export type LessonForPage = {
@@ -174,7 +179,65 @@ async function videoResourceForLesson(
   return rows[0] ?? null;
 }
 
+async function sameSlugRailsTruthFreeForever(
+  connection: Awaited<ReturnType<typeof createLocalMysqlConnection>>,
+  input: {
+    lessonId: string;
+    slug: string;
+  },
+): Promise<boolean | null> {
+  const [rows] = await connection.execute<SameSlugRailsTruthRow[]>(
+    `
+      SELECT
+        SUM(
+          CASE
+            WHEN (
+              JSON_TYPE(JSON_EXTRACT(sameSlug.fields, '$.isProContent')) = 'BOOLEAN'
+              AND JSON_EXTRACT(sameSlug.fields, '$.isProContent') = CAST('false' AS JSON)
+            )
+            OR (
+              JSON_TYPE(JSON_EXTRACT(sameSlug.fields, '$.is_pro_content')) = 'BOOLEAN'
+              AND JSON_EXTRACT(sameSlug.fields, '$.is_pro_content') = CAST('false' AS JSON)
+            )
+            THEN 1
+            ELSE 0
+          END
+        ) AS freeRows,
+        SUM(
+          CASE
+            WHEN (
+              JSON_TYPE(JSON_EXTRACT(sameSlug.fields, '$.isProContent')) = 'BOOLEAN'
+              AND JSON_EXTRACT(sameSlug.fields, '$.isProContent') = CAST('true' AS JSON)
+            )
+            OR (
+              JSON_TYPE(JSON_EXTRACT(sameSlug.fields, '$.is_pro_content')) = 'BOOLEAN'
+              AND JSON_EXTRACT(sameSlug.fields, '$.is_pro_content') = CAST('true' AS JSON)
+            )
+            THEN 1
+            ELSE 0
+          END
+        ) AS proRows
+      FROM egghead_ContentResource sameSlug
+      WHERE sameSlug.deletedAt IS NULL
+        ${routeableLessonResourceSql("sameSlug")}
+        AND ${lessonResourceCondition("sameSlug")}
+        AND JSON_UNQUOTE(JSON_EXTRACT(sameSlug.fields, '$.slug')) = ?
+        AND sameSlug.id != ?
+    `,
+    [input.slug, input.lessonId],
+  );
+  const row = rows[0];
+  const freeRows = Number(row?.freeRows ?? 0);
+  const proRows = Number(row?.proRows ?? 0);
+
+  if (freeRows > 0 && proRows === 0) return true;
+  if (proRows > 0 && freeRows === 0) return false;
+
+  return null;
+}
+
 function lessonFromRows(input: {
+  freeForeverOverride?: boolean | null;
   lesson: ContentResourceRow;
   parentCourse: ParentCourseRow | null;
   requestedSlug: string;
@@ -217,7 +280,7 @@ function lessonFromRows(input: {
     description: excerptField(fields),
     body: markdownField(fields),
     duration: numberField(fields, "duration") ?? numberField(videoFields, "duration"),
-    freeForever: lessonFreeForeverFromFields(fields),
+    freeForever: input.freeForeverOverride ?? lessonFreeForeverFromFields(fields),
     isProContent: booleanField(fields, "isProContent"),
     courseLinked: Boolean(parentCourseSlug),
     parentCourseId: input.parentCourse?.id ?? null,
@@ -279,9 +342,16 @@ async function getLessonByWhereClause(input: {
     if (!lesson) return null;
 
     const parentCourse = await parentCoursesForLesson(connection, lesson.id);
+    const fields = fieldsFromJson(lesson.fields);
+    const slug = stringField(fields, "slug") ?? input.requestedSlug;
+    const freeForeverOverride =
+      parentCourse && !lessonHasRailsProContentSignal(fields)
+        ? await sameSlugRailsTruthFreeForever(connection, { lessonId: lesson.id, slug })
+        : null;
     const videoResource = await videoResourceForLesson(connection, lesson.id);
 
     return lessonFromRows({
+      freeForeverOverride,
       lesson,
       parentCourse,
       requestedSlug: input.requestedSlug,

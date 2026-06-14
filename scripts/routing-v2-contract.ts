@@ -1,7 +1,13 @@
 import { COURSE_LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/course";
+import {
+  ACCESS_ENTITLEMENT_ROWS_SQL,
+  entitlementGrantsAccess,
+  normalizeRequestCountry,
+} from "../apps/web/src/access/evaluate";
 import { lessonCanonicalPathForRouteContext } from "../apps/web/src/content/lesson-route-context";
 import {
   lessonFreeForeverFromFields,
+  lessonHasRailsProContentSignal,
   lessonRequiresAccess,
 } from "../apps/web/src/content/lesson-access";
 import { LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/publication";
@@ -28,6 +34,14 @@ function assertEqual(name: string, actual: string | boolean, expected: string | 
 function assertNumberEqual(name: string, actual: number, expected: number) {
   if (actual !== expected) {
     throw new Error(`${name}: expected ${String(expected)}, got ${String(actual)}`);
+  }
+
+  return { name, pass: true as const };
+}
+
+function assertIncludes(name: string, actual: string, expected: string) {
+  if (!actual.includes(expected)) {
+    throw new Error(`${name}: expected string to include ${expected}`);
   }
 
   return { name, pass: true as const };
@@ -152,12 +166,32 @@ const checks = [
     true,
   ),
   assertEqual(
-    "rails mirror wins over inflated rehearsal freeForever on conflict",
+    "rails isProContent=false wins over older freeAccess false mirror",
     lessonFreeForeverFromFields({
       accessState: "public",
       freeAccess: false,
-      freeForever: true,
+      freeForever: false,
       isProContent: false,
+      visibility: "pro",
+    }),
+    true,
+  ),
+  assertEqual(
+    "rails pro-content signal is detectable on preserved rows",
+    lessonHasRailsProContentSignal({ access: "pro", isProContent: false }),
+    true,
+  ),
+  assertEqual(
+    "missing rails pro-content signal stays detectable as missing",
+    lessonHasRailsProContentSignal({ access: "pro", freeAccess: false }),
+    false,
+  ),
+  assertEqual(
+    "rails isProContent=true wins over inflated rehearsal freeForever",
+    lessonFreeForeverFromFields({
+      accessState: "public",
+      freeForever: true,
+      isProContent: true,
       visibility: "pro",
     }),
     false,
@@ -181,6 +215,98 @@ const checks = [
     "course lesson static params use the shared lesson budget",
     COURSE_LESSON_STATIC_PARAM_LIMIT,
     LESSON_STATIC_PARAM_LIMIT,
+  ),
+  assertIncludes(
+    "access evaluator joins org entitlements only through account-member role",
+    ACCESS_ENTITLEMENT_ROWS_SQL,
+    "$.hasAccountMemberRole",
+  ),
+  assertIncludes(
+    "access evaluator exempts subscription rows from generic expiresAt gating",
+    ACCESS_ENTITLEMENT_ROWS_SQL,
+    "entitlement.sourceType = ?",
+  ),
+  assertIncludes(
+    "access evaluator reads purchase country restriction",
+    ACCESS_ENTITLEMENT_ROWS_SQL,
+    "$.restrictedToCountry",
+  ),
+  assertEqual("request country trims whitespace", normalizeRequestCountry(" US ") ?? "", "US"),
+  assertEqual(
+    "broad subscription entitlement grants",
+    entitlementGrantsAccess(
+      {
+        entitlementType: "egghead_all_access_subscription",
+        sellableId: null,
+        sellableType: null,
+      },
+      {},
+    ),
+    true,
+  ),
+  assertEqual(
+    "legacy basic entitlement grants",
+    entitlementGrantsAccess(
+      {
+        entitlementType: "egghead_basic_legacy_access",
+        sellableId: null,
+        sellableType: null,
+      },
+      {},
+    ),
+    true,
+  ),
+  assertEqual(
+    "unrestricted matching playlist purchase grants",
+    entitlementGrantsAccess(
+      {
+        entitlementType: "egghead_playlist_access",
+        restrictedToCountry: null,
+        sellableId: "432727",
+        sellableType: "Playlist",
+      },
+      { legacyRailsPlaylistId: 432727 },
+    ),
+    true,
+  ),
+  assertEqual(
+    "country-restricted matching playlist grants in matching country",
+    entitlementGrantsAccess(
+      {
+        entitlementType: "egghead_playlist_access",
+        restrictedToCountry: "IN",
+        sellableId: "432727",
+        sellableType: "Playlist",
+      },
+      { legacyRailsPlaylistId: 432727, requestCountry: "IN" },
+    ),
+    true,
+  ),
+  assertEqual(
+    "country-restricted playlist denies when request country is unknown",
+    entitlementGrantsAccess(
+      {
+        entitlementType: "egghead_playlist_access",
+        restrictedToCountry: "IN",
+        sellableId: "432727",
+        sellableType: "Playlist",
+      },
+      { legacyRailsPlaylistId: 432727 },
+    ),
+    false,
+  ),
+  assertEqual(
+    "playlist purchase denies for a different course",
+    entitlementGrantsAccess(
+      {
+        entitlementType: "egghead_playlist_access",
+        restrictedToCountry: null,
+        sellableId: "432727",
+        sellableType: "Playlist",
+      },
+      { legacyRailsPlaylistId: 432602 },
+    ),
+    false,
   ),
 ];
 

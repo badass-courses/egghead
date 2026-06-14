@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Session } from "next-auth";
 
-import { evaluateContentAccessForUser } from "../access/evaluate";
+import { evaluateContentAccessForUser, normalizeRequestCountry } from "../access/evaluate";
 import { auth } from "../server/auth";
 
 type CurrentUserContext = {
@@ -41,6 +41,12 @@ function normalizeRole(role: unknown): UserRole {
   return "user";
 }
 
+function requestCountryFromHeaders(headers: Headers): string | null {
+  return normalizeRequestCountry(
+    headers.get("x-vercel-ip-country") ?? headers.get("cf-ipcountry") ?? headers.get("x-country"),
+  );
+}
+
 export async function getCurrentUser() {
   let session: Session | null = null;
 
@@ -58,14 +64,16 @@ export async function getCurrentUserFromRequest(
   context: CurrentUserContext = {},
 ): Promise<CurrentUserReadModel> {
   const sessionUser = await getCurrentUser();
+  const requestCountry = requestCountryFromHeaders(request.headers);
 
   if (sessionUser?.id) {
     const access = await evaluateContentAccessForUser(
       context.legacyRailsPlaylistId === undefined
-        ? { userId: sessionUser.id }
+        ? { userId: sessionUser.id, requestCountry }
         : {
             userId: sessionUser.id,
             legacyRailsPlaylistId: context.legacyRailsPlaylistId,
+            requestCountry,
           },
     );
 
