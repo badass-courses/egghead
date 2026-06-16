@@ -745,6 +745,47 @@
   margin: 0 auto;
 }
 
+/* ── Video transcript card ───────────────────────────────────── */
+
+/* A quiet bordered card: header on top, then the prose body whose own
+   border-top (see .egghead-prose) draws the divider under the header.
+   Stays collapsible (<details>) but reads as a static section — the
+   disclosure marker is hidden. */
+.egghead-transcript {
+  padding: 1.5rem 1.75rem 1.75rem;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 1rem;
+}
+
+.egghead-transcript-summary {
+  padding-bottom: 1.25rem;
+  color: var(--color-foreground);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.egghead-transcript-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Timestamps are seek buttons, styled as quiet underlined links that
+   warm to brand ink on hover. */
+.egghead-transcript button[data-timestamp] {
+  color: var(--color-muted-foreground);
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.egghead-transcript button[data-timestamp]:hover {
+  color: var(--color-foreground);
+  text-decoration-color: var(--color-yolk-deep);
+}
+
 @media (min-width: 960px) {
   .egghead-collection-lesson-layout {
     grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);

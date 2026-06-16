@@ -292,11 +292,13 @@ function lessonFromRows(input: {
     hasTranscript:
       booleanField(fields, "hasTranscript") ||
       booleanField(fields, "transcriptSourceAvailable") ||
-      Boolean(stringField(fields, "transcript")),
+      Boolean(stringField(fields, "transcript")) ||
+      Boolean(stringField(videoFields, "transcript")),
     hasSrt:
       booleanField(fields, "hasSrt") ||
       booleanField(fields, "srtSourceAvailable") ||
-      Boolean(stringField(fields, "srt")),
+      Boolean(stringField(fields, "srt")) ||
+      Boolean(stringField(videoFields, "srt")),
     state: stringField(fields, "state"),
     visibilityState: stringField(fields, "visibilityState"),
     videoHlsUrl,

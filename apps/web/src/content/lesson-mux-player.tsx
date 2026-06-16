@@ -3,6 +3,7 @@
 import MuxPlayer from "@mux/mux-player-react";
 import { useRef, type ComponentRef } from "react";
 
+import { useMuxPlayer } from "./mux-player-context";
 import { usePauseWhenHidden } from "./use-pause-when-hidden";
 
 export function LessonMuxPlayer({
@@ -16,7 +17,10 @@ export function LessonMuxPlayer({
   title: string;
   videoId: string;
 }) {
-  const playerRef = useRef<ComponentRef<typeof MuxPlayer>>(null);
+  const localPlayerRef = useRef<ComponentRef<typeof MuxPlayer>>(null);
+  // Prefer the shared ref (so the transcript can seek this player); fall
+  // back to a local ref on pages rendered without the provider.
+  const playerRef = useMuxPlayer()?.muxPlayerRef ?? localPlayerRef;
 
   usePauseWhenHidden(playerRef);
 
