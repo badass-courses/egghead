@@ -177,10 +177,8 @@ export async function LessonFactsExperience({ lesson }: { lesson: LessonForPage 
   );
 }
 
-/* The transcript lives on the lesson's associated videoResource
-   (fields.transcript), read from the DB in getLessonVideoTranscript.
-   Rendered (client) with clickable timestamps that seek the shared Mux
-   player, inside a collapsible — ai-hero's accordion equivalent. */
+/* Renders the transcript with clickable timestamps that seek the shared
+   Mux player, inside a collapsible. */
 export async function LessonTranscriptSection({ lesson }: { lesson: LessonForPage }) {
   const transcript = await getLessonVideoTranscript(lesson.id);
   if (!transcript) return null;

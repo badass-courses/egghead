@@ -6,9 +6,8 @@ import ReactMarkdown from "react-markdown";
 
 import { useMuxPlayer } from "./mux-player-context";
 
-/* Ported from ai-hero's video-transcript-renderer. Renders the stored
-   transcript markdown and turns its `[MM:SS]` / `[HH:MM:SS]` timestamps
-   into buttons that seek the shared Mux player. */
+/* Renders the stored transcript markdown and turns its `[MM:SS]` /
+   `[HH:MM:SS]` timestamps into buttons that seek the shared Mux player. */
 export function LessonTranscriptBody({ transcript }: { transcript: string }) {
   const muxPlayerRef = useMuxPlayer()?.muxPlayerRef ?? null;
 

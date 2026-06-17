@@ -9,9 +9,8 @@ type TranscriptRow = RowDataPacket & {
 
 /* Transcripts are not stored on the lesson itself — they live on the
    associated videoResource's `fields.transcript` (written by the
-   Deepgram pipeline). Mirrors ai-hero's getLessonVideoTranscript: join
-   lesson -> videoResource and read the transcript. Returns null when the
-   video has no transcript yet. */
+   Deepgram pipeline). Join lesson -> videoResource and read it; returns
+   null when the video has no transcript yet. */
 export async function getLessonVideoTranscript(lessonId: string): Promise<string | null> {
   "use cache";
   cacheLife("hours");
