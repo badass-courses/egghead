@@ -23,7 +23,7 @@ export function LessonTranscriptBody({ transcript }: { transcript: string }) {
   );
 }
 
-const TIMESTAMP = /(\d+:\d+(?::\d+)?)/;
+const TIMESTAMP = /\[(\d+:\d+(?::\d+)?)\]/g;
 
 function paragraphWithTimestampButtons({
   children,
@@ -36,17 +36,19 @@ function paragraphWithTimestampButtons({
   const updatedChildren = elements.map((child) => {
     if (typeof child !== "string") return child;
 
-    const matches = child.match(TIMESTAMP);
-    if (!matches) return child;
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
 
-    const timestamp = matches[1] ?? "";
-    const beforeText = child.split(matches[0])[0];
-    const afterText = child.split(matches[0])[1];
+    for (const match of child.matchAll(TIMESTAMP)) {
+      const timestamp = match[1] ?? "";
+      const matchIndex = match.index ?? 0;
 
-    return (
-      <span key={`${timestamp}-${child}`}>
-        {beforeText?.replace("[", "")}
+      const beforeText = child.slice(lastIndex, matchIndex);
+      if (beforeText) parts.push(beforeText);
+
+      parts.push(
         <button
+          key={`${timestamp}-${matchIndex}`}
           type="button"
           data-timestamp=""
           onClick={() => {
@@ -58,10 +60,18 @@ function paragraphWithTimestampButtons({
           }}
         >
           {timestamp}
-        </button>
-        {afterText?.replace("]", "")}
-      </span>
-    );
+        </button>,
+      );
+
+      lastIndex = matchIndex + match[0].length;
+    }
+
+    if (lastIndex === 0) return child;
+
+    const remainder = child.slice(lastIndex);
+    if (remainder) parts.push(remainder);
+
+    return <span key={`segment-${child}`}>{parts}</span>;
   });
 
   return <p>{updatedChildren}</p>;
