@@ -17,6 +17,9 @@ import { CourseCurriculum, courseDurationLabel } from "./course-lesson-list";
 import { lessonRequiresAccess } from "./lesson-access";
 import { LessonHtmlVideo } from "./lesson-html-video";
 import { LessonMuxPlayer } from "./lesson-mux-player";
+import { MuxPlayerProvider } from "./mux-player-context";
+import { getLessonVideoTranscript } from "./lesson-transcript";
+import { LessonTranscriptBody } from "./lesson-transcript-renderer";
 import type { LessonForPage } from "./lesson";
 import { MarkdownContent } from "./markdown-content";
 
@@ -77,7 +80,7 @@ function LessonFacts({
       <div>
         <dt>Transcript</dt>
         <dd data-transcript-state={transcriptState}>
-          {transcriptState === "retained" ? "Retained from source evidence" : "Needs source"}
+          {transcriptState === "retained" ? "Available" : "Needs source"}
         </dd>
       </div>
     </dl>
@@ -174,6 +177,22 @@ export async function LessonFactsExperience({ lesson }: { lesson: LessonForPage 
   );
 }
 
+/* Renders the transcript with clickable timestamps that seek the shared
+   Mux player, inside a collapsible. */
+export async function LessonTranscriptSection({ lesson }: { lesson: LessonForPage }) {
+  const transcript = await getLessonVideoTranscript(lesson.id);
+  if (!transcript) return null;
+
+  return (
+    <details className="egghead-transcript" aria-label="Transcript" open>
+      <summary className="egghead-transcript-summary">Video Transcript</summary>
+      <div className="egghead-prose egghead-markdown">
+        <LessonTranscriptBody transcript={transcript} />
+      </div>
+    </details>
+  );
+}
+
 export function LessonAccessExperience({ lesson }: { lesson: LessonForPage }) {
   return (
     <>
@@ -235,11 +254,16 @@ function LessonMain({
   lesson: LessonForPage;
 }) {
   return (
-    <Stack gap="loose">
-      <SectionHeader description={lesson.description} eyebrow={eyebrow} title={lesson.title} />
-      <Suspense fallback={<LessonAccessFallback lesson={lesson} />}>{accessComponent}</Suspense>
-      <MarkdownContent label="Lesson body">{lesson.body}</MarkdownContent>
-    </Stack>
+    <MuxPlayerProvider>
+      <Stack gap="loose">
+        <SectionHeader description={lesson.description} eyebrow={eyebrow} title={lesson.title} />
+        <Suspense fallback={<LessonAccessFallback lesson={lesson} />}>{accessComponent}</Suspense>
+        <MarkdownContent label="Lesson body">{lesson.body}</MarkdownContent>
+        <Suspense>
+          <LessonTranscriptSection lesson={lesson} />
+        </Suspense>
+      </Stack>
+    </MuxPlayerProvider>
   );
 }
 
@@ -274,33 +298,38 @@ export async function CourseLessonPageStatic({
 
   return (
     <Container as="main" size="wide" className="pt-4">
-      <Stack gap="loose">
-        <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-0">
-          <div className="egghead-lesson-player-cell min-w-0">
-            <Suspense fallback={<LessonVideoPlaceholder lesson={lesson} />}>
-              {playerComponent}
-            </Suspense>
+      <MuxPlayerProvider>
+        <Stack gap="loose">
+          <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-0">
+            <div className="egghead-lesson-player-cell min-w-0">
+              <Suspense fallback={<LessonVideoPlaceholder lesson={lesson} />}>
+                {playerComponent}
+              </Suspense>
+            </div>
+            <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
           </div>
-          <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
-        </div>
-        <SectionHeader
-          description={lesson.description}
-          eyebrow="Course lesson"
-          title={lesson.title}
-        />
-        <Suspense
-          fallback={
-            <LessonFacts
-              accessReason="pending"
-              accessRequired={lessonRequiresAccess(lesson)}
-              lesson={lesson}
-            />
-          }
-        >
-          {factsComponent}
-        </Suspense>
-        <MarkdownContent label="Lesson body">{lesson.body}</MarkdownContent>
-      </Stack>
+          <SectionHeader
+            description={lesson.description}
+            eyebrow="Course lesson"
+            title={lesson.title}
+          />
+          <Suspense
+            fallback={
+              <LessonFacts
+                accessReason="pending"
+                accessRequired={lessonRequiresAccess(lesson)}
+                lesson={lesson}
+              />
+            }
+          >
+            {factsComponent}
+          </Suspense>
+          <MarkdownContent label="Lesson body">{lesson.body}</MarkdownContent>
+          <Suspense>
+            <LessonTranscriptSection lesson={lesson} />
+          </Suspense>
+        </Stack>
+      </MuxPlayerProvider>
     </Container>
   );
 }
