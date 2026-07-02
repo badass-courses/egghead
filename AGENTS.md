@@ -35,6 +35,12 @@ Design system:
 - Start black/white only, with light/dark tokens, strong typography, and structural layout primitives.
 - Prefer minimal CourseBuilder-compatible primitives over a broad component library.
 
+Builder smoke seam:
+
+- `pnpm builder:smoke` proves, offline, that builder DB guards accept local Docker for local, require approved PlanetScale for beta, and block production runtime.
+- Beta probe needs `EGGHEAD_BETA_DB_APPROVED=true`, `BETA_DATABASE_URL` leased with `secrets lease BETA_DATABASE_URL`, and optional `--require-beta`.
+- The probe is read-only, performs no writes, prints no leased secrets, and keeps production runtime blocked.
+
 Reference plan:
 
 - `/Users/joel/Code/skillrecordings/migrate-egghead/.brain/resources/decisions/adr-0004-standalone-egghead-coursebuilder-app.svx`
