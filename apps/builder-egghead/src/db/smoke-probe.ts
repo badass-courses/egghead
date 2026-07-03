@@ -66,8 +66,8 @@ export function mysqlConnectionOptionsFromUrl(rawUrl: string) {
 	return {
 		host,
 		port,
-		user: decodeURIComponent(url.username),
-		password: decodeURIComponent(url.password),
+user: safeDecodeURIComponent(url.username),
+		password: safeDecodeURIComponent(url.password),
 		database,
 		...(needsSsl ? { ssl: { rejectUnauthorized: true } } : {}),
 	};
