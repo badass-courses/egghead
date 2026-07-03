@@ -17,7 +17,8 @@
     "search:typesense-index": "tsx --tsconfig apps/web/tsconfig.json scripts/typesense-index.ts",
     "sitemap:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/sitemap-contract.ts",
     "beta:runtime-guard": "tsx --tsconfig apps/web/tsconfig.json scripts/beta-runtime-guard.ts",
-    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm search:typesense-contract && pnpm sitemap:contract && pnpm beta:runtime-guard",
+    "builder:smoke": "tsx --tsconfig apps/builder-egghead/tsconfig.json scripts/builder-smoke.ts",
+    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm search:typesense-contract && pnpm sitemap:contract && pnpm beta:runtime-guard && pnpm builder:smoke",
     "hooks:install": "lefthook install",
     "hooks:pre-commit": "lefthook run pre-commit --all-files"
   },
