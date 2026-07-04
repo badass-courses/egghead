@@ -16,6 +16,7 @@ import {
   routeableLessonResourceSql,
 } from "./publication";
 import { lessonFreeForeverFromFields, lessonHasRailsProContentSignal } from "./lesson-access";
+import { canonicalLessonOrderSql } from "./canonical-order";
 import { contentResourceSlugSql } from "./resource-slug";
 import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
 import { collectionEntryPath, legacyLessonPath, standaloneContentPath } from "./routes";
@@ -328,14 +329,7 @@ async function getLessonByWhereClause(input: {
           AND ${lessonResourceCondition("lesson")}
           AND ${input.whereClause}
         ORDER BY
-          CASE LOWER(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(lesson.fields, '$.state')), 'published'))
-            WHEN 'published' THEN 0
-            WHEN 'retired' THEN 1
-            ELSE 2
-          END,
-          lesson.updatedAt DESC,
-          lesson.createdAt DESC,
-          lesson.id ASC
+          ${canonicalLessonOrderSql("lesson")}
         LIMIT 1
       `,
       input.params,
@@ -454,12 +448,12 @@ export async function getStandaloneLessonStaticParams() {
 
   try {
     const lessonSlugSql = await contentResourceSlugSql(connection, "lesson");
+    const sameSlugLessonSlugSql = await contentResourceSlugSql(connection, "sameSlugLesson");
     const [rows] = await connection.query<LessonStaticParamRow[]>(
       `
         SELECT lesson_slug.slug
         FROM (
           SELECT
-            lesson.id,
             ${lessonSlugSql} AS slug,
             lesson.createdAt
           FROM egghead_ContentResource lesson
@@ -471,17 +465,24 @@ export async function getStandaloneLessonStaticParams() {
         ) lesson_slug
         WHERE NOT EXISTS (
           SELECT 1
-          FROM egghead_ContentResourceResource directLink
+          FROM egghead_ContentResource sameSlugLesson
+          JOIN egghead_ContentResourceResource directLink
+            ON directLink.resourceId = sameSlugLesson.id
           JOIN egghead_ContentResource parent
             ON parent.id = directLink.resourceOfId
            AND parent.deletedAt IS NULL
            ${publishedResourceSql("parent")}
-          WHERE directLink.resourceId = lesson_slug.id
+          WHERE sameSlugLesson.deletedAt IS NULL
+            ${routeableLessonResourceSql("sameSlugLesson")}
+            AND ${lessonResourceCondition("sameSlugLesson")}
+            AND ${sameSlugLessonSlugSql} = lesson_slug.slug
             AND ${courseResourceCondition("parent")}
         )
         AND NOT EXISTS (
           SELECT 1
-          FROM egghead_ContentResourceResource lessonLink
+          FROM egghead_ContentResource sameSlugLesson
+          JOIN egghead_ContentResourceResource lessonLink
+            ON lessonLink.resourceId = sameSlugLesson.id
           JOIN egghead_ContentResource section
             ON section.id = lessonLink.resourceOfId
            AND section.deletedAt IS NULL
@@ -492,7 +493,10 @@ export async function getStandaloneLessonStaticParams() {
             ON parent.id = sectionLink.resourceOfId
            AND parent.deletedAt IS NULL
            ${publishedResourceSql("parent")}
-          WHERE lessonLink.resourceId = lesson_slug.id
+          WHERE sameSlugLesson.deletedAt IS NULL
+            ${routeableLessonResourceSql("sameSlugLesson")}
+            AND ${lessonResourceCondition("sameSlugLesson")}
+            AND ${sameSlugLessonSlugSql} = lesson_slug.slug
             AND section.type = 'section'
             AND ${courseResourceCondition("parent")}
         )
