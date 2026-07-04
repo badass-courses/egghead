@@ -454,7 +454,6 @@ export async function getStandaloneLessonStaticParams() {
         SELECT lesson_slug.slug
         FROM (
           SELECT
-            lesson.id,
             ${lessonSlugSql} AS slug,
             lesson.createdAt
           FROM egghead_ContentResource lesson
