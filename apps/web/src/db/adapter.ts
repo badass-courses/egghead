@@ -1,5 +1,4 @@
 import { DrizzleAdapter } from "@coursebuilder/adapter-drizzle";
-import type { CourseBuilderAdapter } from "@coursebuilder/core/adapters";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 
@@ -10,7 +9,9 @@ import {
 } from "./local-docker";
 import { mysqlTable } from "./mysql-table";
 
-let adapter: CourseBuilderAdapter | null = null;
+type CourseBuilderAuthAdapter = ReturnType<typeof DrizzleAdapter>;
+
+let adapter: CourseBuilderAuthAdapter | null = null;
 
 export function getCourseBuilderAdapter() {
   if (adapter) {

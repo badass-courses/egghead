@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "@auth/core": "0.37.2",
-    "@coursebuilder/adapter-drizzle": "1.0.7",
-    "@coursebuilder/core": "1.2.1",
-    "@coursebuilder/next": "0.0.31",
+    "@coursebuilder/adapter-drizzle": "2.1.1",
+    "@coursebuilder/core": "2.0.2",
+    "@coursebuilder/next": "0.0.35",
     "@egghead/ui": "workspace:*",
     "@mux/mux-player-react": "3.13.0",
     "drizzle-orm": "0.36.0",
