@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
-import { searchContent } from "../../../content/search";
+import { searchContent, type SearchResult } from "../../../content/search";
 import {
   contentTypeFromSearchParams,
   searchTermFromRoute,
@@ -17,21 +17,22 @@ type SearchPageProps = {
   searchParams: Promise<SearchRouteSearchParams>;
 };
 
-async function searchTermFromProps(props: SearchPageProps) {
-  const [params, searchParams] = await Promise.all([props.params, props.searchParams]);
-  return searchTermFromRoute({ params, searchParams });
-}
+type SearchRouteState = {
+  contentType: string | null;
+  term: string;
+};
 
-async function contentTypeFromProps(props: SearchPageProps) {
-  const searchParams = await props.searchParams;
-  return contentTypeFromSearchParams(searchParams);
+async function searchRouteStateFromProps(props: SearchPageProps): Promise<SearchRouteState> {
+  const [params, searchParams] = await Promise.all([props.params, props.searchParams]);
+
+  return {
+    contentType: contentTypeFromSearchParams(searchParams),
+    term: searchTermFromRoute({ params, searchParams }),
+  };
 }
 
 export async function generateMetadata(props: SearchPageProps): Promise<Metadata> {
-  const [term, contentType] = await Promise.all([
-    searchTermFromProps(props),
-    contentTypeFromProps(props),
-  ]);
+  const { contentType, term } = await searchRouteStateFromProps(props);
   const title = term
     ? `${term} | egghead`
     : contentType
@@ -47,13 +48,13 @@ export async function generateMetadata(props: SearchPageProps): Promise<Metadata
   };
 }
 
-async function SearchResults(props: SearchPageProps) {
-  const [term, contentType] = await Promise.all([
-    searchTermFromProps(props),
-    contentTypeFromProps(props),
-  ]);
-  const results = await searchContent(term, contentType);
-
+function SearchResults({
+  contentType,
+  results,
+  term,
+}: SearchRouteState & {
+  results: SearchResult[];
+}) {
   return (
     <Stack gap="tight">
       <p className="font-hand text-2xl text-muted-foreground">
@@ -127,13 +128,25 @@ function SearchForm({
   );
 }
 
-async function RoutedSearchForm(props: SearchPageProps) {
-  const [term, contentType] = await Promise.all([
-    searchTermFromProps(props),
-    contentTypeFromProps(props),
-  ]);
+function SearchContentFallback() {
+  return (
+    <>
+      <SearchForm />
+      <SearchFallback />
+    </>
+  );
+}
 
-  return <SearchForm contentType={contentType || undefined} term={term || undefined} />;
+async function RoutedSearchContent(props: SearchPageProps) {
+  const { contentType, term } = await searchRouteStateFromProps(props);
+  const results = await searchContent(term, contentType);
+
+  return (
+    <>
+      <SearchForm contentType={contentType || undefined} term={term || undefined} />
+      <SearchResults contentType={contentType} results={results} term={term} />
+    </>
+  );
 }
 
 export default function SearchPage(props: SearchPageProps) {
@@ -145,13 +158,10 @@ export default function SearchPage(props: SearchPageProps) {
           eyebrow="Browse"
           title="Search"
         />
-        <Suspense fallback={<SearchForm />}>
-          <RoutedSearchForm {...props} />
+        <Suspense fallback={<SearchContentFallback />}>
+          <RoutedSearchContent {...props} />
         </Suspense>
       </Stack>
-      <Suspense fallback={<SearchFallback />}>
-        <SearchResults {...props} />
-      </Suspense>
     </Container>
   );
 }
