@@ -4,13 +4,17 @@ import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
+import { type SearchInstructor, topSearchInstructors } from "../../../content/instructors";
 import { searchContent } from "../../../content/search";
 import {
   contentTypeFromSearchParams,
+  instructorFromSearchParams,
   searchTermFromRoute,
   type SearchRouteParams,
   type SearchRouteSearchParams,
 } from "../../../content/search-route";
+import { SearchInstructorFilter } from "./search-instructor-filter";
+import { SearchTypeFilter } from "./search-type-filter";
 
 type SearchPageProps = {
   params: Promise<SearchRouteParams>;
@@ -25,6 +29,11 @@ async function searchTermFromProps(props: SearchPageProps) {
 async function contentTypeFromProps(props: SearchPageProps) {
   const searchParams = await props.searchParams;
   return contentTypeFromSearchParams(searchParams);
+}
+
+async function instructorFromProps(props: SearchPageProps) {
+  const searchParams = await props.searchParams;
+  return instructorFromSearchParams(searchParams);
 }
 
 export async function generateMetadata(props: SearchPageProps): Promise<Metadata> {
@@ -48,11 +57,12 @@ export async function generateMetadata(props: SearchPageProps): Promise<Metadata
 }
 
 async function SearchResults(props: SearchPageProps) {
-  const [term, contentType] = await Promise.all([
+  const [term, contentType, instructor] = await Promise.all([
     searchTermFromProps(props),
     contentTypeFromProps(props),
+    instructorFromProps(props),
   ]);
-  const results = await searchContent(term, contentType);
+  const results = await searchContent(term, contentType, instructor);
 
   return (
     <Stack gap="tight">
@@ -100,40 +110,65 @@ function SearchFallback() {
   );
 }
 
+const NO_INSTRUCTORS: SearchInstructor[] = [];
+
 function SearchForm({
   contentType,
+  instructor,
+  instructors = NO_INSTRUCTORS,
   term,
 }: {
   contentType?: string | undefined;
+  instructor?: string | undefined;
+  instructors?: SearchInstructor[];
   term?: string | undefined;
 }) {
   return (
-    <Form action="/q" className="egghead-home-search w-full max-w-2xl">
-      <input
-        aria-label="Search egghead"
-        // A dedicated search page's input is the page's purpose — focus it.
-        // oxlint-disable-next-line jsx-a11y/no-autofocus
-        autoFocus
-        defaultValue={term}
-        // Remount when the routed term changes so the field tracks the URL.
-        key={term ?? ""}
-        name="q"
-        placeholder="Search courses, lessons, articles"
-        type="search"
+    <div className="egghead-search-form w-full max-w-4xl">
+      <Form action="/q" className="egghead-home-search">
+        <input
+          aria-label="Search egghead"
+          // A dedicated search page's input is the page's purpose — focus it.
+          // oxlint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus
+          defaultValue={term}
+          // Remount when the routed term changes so the field tracks the URL.
+          key={term ?? ""}
+          name="q"
+          placeholder="Search courses, lessons, articles"
+          type="search"
+        />
+        {contentType ? <input name="type" type="hidden" value={contentType} /> : null}
+        {instructor ? <input name="instructor" type="hidden" value={instructor} /> : null}
+        <button type="submit">Search</button>
+      </Form>
+      <SearchTypeFilter contentType={contentType} instructor={instructor} term={term} />
+      <SearchInstructorFilter
+        contentType={contentType}
+        defaultInstructors={instructors}
+        instructor={instructor}
+        term={term}
       />
-      {contentType ? <input name="type" type="hidden" value={contentType} /> : null}
-      <button type="submit">Search</button>
-    </Form>
+    </div>
   );
 }
 
 async function RoutedSearchForm(props: SearchPageProps) {
-  const [term, contentType] = await Promise.all([
+  const [term, contentType, instructor, instructors] = await Promise.all([
     searchTermFromProps(props),
     contentTypeFromProps(props),
+    instructorFromProps(props),
+    topSearchInstructors(),
   ]);
 
-  return <SearchForm contentType={contentType || undefined} term={term || undefined} />;
+  return (
+    <SearchForm
+      contentType={contentType || undefined}
+      instructor={instructor || undefined}
+      instructors={instructors}
+      term={term || undefined}
+    />
+  );
 }
 
 export default function SearchPage(props: SearchPageProps) {
