@@ -36,7 +36,10 @@ function comparableName(value: string) {
 }
 
 function matchKey(value: string) {
-  return comparableName(value).replace(/[^a-z0-9]/g, "");
+  const comparable = comparableName(value);
+  // Names written entirely in non-Latin scripts strip to nothing — fall back
+  // to the comparable form so they keep distinct keys instead of merging.
+  return comparable.replace(/[^a-z0-9]/g, "") || comparable.trim();
 }
 
 async function contributorRows(): Promise<ContributorRow[]> {

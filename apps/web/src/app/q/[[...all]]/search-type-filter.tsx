@@ -62,6 +62,7 @@ export function SearchTypeFilter({
   const router = useRouter();
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -72,7 +73,12 @@ export function SearchTypeFilter({
       setOpen(false);
     }
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        setOpen(false);
+        // Closing unmounts any focused option — put keyboard users back on
+        // the trigger instead of dropping focus to <body>.
+        triggerRef.current?.focus();
+      }
     }
 
     document.addEventListener("pointerdown", closeOnOutsidePress);
@@ -95,11 +101,13 @@ export function SearchTypeFilter({
       }),
     );
     setOpen(false);
+    triggerRef.current?.focus();
   }
 
   return (
     <div className="egghead-search-filter" ref={rootRef}>
       <button
+        ref={triggerRef}
         aria-controls={open ? listboxId : undefined}
         aria-expanded={open}
         aria-haspopup="listbox"

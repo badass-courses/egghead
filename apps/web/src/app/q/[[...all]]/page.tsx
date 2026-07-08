@@ -158,7 +158,9 @@ async function RoutedSearchForm(props: SearchPageProps) {
     searchTermFromProps(props),
     contentTypeFromProps(props),
     instructorFromProps(props),
-    topSearchInstructors(),
+    // The instructor list is a nicety — never let a database outage take
+    // down the whole search page.
+    topSearchInstructors().catch(() => []),
   ]);
 
   return (

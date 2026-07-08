@@ -45,15 +45,24 @@ const DOUBLE_ENCODED_PATTERN = /[\u00C2-\u00F4][\u0080-\u00BF]/;
 function cp1252CharsToBytes(value: string) {
   let bytes = "";
   for (const char of value) {
-    const byte = CP1252_BYTE_BY_CODE_POINT.get(char.codePointAt(0) ?? 0);
-    bytes += byte === undefined ? char : String.fromCharCode(byte);
+    const codePoint = char.codePointAt(0) ?? 0;
+    const byte = CP1252_BYTE_BY_CODE_POINT.get(codePoint);
+    if (byte !== undefined) {
+      bytes += String.fromCharCode(byte);
+    } else if (codePoint > 0xff) {
+      // A genuine non-Latin-1 character means the string is not pure
+      // mojibake — reinterpreting it as latin1 bytes would corrupt it.
+      return null;
+    } else {
+      bytes += char;
+    }
   }
   return bytes;
 }
 
 export function repairDoubleEncodedUtf8(value: string) {
   const asBytes = cp1252CharsToBytes(value);
-  if (!DOUBLE_ENCODED_PATTERN.test(asBytes)) return value;
+  if (asBytes === null || !DOUBLE_ENCODED_PATTERN.test(asBytes)) return value;
   const decoded = Buffer.from(asBytes, "latin1").toString("utf8");
   return decoded.includes("\uFFFD") ? value : decoded;
 }
