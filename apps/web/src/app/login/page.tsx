@@ -8,27 +8,7 @@ import { SectionHeader } from "@egghead/ui/structure";
 import { isGithubAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUserFromRequest } from "../../coursebuilder/current-user";
 import { getEggheadRuntime } from "../../db/local-docker";
-import { signIn } from "../../server/auth";
-
-async function CurrentLoginState() {
-  const requestHeaders = await headers();
-  const currentUser = await getCurrentUserFromRequest(
-    new Request("http://egghead.local/login", { headers: requestHeaders }),
-  );
-
-  if (!currentUser.user) return null;
-
-  return (
-    <div className="egghead-login-state">
-      <p className="eyebrow">Signed in</p>
-      <p>
-        {currentUser.user.access.granted
-          ? "Membership access active"
-          : "No active membership access"}
-      </p>
-    </div>
-  );
-}
+import { signIn, signOut } from "../../server/auth";
 
 async function signInWithGithub() {
   "use server";
@@ -36,23 +16,47 @@ async function signInWithGithub() {
   await signIn("github", { redirectTo: "/" });
 }
 
-export default function LoginPage() {
-  const runtime = getEggheadRuntime();
-  const githubAuthConfigured = isGithubAuthConfigured();
+async function signOutOfEgghead() {
+  "use server";
 
-  if (runtime === "production") notFound();
+  await signOut({ redirectTo: "/" });
+}
+
+async function AccountState({ githubAuthConfigured }: { githubAuthConfigured: boolean }) {
+  const requestHeaders = await headers();
+  const currentUser = await getCurrentUserFromRequest(
+    new Request("http://egghead.local/login", { headers: requestHeaders }),
+  );
+
+  if (currentUser.user) {
+    return (
+      <>
+        <SectionHeader
+          description={
+            currentUser.user.access.granted
+              ? "Your membership access is active."
+              : "You're signed in, but this account has no active membership access."
+          }
+          eyebrow="Account"
+          title="You're signed in"
+        />
+
+        <form action={signOutOfEgghead} className="grid max-w-xs gap-3">
+          <Button type="submit" variant="ghost">
+            Sign out
+          </Button>
+        </form>
+      </>
+    );
+  }
 
   return (
-    <Container as="main" size="narrow">
+    <>
       <SectionHeader
         description="Use your GitHub account to continue."
         eyebrow="Account"
         title="Sign in to egghead"
       />
-
-      <Suspense fallback={null}>
-        <CurrentLoginState />
-      </Suspense>
 
       {githubAuthConfigured ? (
         <form action={signInWithGithub} className="grid max-w-xs gap-3">
@@ -65,6 +69,29 @@ export default function LoginPage() {
           GitHub sign-in is not configured for this environment.
         </p>
       )}
+    </>
+  );
+}
+
+export default function LoginPage() {
+  const runtime = getEggheadRuntime();
+  const githubAuthConfigured = isGithubAuthConfigured();
+
+  if (runtime === "production") notFound();
+
+  return (
+    <Container as="main" size="narrow">
+      <Suspense
+        fallback={
+          <SectionHeader
+            description="Checking your current session."
+            eyebrow="Account"
+            title="Loading your account…"
+          />
+        }
+      >
+        <AccountState githubAuthConfigured={githubAuthConfigured} />
+      </Suspense>
     </Container>
   );
 }

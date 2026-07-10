@@ -6,7 +6,8 @@ import "@egghead/ui/globals.css";
 import "./components.css";
 
 import { SiteFooter } from "./site-footer";
-import { SiteNav, SiteNavView } from "./site-nav";
+import { SiteNavView } from "./site-nav";
+import { SiteNavWithAccount } from "./site-nav-with-account";
 
 const nunito = Nunito({
   subsets: ["latin"],
@@ -36,8 +37,8 @@ export default function RootLayout({
         <link href="https://stream.mux.com" rel="preconnect" />
       </head>
       <body>
-        <Suspense fallback={<SiteNavView pathname={null} />}>
-          <SiteNav />
+        <Suspense fallback={<SiteNavView accountState="unknown" pathname={null} />}>
+          <SiteNavWithAccount />
         </Suspense>
         {children}
         <SiteFooter />
