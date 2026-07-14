@@ -46,6 +46,14 @@ export type BuilderSmokeProbeResult = {
 	contentResourceCount: number;
 };
 
+function safeDecodeURIComponent(value: string) {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
+}
+
 function parseDatabaseUrl(rawUrl: string) {
 	const url = new URL(rawUrl);
 	const host = url.hostname;
@@ -66,7 +74,7 @@ export function mysqlConnectionOptionsFromUrl(rawUrl: string) {
 	return {
 		host,
 		port,
-user: safeDecodeURIComponent(url.username),
+		user: safeDecodeURIComponent(url.username),
 		password: safeDecodeURIComponent(url.password),
 		database,
 		...(needsSsl ? { ssl: { rejectUnauthorized: true } } : {}),

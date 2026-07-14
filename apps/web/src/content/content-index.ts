@@ -82,14 +82,6 @@ const CONTENT_INDEX_CONFIG = {
     itemLabel: "Course",
     limit: 96,
   },
-  guide: {
-    title: "Guides",
-    eyebrow: "Guides",
-    description: "Practical guides and project-based learning paths.",
-    canonicalPath: "/guides",
-    itemLabel: "Guide",
-    limit: 96,
-  },
   lesson: {
     title: "Lessons",
     eyebrow: "Lessons",
@@ -106,14 +98,6 @@ const CONTENT_INDEX_CONFIG = {
     itemLabel: "Podcast",
     limit: 96,
   },
-  project: {
-    title: "Projects",
-    eyebrow: "Projects",
-    description: "Project pages and retained hands-on learning material.",
-    canonicalPath: "/projects",
-    itemLabel: "Project",
-    limit: 96,
-  },
   "success-story": {
     title: "Success Stories",
     eyebrow: "Success stories",
@@ -128,14 +112,6 @@ const CONTENT_INDEX_CONFIG = {
     description: "Conference talks and presentations from the egghead archive.",
     canonicalPath: "/talks",
     itemLabel: "Talk",
-    limit: 96,
-  },
-  tip: {
-    title: "Tips",
-    eyebrow: "Tips",
-    description: "Short, focused development tips from egghead.",
-    canonicalPath: "/tips",
-    itemLabel: "Tip",
     limit: 96,
   },
 } satisfies Record<ContentIndexFamily, ContentIndexConfig>;

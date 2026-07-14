@@ -53,6 +53,24 @@ const checks = [
   assertIncludes("sitemap includes blog index", SITEMAP_STATIC_PATHS, "/blog"),
   assertIncludes("sitemap includes podcasts index", SITEMAP_STATIC_PATHS, "/podcasts"),
   assertIncludes("sitemap includes talks index", SITEMAP_STATIC_PATHS, "/talks"),
+  assertNotIncludes("sitemap excludes retired guides index", staticPaths, "/guides"),
+  assertNotIncludes("sitemap excludes retired projects index", staticPaths, "/projects"),
+  assertNotIncludes("sitemap excludes migrated tips index", staticPaths, "/tips"),
+  assertNotIncludes(
+    "sitemap excludes retired guide detail prefix",
+    SITEMAP_EXCLUDED_LEGACY_PREFIXES,
+    "/guides/",
+  ),
+  assertNotIncludes(
+    "sitemap excludes retired project detail prefix",
+    SITEMAP_EXCLUDED_LEGACY_PREFIXES,
+    "/projects/",
+  ),
+  assertNotIncludes(
+    "sitemap excludes migrated tip detail prefix",
+    SITEMAP_EXCLUDED_LEGACY_PREFIXES,
+    "/tips/",
+  ),
   assertIncludes(
     "sitemap records legacy course prefix as excluded",
     SITEMAP_EXCLUDED_LEGACY_PREFIXES,

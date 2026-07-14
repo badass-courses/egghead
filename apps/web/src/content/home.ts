@@ -13,12 +13,9 @@ const PUBLIC_CONTENT_FAMILIES = [
   "article",
   "campaign",
   "case-study",
-  "guide",
   "podcast",
-  "project",
   "success-story",
   "talk",
-  "tip",
 ] satisfies PublicContentFamily[];
 
 type HomeResourceRow = RowDataPacket & {
