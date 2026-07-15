@@ -41,7 +41,7 @@ export async function generateMetadata(props: SearchPageProps): Promise<Metadata
 
   return {
     title,
-    description: "Find egghead courses, lessons, articles, talks, podcasts, and tips.",
+    description: "Find egghead courses, lessons, articles, talks, and podcasts.",
     alternates: {
       canonical: term ? `https://egghead.io/q/${encodeURIComponent(term)}` : "https://egghead.io/q",
     },
@@ -154,7 +154,7 @@ export default function SearchPage(props: SearchPageProps) {
     <Container as="main" size="wide">
       <Stack gap="normal">
         <SectionHeader
-          description="Find courses, lessons, articles, talks, podcasts, and tips."
+          description="Find courses, lessons, articles, talks, and podcasts."
           eyebrow="Browse"
           title="Search"
         />

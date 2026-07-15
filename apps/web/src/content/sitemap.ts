@@ -23,11 +23,8 @@ export const SITEMAP_STATIC_PATHS = [
   "/blog",
   "/podcasts",
   "/talks",
-  "/tips",
   "/case-studies",
   "/success-stories",
-  "/guides",
-  "/projects",
   "/campaigns",
 ] as const;
 
@@ -37,11 +34,8 @@ export const SITEMAP_EXCLUDED_LEGACY_PREFIXES = [
   "/blog/",
   "/podcasts/",
   "/talks/",
-  "/tips/",
   "/case-studies/",
   "/success-stories/",
-  "/guides/",
-  "/projects/",
   "/campaigns/",
 ] as const;
 

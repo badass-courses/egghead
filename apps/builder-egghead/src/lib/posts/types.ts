@@ -25,4 +25,4 @@ export type PostUpdate = z.infer<typeof PostUpdateSchema>
 export type MinimalPost = z.infer<typeof MinimalPostSchema>
 
 // Constants
-export const POST_TYPES_WITH_VIDEO = ['lesson', 'podcast', 'tip']
+export const POST_TYPES_WITH_VIDEO = ['lesson', 'podcast']

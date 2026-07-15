@@ -41,14 +41,11 @@ export const SEARCH_CONTENT_TYPE_VALUES = [
   "campaign",
   "case-study",
   "course",
-  "guide",
   "lesson",
   "podcast",
   "post",
-  "project",
   "success-story",
   "talk",
-  "tip",
 ] as const satisfies SearchContentType[];
 
 function normalizedSearchContentType(typeFilter?: string | null) {
@@ -150,9 +147,9 @@ async function searchSqlContent(term: string, typeFilter?: string | null) {
 
 function typesenseFilter(typeFilter?: string | null) {
   const normalizedType = normalizedSearchContentType(typeFilter);
-  if (!normalizedType) return undefined;
   if (normalizedType === "invalid") return "type:=__invalid__";
-  return `type:=${normalizedType}`;
+  if (normalizedType) return `type:=${normalizedType}`;
+  return `type:=[${SEARCH_CONTENT_TYPE_VALUES.join(", ")}]`;
 }
 
 async function searchTypesenseContent(term: string, typeFilter?: string | null) {

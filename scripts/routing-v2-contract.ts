@@ -13,13 +13,13 @@ import {
 import { LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/publication";
 import {
   canonicalPodcastPath,
-  canonicalPublicContentPath,
   collectionEntryPath,
   collectionPath,
   legacyCoursePath,
   legacyLessonEmbedPath,
   legacyLessonPath,
   legacyPublicContentPath,
+  STANDALONE_PUBLIC_CONTENT_FAMILIES,
   standaloneContentPath,
 } from "../apps/web/src/content/routes";
 
@@ -47,6 +47,14 @@ function assertIncludes(name: string, actual: string, expected: string) {
   return { name, pass: true as const };
 }
 
+function assertNotIncludes(name: string, values: readonly string[], blocked: string) {
+  if (values.includes(blocked)) {
+    throw new Error(`${name}: did not expect ${blocked} in ${JSON.stringify(values)}`);
+  }
+
+  return { name, pass: true as const };
+}
+
 const checks = [
   assertEqual(
     "course canonical path is root collection slug",
@@ -63,10 +71,20 @@ const checks = [
     standaloneContentPath("jq-read-json"),
     "/jq-read-json",
   ),
-  assertEqual(
-    "tip canonical path is root slug",
-    canonicalPublicContentPath("tip", "css-grid-tip"),
-    "/css-grid-tip",
+  assertNotIncludes(
+    "standalone content families exclude retired guides",
+    STANDALONE_PUBLIC_CONTENT_FAMILIES,
+    "guide",
+  ),
+  assertNotIncludes(
+    "standalone content families exclude retired projects",
+    STANDALONE_PUBLIC_CONTENT_FAMILIES,
+    "project",
+  ),
+  assertNotIncludes(
+    "standalone content families exclude migrated tips",
+    STANDALONE_PUBLIC_CONTENT_FAMILIES,
+    "tip",
   ),
   assertEqual(
     "podcast show canonical path is root show slug",

@@ -13,10 +13,8 @@ import { getHomeContent, type HomeContentItem, type HomeStats } from "../content
 const MONOGRAM: Record<string, string> = {
   course: "bg-yolk-grad border-yolk-shadow/40 text-yolk-foreground shadow-btn",
   article: "bg-rust-grad border-rust-deep text-cream",
-  guide: "bg-sky-grad border-[#86b8c9] text-yolk-foreground",
   podcast: "bg-navy-grad border-black/40 text-cream",
   talk: "bg-navy-grad border-black/40 text-cream",
-  tip: "bg-sage border-[#85a674] text-yolk-foreground",
 };
 
 const DEFAULT_MONOGRAM = "bg-well border-border-strong text-muted-foreground shadow-well";
@@ -287,7 +285,6 @@ function BrowseLinks() {
       <Link href="/courses">Courses</Link>
       <Link href="/lessons">Lessons</Link>
       <Link href="/blog">Articles</Link>
-      <Link href="/tips">Tips</Link>
       <Link href="/podcasts">Podcasts</Link>
       <Link href="/talks">Talks</Link>
     </nav>

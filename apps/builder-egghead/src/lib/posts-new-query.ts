@@ -30,7 +30,6 @@ const NewPostInputSchema = z.object({
 	postType: z.enum([
 		'lesson',
 		'podcast',
-		'tip',
 		'course',
 		'playlist',
 		'article',
@@ -42,7 +41,7 @@ const NewPostInputSchema = z.object({
 
 export type NewPostInput = z.infer<typeof NewPostInputSchema>
 
-const TYPES_WITH_LESSONS = ['lesson', 'podcast', 'tip']
+const TYPES_WITH_LESSONS = ['lesson', 'podcast']
 const TYPES_WITH_PLAYLISTS = ['course', 'playlist']
 
 export async function writeNewPostToDatabase(
