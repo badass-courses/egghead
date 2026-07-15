@@ -51,7 +51,7 @@ export async function getChatResource(id: string) {
       JSON_EXTRACT (videoResources.fields, "$.wordLevelSrt") AS wordLevelSrt
     FROM
       ${contentResource} as resources
-    -- join assumes that there is a single video resource ie a Tip
+    -- join assumes that there is a single video resource
     LEFT JOIN (
       SELECT
         refs.resourceOfId,

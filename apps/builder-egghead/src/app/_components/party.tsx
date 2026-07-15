@@ -16,7 +16,6 @@ export function Party({ room }: { room?: string }) {
 					'videoResource.created',
 					'video.asset.ready',
 					'transcript.ready',
-					'ai.tip.draft.completed',
 				]
 
 				if (invalidateOn.includes(data.name)) {
