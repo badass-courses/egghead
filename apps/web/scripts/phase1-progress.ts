@@ -6,6 +6,7 @@ import {
   anonymousProgressState,
   completeResourceForUser,
   ensureLocalResourceProgressTable,
+  readCompletedResourceIdsForUser,
   readResourceProgress,
   seedResourceProgress,
 } from "../src/progress/resource-progress";
@@ -169,6 +170,20 @@ if (!fixturesReady || !userId || !readResource || !writeResource) {
     resourceId: writeResource.resourceId,
   });
 
+  const requestedResourceIds = [...new Set([readResource.resourceId, writeResource.resourceId])];
+  const completedResourceIds = await readCompletedResourceIdsForUser({
+    userId,
+    resourceIds: [...requestedResourceIds, "phase1-progress-missing-resource"],
+  });
+  const emptyBatch = await readCompletedResourceIdsForUser({
+    userId,
+    resourceIds: [],
+  });
+  const isolatedUserBatch = await readCompletedResourceIdsForUser({
+    userId: `phase1-isolation-${hashValue("coursebuilder-user", userId)}`,
+    resourceIds: requestedResourceIds,
+  });
+
   const countBeforeAnonymous = await resourceProgressCount();
   const anonymous = anonymousProgressState();
   const countAfterAnonymous = await resourceProgressCount();
@@ -188,6 +203,11 @@ if (!fixturesReady || !userId || !readResource || !writeResource) {
       firstWrite.state.completedAt !== null &&
       firstWrite.state.completedAt === secondWrite.state.completedAt &&
       secondWrite.state.completedAt === afterSecondWrite.completedAt,
+    batchedCompletionRead:
+      completedResourceIds.length === requestedResourceIds.length &&
+      requestedResourceIds.every((resourceId) => completedResourceIds.includes(resourceId)),
+    emptyBatchRead: emptyBatch.length === 0,
+    progressIsolatedByUser: isolatedUserBatch.length === 0,
     noRailsLessonViewWrite: true,
     anonymousNoUserProgress:
       countBeforeAnonymous === countAfterAnonymous &&
@@ -210,6 +230,10 @@ if (!fixturesReady || !userId || !readResource || !writeResource) {
       },
       read: {
         migratedRead,
+        completedResourceCount: completedResourceIds.length,
+        requestedResourceCount: requestedResourceIds.length,
+        emptyBatchCount: emptyBatch.length,
+        isolatedUserBatchCount: isolatedUserBatch.length,
       },
       write: {
         beforeWrite,

@@ -1,12 +1,18 @@
+import type { ReactNode } from "react";
 import { Container } from "@egghead/ui/container";
 import { ResourceListLabel } from "@egghead/ui/resource-list";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
 import type { CourseForPage } from "./course";
-import { CourseCurriculum } from "./course-lesson-list";
 import { MarkdownContent } from "./markdown-content";
 
-export async function CoursePageStatic({ course }: { course: CourseForPage }) {
+export async function CoursePageStatic({
+  course,
+  curriculumComponent,
+}: {
+  course: CourseForPage;
+  curriculumComponent: ReactNode;
+}) {
   "use cache";
 
   return (
@@ -41,7 +47,7 @@ export async function CoursePageStatic({ course }: { course: CourseForPage }) {
             <ResourceListLabel as="h2" className="shrink-0" id="course-lessons">
               {course.lessonCount} {course.lessonCount === 1 ? "lesson" : "lessons"}
             </ResourceListLabel>
-            <CourseCurriculum course={course} />
+            {curriculumComponent}
           </section>
         </aside>
       </div>

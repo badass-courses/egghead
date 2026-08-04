@@ -3,6 +3,7 @@ import { notFound, permanentRedirect } from "next/navigation";
 
 import { getCourseBySlug, getCourseStaticParams } from "../../content/course";
 import { CoursePageStatic } from "../../content/course-page";
+import { CourseProgressCurriculumExperience } from "../../content/course-progress-experience";
 import { getLessonBySlug, getStandaloneLessonStaticParams } from "../../content/lesson";
 import { LessonAccessExperience, StandaloneLessonPageStatic } from "../../content/lesson-page";
 import { getPodcastShowBySlug, getPodcastShowStaticParams } from "../../content/podcast";
@@ -140,7 +141,14 @@ export default async function RootContentPage({ params }: RootContentPageProps) 
   const slug = await slugFromParams(params);
   const course = await getCourseBySlug(slug);
 
-  if (course) return <CoursePageStatic course={course} />;
+  if (course) {
+    return (
+      <CoursePageStatic
+        course={course}
+        curriculumComponent={<CourseProgressCurriculumExperience course={course} />}
+      />
+    );
+  }
 
   const podcastShow = await getPodcastShowBySlug(slug);
 
@@ -171,7 +179,7 @@ export default async function RootContentPage({ params }: RootContentPageProps) 
   if (lesson) {
     return (
       <StandaloneLessonPageStatic
-        accessComponent={<LessonAccessExperience lesson={lesson} />}
+        accessComponent={<LessonAccessExperience lesson={lesson} showProgressStatus />}
         lesson={lesson}
       />
     );

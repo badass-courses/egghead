@@ -12,11 +12,14 @@ import {
 } from "@egghead/ui/resource-list";
 
 import { getCurrentUserFromRequest } from "../coursebuilder/current-user";
+import { LessonProgressProvider } from "../progress/lesson-progress-provider";
 import type { CourseForPage } from "./course";
 import { CourseCurriculum, courseDurationLabel } from "./course-lesson-list";
 import { lessonRequiresAccess } from "./lesson-access";
 import { LessonHtmlVideo } from "./lesson-html-video";
 import { LessonMuxPlayer } from "./lesson-mux-player";
+import { getLessonProgressSnapshot } from "./lesson-progress-read";
+import { LessonProgressStatus } from "./lesson-progress-status";
 import { MuxPlayerProvider } from "./mux-player-context";
 import { getLessonVideoTranscript } from "./lesson-transcript";
 import { LessonTranscriptBody } from "./lesson-transcript-renderer";
@@ -132,6 +135,7 @@ export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage
     <>
       {canWatch && playbackId ? (
         <LessonMuxPlayer
+          lessonResourceId={lesson.id}
           playbackId={playbackId}
           poster={lesson.videoPosterUrl}
           title={lesson.title}
@@ -140,6 +144,7 @@ export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage
       ) : canWatch && videoUrl ? (
         <LessonHtmlVideo
           accessState={accessRequired ? "granted" : "free"}
+          lessonResourceId={lesson.id}
           poster={lesson.videoPosterUrl ?? undefined}
           src={videoUrl}
           title={lesson.title}
@@ -193,12 +198,22 @@ export async function LessonTranscriptSection({ lesson }: { lesson: LessonForPag
   );
 }
 
-export function LessonAccessExperience({ lesson }: { lesson: LessonForPage }) {
+export async function LessonAccessExperience({
+  lesson,
+  showProgressStatus = false,
+}: {
+  lesson: LessonForPage;
+  showProgressStatus?: boolean;
+}) {
+  const progress = await getLessonProgressSnapshot([lesson.id]);
+  const progressKey = `${lesson.id}:${progress.isAuthenticated}:${progress.initialCompletedLessonIds.join("|")}`;
+
   return (
-    <>
+    <LessonProgressProvider key={progressKey} {...progress}>
       <LessonPlayerExperience lesson={lesson} />
+      {showProgressStatus ? <LessonProgressStatus lessonResourceId={lesson.id} /> : null}
       <LessonFactsExperience lesson={lesson} />
-    </>
+    </LessonProgressProvider>
   );
 }
 
@@ -286,13 +301,13 @@ export async function StandaloneLessonPageStatic({
 export async function CourseLessonPageStatic({
   course,
   factsComponent,
+  learningComponent,
   lesson,
-  playerComponent,
 }: {
   course: CourseForPage;
   factsComponent: ReactNode;
+  learningComponent: ReactNode;
   lesson: LessonForPage;
-  playerComponent: ReactNode;
 }) {
   "use cache";
 
@@ -300,14 +315,18 @@ export async function CourseLessonPageStatic({
     <Container as="main" size="wide" className="pt-4">
       <MuxPlayerProvider>
         <Stack gap="loose">
-          <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-0">
-            <div className="egghead-lesson-player-cell min-w-0">
-              <Suspense fallback={<LessonVideoPlaceholder lesson={lesson} />}>
-                {playerComponent}
-              </Suspense>
-            </div>
-            <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
-          </div>
+          <Suspense
+            fallback={
+              <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-0">
+                <div className="egghead-lesson-player-cell min-w-0">
+                  <LessonVideoPlaceholder lesson={lesson} />
+                </div>
+                <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
+              </div>
+            }
+          >
+            {learningComponent}
+          </Suspense>
           <SectionHeader
             description={lesson.description}
             eyebrow="Course lesson"

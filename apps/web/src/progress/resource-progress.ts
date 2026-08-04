@@ -9,6 +9,10 @@ type ResourceProgressRow = RowDataPacket & {
   fields: unknown;
 };
 
+type CompletedResourceProgressRow = RowDataPacket & {
+  resourceId: string;
+};
+
 export type ResourceProgressState = {
   exists: boolean;
   completed: boolean;
@@ -113,6 +117,35 @@ export async function readResourceProgress(input: {
     );
 
     return progressState(rows[0] ?? null);
+  } finally {
+    await connection.end();
+  }
+}
+
+export async function readCompletedResourceIdsForUser(input: {
+  userId: string;
+  resourceIds: readonly string[];
+}): Promise<string[]> {
+  const resourceIds = [...new Set(input.resourceIds.filter(Boolean))];
+  if (resourceIds.length === 0) return [];
+
+  const connection = await createLocalMysqlConnection();
+  const placeholders = resourceIds.map(() => "?").join(", ");
+
+  try {
+    const [rows] = await connection.execute<CompletedResourceProgressRow[]>(
+      `
+        SELECT resourceId
+        FROM egghead_ResourceProgress
+        WHERE userId = ?
+          AND completedAt IS NOT NULL
+          AND resourceId IN (${placeholders})
+        ORDER BY resourceId ASC
+      `,
+      [input.userId, ...resourceIds],
+    );
+
+    return rows.map((row) => row.resourceId);
   } finally {
     await connection.end();
   }

@@ -19,6 +19,8 @@ import {
 import type { CourseForPage, CourseLesson } from "./course";
 import { ScrollToActiveLesson } from "./scroll-to-active-lesson";
 
+const NO_COMPLETED_LESSONS: ReadonlySet<string> = new Set();
+
 export function directCourseLessons(course: CourseForPage) {
   const sectionedLessonIds = new Set(
     course.sections.flatMap((section) => section.lessons.map((lesson) => lesson.id)),
@@ -59,13 +61,17 @@ export function sectionDurationLabel(lessons: CourseLesson[]) {
 export function CourseCurriculum({
   activeLessonSlug,
   className,
+  completedLessonIds = NO_COMPLETED_LESSONS,
   course,
   header,
+  showProgress = false,
 }: {
   activeLessonSlug?: string | undefined;
   className?: string | undefined;
+  completedLessonIds?: ReadonlySet<string> | undefined;
   course: CourseForPage;
   header?: ReactNode;
+  showProgress?: boolean | undefined;
 }) {
   const directLessons = directCourseLessons(course);
 
@@ -78,21 +84,40 @@ export function CourseCurriculum({
           <CourseLessonList
             activeLessonSlug={activeLessonSlug}
             className="pt-3"
+            completedLessonIds={completedLessonIds}
             lessons={directLessons}
           />
         ) : null}
         {course.sections.map((section) => {
           const duration = sectionDurationLabel(section.lessons);
+          const completedCount = section.lessons.reduce(
+            (count, lesson) => count + Number(completedLessonIds.has(lesson.id)),
+            0,
+          );
 
           return (
             <ResourceListSection key={section.id} open>
               <ResourceListSectionSummary>
                 <ResourceListSectionTitle>{section.title}</ResourceListSectionTitle>
-                <ResourceListBadge>{section.lessons.length}</ResourceListBadge>
+                <ResourceListBadge
+                  aria-label={
+                    showProgress
+                      ? `${completedCount} of ${section.lessons.length} watched`
+                      : `${section.lessons.length} lessons`
+                  }
+                >
+                  {showProgress
+                    ? `${completedCount}/${section.lessons.length}`
+                    : section.lessons.length}
+                </ResourceListBadge>
                 {duration ? <ResourceListMeta>{duration}</ResourceListMeta> : null}
                 <ResourceListSectionChevron />
               </ResourceListSectionSummary>
-              <CourseLessonList activeLessonSlug={activeLessonSlug} lessons={section.lessons} />
+              <CourseLessonList
+                activeLessonSlug={activeLessonSlug}
+                completedLessonIds={completedLessonIds}
+                lessons={section.lessons}
+              />
             </ResourceListSection>
           );
         })}
@@ -104,22 +129,36 @@ export function CourseCurriculum({
 export function CourseLessonList({
   activeLessonSlug,
   className,
+  completedLessonIds = NO_COMPLETED_LESSONS,
   lessons,
 }: {
   activeLessonSlug?: string | undefined;
   className?: string | undefined;
+  completedLessonIds?: ReadonlySet<string> | undefined;
   lessons: CourseLesson[];
 }) {
   return (
     <ResourceList className={className}>
       {lessons.map((lesson, index) => {
-        const status = lesson.slug === activeLessonSlug ? "active" : "upcoming";
+        const isActive = lesson.slug === activeLessonSlug;
+        const isCompleted = completedLessonIds.has(lesson.id);
+        const linkStatus = isActive ? "active" : isCompleted ? "completed" : "upcoming";
+        const indicatorStatus = isCompleted ? "completed" : isActive ? "active" : "upcoming";
 
         return (
           <ResourceListItem key={lesson.id}>
-            <ResourceListLink as={Link} href={lesson.canonicalPath} prefetch={true} status={status}>
-              <ResourceListIndicator index={index} status={status} />
-              <ResourceListTitle>{lesson.title}</ResourceListTitle>
+            <ResourceListLink
+              as={Link}
+              data-watched={isCompleted ? "true" : "false"}
+              href={lesson.canonicalPath}
+              prefetch={true}
+              status={linkStatus}
+            >
+              <ResourceListIndicator index={index} status={indicatorStatus} />
+              <ResourceListTitle>
+                {lesson.title}
+                {isCompleted ? <span className="sr-only"> — Watched</span> : null}
+              </ResourceListTitle>
               {lesson.duration ? (
                 <ResourceListMeta>{formatLessonDuration(lesson.duration)}</ResourceListMeta>
               ) : null}
