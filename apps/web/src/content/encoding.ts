@@ -38,33 +38,55 @@ const CP1252_CODE_POINT_BY_BYTE = new Map<number, number>(
   [...CP1252_BYTE_BY_CODE_POINT].map(([codePoint, byte]) => [byte, codePoint]),
 );
 
-// A UTF-8 lead byte (0xC2-0xF4) read as latin1, followed by a continuation
-// byte (0x80-0xBF) — the signature of double-encoded text.
-const DOUBLE_ENCODED_PATTERN = /[\u00C2-\u00F4][\u0080-\u00BF]/;
+function byteFromMojibakeChar(char: string) {
+  const codePoint = char.codePointAt(0) ?? 0;
+  return CP1252_BYTE_BY_CODE_POINT.get(codePoint) ?? (codePoint <= 0xff ? codePoint : null);
+}
 
-function cp1252CharsToBytes(value: string) {
-  let bytes = "";
-  for (const char of value) {
-    const codePoint = char.codePointAt(0) ?? 0;
-    const byte = CP1252_BYTE_BY_CODE_POINT.get(codePoint);
-    if (byte !== undefined) {
-      bytes += String.fromCharCode(byte);
-    } else if (codePoint > 0xff) {
-      // A genuine non-Latin-1 character means the string is not pure
-      // mojibake — reinterpreting it as latin1 bytes would corrupt it.
-      return null;
-    } else {
-      bytes += char;
-    }
-  }
-  return bytes;
+function utf8SequenceLength(leadByte: number) {
+  if (leadByte >= 0xc2 && leadByte <= 0xdf) return 2;
+  if (leadByte >= 0xe0 && leadByte <= 0xef) return 3;
+  if (leadByte >= 0xf0 && leadByte <= 0xf4) return 4;
+  return 0;
+}
+
+function validUtf8Sequence(bytes: readonly number[]) {
+  if (bytes.length < 2) return false;
+  if (bytes.slice(1).some((byte) => byte < 0x80 || byte > 0xbf)) return false;
+
+  const [leadByte, secondByte] = bytes;
+  if (leadByte === 0xe0 && (secondByte ?? 0) < 0xa0) return false;
+  if (leadByte === 0xed && (secondByte ?? 0) > 0x9f) return false;
+  if (leadByte === 0xf0 && (secondByte ?? 0) < 0x90) return false;
+  if (leadByte === 0xf4 && (secondByte ?? 0) > 0x8f) return false;
+  return true;
 }
 
 export function repairDoubleEncodedUtf8(value: string) {
-  const asBytes = cp1252CharsToBytes(value);
-  if (asBytes === null || !DOUBLE_ENCODED_PATTERN.test(asBytes)) return value;
-  const decoded = Buffer.from(asBytes, "latin1").toString("utf8");
-  return decoded.includes("\uFFFD") ? value : decoded;
+  const chars = Array.from(value);
+  let repaired = "";
+
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index] ?? "";
+    const leadByte = byteFromMojibakeChar(char);
+    const sequenceLength = leadByte === null ? 0 : utf8SequenceLength(leadByte);
+    const sequenceChars = chars.slice(index, index + sequenceLength);
+    const sequenceBytes = sequenceChars.map(byteFromMojibakeChar);
+
+    if (
+      sequenceLength > 0 &&
+      sequenceChars.length === sequenceLength &&
+      sequenceBytes.every((byte): byte is number => byte !== null) &&
+      validUtf8Sequence(sequenceBytes)
+    ) {
+      repaired += Buffer.from(sequenceBytes).toString("utf8");
+      index += sequenceLength - 1;
+    } else {
+      repaired += char;
+    }
+  }
+
+  return repaired;
 }
 
 export function doubleEncodedUtf8Variant(value: string) {

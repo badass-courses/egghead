@@ -9,6 +9,10 @@ import {
   searchDocumentFromResource,
   searchDocumentTypeFromResource,
 } from "../apps/web/src/content/search-document";
+import {
+  doubleEncodedUtf8Variant,
+  repairDoubleEncodedUtf8,
+} from "../apps/web/src/content/encoding";
 import { SEARCH_CONTENT_TYPE_VALUES } from "../apps/web/src/content/search";
 import {
   contentTypeFromSearchParams,
@@ -263,6 +267,31 @@ const checks = [
       searchParams: {},
     }),
     "react beautiful dnd",
+  ),
+  assertEqual(
+    "double-encoded instructor names are repaired",
+    repairDoubleEncodedUtf8("MatÃ­as HernÃ¡ndez"),
+    "Matías Hernández",
+  ),
+  assertEqual(
+    "cp1252-flavored instructor names are repaired",
+    repairDoubleEncodedUtf8(doubleEncodedUtf8Variant("Ákos Kőműves")),
+    "Ákos Kőműves",
+  ),
+  assertEqual(
+    "mixed non-Latin and mojibake instructor names are repaired safely",
+    repairDoubleEncodedUtf8("Łukasz HernÃ¡ndez"),
+    "Łukasz Hernández",
+  ),
+  assertEqual(
+    "mixed CJK and mojibake instructor names are repaired safely",
+    repairDoubleEncodedUtf8("MatÃ­as 李"),
+    "Matías 李",
+  ),
+  assertEqual(
+    "clean Unicode instructor names remain unchanged",
+    repairDoubleEncodedUtf8("Łukasz Hernández 李 🥚"),
+    "Łukasz Hernández 李 🥚",
   ),
   assertEqual(
     "path segment search treats encoded plus as a space",
