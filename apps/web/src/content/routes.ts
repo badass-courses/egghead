@@ -2,23 +2,17 @@ export type PublicContentFamily =
   | "article"
   | "campaign"
   | "case-study"
-  | "guide"
   | "podcast"
-  | "project"
   | "success-story"
-  | "talk"
-  | "tip";
+  | "talk";
 
 export const STANDALONE_PUBLIC_CONTENT_FAMILIES = [
   "article",
   "campaign",
   "case-study",
-  "guide",
   "podcast",
-  "project",
   "success-story",
   "talk",
-  "tip",
 ] as const satisfies readonly PublicContentFamily[];
 
 export function standaloneContentPath(slug: string) {
@@ -59,13 +53,10 @@ export function legacyLessonEmbedPath(slug: string) {
 
 export function legacyPublicContentPath(family: PublicContentFamily, slug: string) {
   if (family === "article") return `/blog/${slug}`;
-  if (family === "tip") return `/tips/${slug}`;
   if (family === "podcast") return `/podcasts/${slug}`;
   if (family === "talk") return `/talks/${slug}`;
   if (family === "case-study") return `/case-studies/${slug}`;
   if (family === "success-story") return `/success-stories/${slug}`;
-  if (family === "guide") return `/guides/${slug}`;
-  if (family === "project") return `/projects/${slug}`;
   return `/campaigns/${slug}`;
 }
 

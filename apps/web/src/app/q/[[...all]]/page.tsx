@@ -5,7 +5,7 @@ import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
 import { type SearchInstructor, topSearchInstructors } from "../../../content/instructors";
-import { searchContent } from "../../../content/search";
+import { searchContent, type SearchResult } from "../../../content/search";
 import {
   contentTypeFromSearchParams,
   instructorFromSearchParams,
@@ -21,26 +21,24 @@ type SearchPageProps = {
   searchParams: Promise<SearchRouteSearchParams>;
 };
 
-async function searchTermFromProps(props: SearchPageProps) {
+type SearchRouteState = {
+  contentType: string | null;
+  instructor: string | null;
+  term: string;
+};
+
+async function searchRouteStateFromProps(props: SearchPageProps): Promise<SearchRouteState> {
   const [params, searchParams] = await Promise.all([props.params, props.searchParams]);
-  return searchTermFromRoute({ params, searchParams });
-}
 
-async function contentTypeFromProps(props: SearchPageProps) {
-  const searchParams = await props.searchParams;
-  return contentTypeFromSearchParams(searchParams);
-}
-
-async function instructorFromProps(props: SearchPageProps) {
-  const searchParams = await props.searchParams;
-  return instructorFromSearchParams(searchParams);
+  return {
+    contentType: contentTypeFromSearchParams(searchParams),
+    instructor: instructorFromSearchParams(searchParams),
+    term: searchTermFromRoute({ params, searchParams }),
+  };
 }
 
 export async function generateMetadata(props: SearchPageProps): Promise<Metadata> {
-  const [term, contentType] = await Promise.all([
-    searchTermFromProps(props),
-    contentTypeFromProps(props),
-  ]);
+  const { contentType, term } = await searchRouteStateFromProps(props);
   const title = term
     ? `${term} | egghead`
     : contentType
@@ -49,21 +47,20 @@ export async function generateMetadata(props: SearchPageProps): Promise<Metadata
 
   return {
     title,
-    description: "Find egghead courses, lessons, articles, talks, podcasts, and tips.",
+    description: "Find egghead courses, lessons, articles, talks, and podcasts.",
     alternates: {
       canonical: term ? `https://egghead.io/q/${encodeURIComponent(term)}` : "https://egghead.io/q",
     },
   };
 }
 
-async function SearchResults(props: SearchPageProps) {
-  const [term, contentType, instructor] = await Promise.all([
-    searchTermFromProps(props),
-    contentTypeFromProps(props),
-    instructorFromProps(props),
-  ]);
-  const results = await searchContent(term, contentType, instructor);
-
+function SearchResults({
+  contentType,
+  results,
+  term,
+}: Pick<SearchRouteState, "contentType" | "term"> & {
+  results: SearchResult[];
+}) {
   return (
     <Stack gap="tight">
       <p className="font-hand text-2xl text-muted-foreground">
@@ -153,23 +150,34 @@ function SearchForm({
   );
 }
 
-async function RoutedSearchForm(props: SearchPageProps) {
-  const [term, contentType, instructor, instructors] = await Promise.all([
-    searchTermFromProps(props),
-    contentTypeFromProps(props),
-    instructorFromProps(props),
+function SearchContentFallback() {
+  return (
+    <>
+      <SearchForm />
+      <SearchFallback />
+    </>
+  );
+}
+
+async function RoutedSearchContent(props: SearchPageProps) {
+  const { contentType, instructor, term } = await searchRouteStateFromProps(props);
+  const [results, instructors] = await Promise.all([
+    searchContent(term, contentType, instructor),
     // The instructor list is a nicety — never let a database outage take
     // down the whole search page.
     topSearchInstructors().catch(() => []),
   ]);
 
   return (
-    <SearchForm
-      contentType={contentType || undefined}
-      instructor={instructor || undefined}
-      instructors={instructors}
-      term={term || undefined}
-    />
+    <>
+      <SearchForm
+        contentType={contentType || undefined}
+        instructor={instructor || undefined}
+        instructors={instructors}
+        term={term || undefined}
+      />
+      <SearchResults contentType={contentType} results={results} term={term} />
+    </>
   );
 }
 
@@ -178,17 +186,14 @@ export default function SearchPage(props: SearchPageProps) {
     <Container as="main" size="wide">
       <Stack gap="normal">
         <SectionHeader
-          description="Find courses, lessons, articles, talks, podcasts, and tips."
+          description="Find courses, lessons, articles, talks, and podcasts."
           eyebrow="Browse"
           title="Search"
         />
-        <Suspense fallback={<SearchForm />}>
-          <RoutedSearchForm {...props} />
+        <Suspense fallback={<SearchContentFallback />}>
+          <RoutedSearchContent {...props} />
         </Suspense>
       </Stack>
-      <Suspense fallback={<SearchFallback />}>
-        <SearchResults {...props} />
-      </Suspense>
     </Container>
   );
 }

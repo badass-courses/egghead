@@ -50,10 +50,6 @@ import {
 } from './events/instructor-invite-created'
 import { POST_CREATED_EVENT, PostCreated } from './events/post-created'
 import {
-	TIPS_UPDATED_EVENT,
-	TipsUpdated,
-} from './functions/migrate-tips-to-posts'
-import {
 	POST_UPDATED_EVENT,
 	PostUpdated,
 } from './functions/sync-post-to-egghead'
@@ -68,7 +64,6 @@ export type Events = {
 	[RESOURCE_CHAT_REQUEST_EVENT]: ResourceChat
 	[USER_CREATED_EVENT]: UserCreated
 	[POST_UPDATED_EVENT]: PostUpdated
-	[TIPS_UPDATED_EVENT]: TipsUpdated
 	[EGGHEAD_LESSON_CREATED_EVENT]: EggheadLessonCreated
 	[POST_CREATED_EVENT]: PostCreated
 	[SYNC_POSTS_TO_EGGHEAD_LESSONS_EVENT]: SyncPostsToEggheadLessonsEvent

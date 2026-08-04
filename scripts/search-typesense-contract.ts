@@ -9,6 +9,7 @@ import {
   searchDocumentFromResource,
   searchDocumentTypeFromResource,
 } from "../apps/web/src/content/search-document";
+import { SEARCH_CONTENT_TYPE_VALUES } from "../apps/web/src/content/search";
 import {
   contentTypeFromSearchParams,
   searchTermFromRoute,
@@ -53,6 +54,14 @@ function typesenseIndexScriptExists() {
 function assertIncludes(name: string, values: readonly string[], expected: string) {
   if (!values.includes(expected)) {
     throw new Error(`${name}: expected ${expected} in ${JSON.stringify(values)}`);
+  }
+
+  return { name, pass: true as const };
+}
+
+function assertNotIncludes(name: string, values: readonly string[], blocked: string) {
+  if (values.includes(blocked)) {
+    throw new Error(`${name}: did not expect ${blocked} in ${JSON.stringify(values)}`);
   }
 
   return { name, pass: true as const };
@@ -156,6 +165,21 @@ const checks = [
     "legacy article path is indexable metadata",
     legacyPathsForSearchDocument("article", "some-post"),
     "/blog/some-post",
+  ),
+  assertNotIncludes(
+    "search content types exclude retired guides",
+    SEARCH_CONTENT_TYPE_VALUES,
+    "guide",
+  ),
+  assertNotIncludes(
+    "search content types exclude retired projects",
+    SEARCH_CONTENT_TYPE_VALUES,
+    "project",
+  ),
+  assertNotIncludes(
+    "search content types exclude migrated tips",
+    SEARCH_CONTENT_TYPE_VALUES,
+    "tip",
   ),
   assertField("schema exposes canonical result path", "path"),
   assertField("schema exposes canonicalPath alias", "canonicalPath"),

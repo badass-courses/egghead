@@ -18,6 +18,8 @@ const NAV_LINKS = [
   { href: "/blog", label: "Articles" },
 ];
 
+export type SiteAccountState = "authenticated" | "anonymous" | "unknown";
+
 function isActive(pathname: string | null, href: string) {
   if (pathname === null) return false;
   if (href === "/") return pathname === "/";
@@ -54,17 +56,58 @@ function EggIcon() {
   );
 }
 
-/* usePathname() counts as request data under cacheComponents, so the
-   layout renders <SiteNav/> inside <Suspense fallback={<SiteNavView
-   pathname={null}/>}> — same shelf, just no raised key until we know
-   which page we're on. */
-export function SiteNav() {
+/* The layout streams pathname and account state through one Suspense
+   boundary. Its fallback keeps the same shelf visible without claiming
+   the visitor is signed in or signed out before the request resolves. */
+export function SiteNav({ accountState }: { accountState: SiteAccountState }) {
   const pathname = usePathname();
 
-  return <SiteNavView pathname={pathname} />;
+  return <SiteNavView accountState={accountState} pathname={pathname} />;
 }
 
-export function SiteNavView({ pathname }: { pathname: string | null }) {
+function AccountLink({
+  accountState,
+  mobile = false,
+}: {
+  accountState: SiteAccountState;
+  mobile?: boolean;
+}) {
+  const authenticated = accountState === "authenticated";
+  const anonymous = accountState === "anonymous";
+
+  return (
+    <Link
+      aria-label={authenticated ? "Account, signed in" : undefined}
+      className={cn(
+        "press rounded-xl text-sm font-extrabold",
+        mobile
+          ? "flex items-center justify-center gap-2 px-4 pt-[13px] pb-[11px] text-center"
+          : "hidden items-center gap-2 px-5 pt-[11px] pb-[9px] md:flex",
+        anonymous
+          ? "border border-yolk-shadow/40 bg-yolk-grad text-yolk-foreground shadow-btn hover:shadow-btn-hover"
+          : "border border-border-strong bg-raised-grad text-foreground shadow-btn-ghost",
+      )}
+      href="/login"
+      prefetch={false}
+    >
+      {authenticated ? (
+        <span
+          aria-hidden
+          className="size-2 rounded-full bg-sage shadow-[0_0_4px_var(--color-sage)]"
+        />
+      ) : null}
+      {authenticated ? "Signed in" : anonymous ? "Sign in" : "Account"}
+    </Link>
+  );
+}
+
+export function SiteNavView({
+  accountState,
+  pathname,
+}: {
+  accountState: SiteAccountState;
+  pathname: string | null;
+}) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -155,12 +198,7 @@ export function SiteNavView({ pathname }: { pathname: string | null }) {
             <SearchIcon />
           </Link>
 
-          <Link
-            className="press hidden rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-5 pt-[11px] pb-[9px] text-sm font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover md:block"
-            href="/login"
-          >
-            Sign in
-          </Link>
+          <AccountLink accountState={accountState} />
 
           <button
             aria-expanded={menuOpen}
@@ -212,12 +250,7 @@ export function SiteNavView({ pathname }: { pathname: string | null }) {
 
             <div className="my-2 border-t border-border-soft" />
 
-            <Link
-              className="press block rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-4 pt-[13px] pb-[11px] text-center font-extrabold text-yolk-foreground shadow-btn"
-              href="/login"
-            >
-              Sign in
-            </Link>
+            <AccountLink accountState={accountState} mobile />
           </div>
         ) : null}
       </div>

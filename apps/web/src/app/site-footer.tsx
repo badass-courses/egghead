@@ -13,7 +13,6 @@ const FOOTER_COLUMNS = [
       { href: "/courses", label: "Courses" },
       { href: "/lessons", label: "Lessons" },
       { href: "/blog", label: "Articles" },
-      { href: "/tips", label: "Tips" },
     ],
   },
   {
@@ -21,8 +20,6 @@ const FOOTER_COLUMNS = [
     links: [
       { href: "/podcasts", label: "Podcasts" },
       { href: "/talks", label: "Talks" },
-      { href: "/guides", label: "Guides" },
-      { href: "/projects", label: "Projects" },
     ],
   },
   {

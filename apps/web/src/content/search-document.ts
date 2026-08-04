@@ -23,14 +23,11 @@ export type SearchDocumentType =
   | "campaign"
   | "case-study"
   | "course"
-  | "guide"
   | "lesson"
   | "podcast"
   | "post"
-  | "project"
   | "success-story"
-  | "talk"
-  | "tip";
+  | "talk";
 
 export type SearchDocumentParentResource = {
   path: string;
@@ -124,14 +121,11 @@ const SEARCH_DOCUMENT_TYPES = new Set<string>([
   "campaign",
   "case-study",
   "course",
-  "guide",
   "lesson",
   "podcast",
   "post",
-  "project",
   "success-story",
   "talk",
-  "tip",
 ]);
 
 export function isSearchDocumentType(value: string): value is SearchDocumentType {

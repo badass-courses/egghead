@@ -68,8 +68,6 @@ export default {
 	'primary-newsletter-tittle':
 		'Start designing the future of intelligent user experiences',
 	'primary-newsletter-byline': `Join the EpicAI.pro newsletter to get updates on events, articles, and more as they’re released`,
-	'tip-newsletter-button-cta-label': 'Subscribe',
-	'tip-newsletter-tittle': 'Tip Newsletter Title',
 	'video-newsletter-title': 'Build the next-gen UX with AI',
 	'video-newsletter-subtitle': 'For builders of the AI-native future',
 	'video-block-newsletter-button-cta-label': 'Continue Watching',
@@ -78,7 +76,7 @@ export default {
 	'video-block-newsletter-description': `
 In exchange for your email address, you'll get full access to this and other free egghead tutorials.
 
-Why? First and foremost, your inbox allows us to directly communicate about the latest egghead material. This includes free tutorials, NextJS Tips, and periodic update about trends, tools, and NextJS happenings that I'm excited about.
+Why? First and foremost, your inbox allows us to directly communicate about the latest egghead material. This includes free tutorials and periodic updates about trends, tools, and Next.js happenings that I'm excited about.
 
 In addition to the piles of free NextJS content, you'll get the earliest access and best discounts to the paid courses when they launch.
 

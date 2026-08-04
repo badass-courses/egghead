@@ -22,7 +22,6 @@ const POST_TYPES = [
 	{ value: 'article', label: 'Articles' },
 	{ value: 'lesson', label: 'Lessons' },
 	{ value: 'podcast', label: 'Podcasts' },
-	{ value: 'tip', label: 'Tips' },
 	{ value: 'course', label: 'Courses' },
 ] as const
 

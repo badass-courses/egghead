@@ -6,7 +6,6 @@ import { courseBuilderCoreFunctions } from '@coursebuilder/core/inngest'
 import { calendarSync } from './functions/calendar-sync'
 import { instructorInviteCompleted } from './functions/instructor-invite-completed'
 import { instructorInviteCreated } from './functions/instructor-invite-created'
-import { migrateTipsToPosts } from './functions/migrate-tips-to-posts'
 import { notifySlack } from './functions/notify-slack-for-post'
 import { postEventPurchase } from './functions/post-event-purchase'
 import { syncPostToEgghead } from './functions/sync-post-to-egghead'
@@ -25,7 +24,6 @@ export const inngestConfig = {
 		),
 		imageResourceCreated,
 		syncPostToEgghead,
-		migrateTipsToPosts,
 		notifySlack,
 		syncVideoResourceData,
 		syncPostsToEggheadLessons,

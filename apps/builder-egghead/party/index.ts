@@ -46,7 +46,7 @@ export default class Server implements Party.Server {
 			persist: { mode: 'snapshot' },
 			async load() {
 				console.log('loading the party', party.id)
-				const tip = await db.query.contentResource.findFirst({
+				const resource = await db.query.contentResource.findFirst({
 					where: or(
 						eq(
 							sql`JSON_EXTRACT (${contentResource.fields}, "$.slug")`,
@@ -57,15 +57,15 @@ export default class Server implements Party.Server {
 				})
 
 				const doc = new Y.Doc()
-				if (tip?.fields?.yDoc) {
-					const binaryString = atob(tip.fields.yDoc)
+				if (resource?.fields?.yDoc) {
+					const binaryString = atob(resource.fields.yDoc)
 					const bytes = new Uint8Array(binaryString.length)
 					for (let i = 0; i < binaryString.length; i++) {
 						bytes[i] = binaryString.charCodeAt(i)
 					}
 					Y.applyUpdate(doc, bytes)
-				} else if (tip?.fields?.body) {
-					doc.getText('codemirror').insert(0, tip.fields.body)
+				} else if (resource?.fields?.body) {
+					doc.getText('codemirror').insert(0, resource.fields.body)
 				}
 				return doc
 			},
