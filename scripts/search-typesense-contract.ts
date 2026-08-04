@@ -11,9 +11,15 @@ import {
 } from "../apps/web/src/content/search-document";
 import {
   doubleEncodedUtf8Variant,
+  instructorMatchKey,
+  normalizeInstructorDisplayName,
   repairDoubleEncodedUtf8,
 } from "../apps/web/src/content/encoding";
-import { SEARCH_CONTENT_TYPE_VALUES } from "../apps/web/src/content/search";
+import {
+  SEARCH_CONTENT_TYPE_VALUES,
+  typesenseFilter,
+  typesenseSearchParameters,
+} from "../apps/web/src/content/search";
 import {
   contentTypeFromSearchParams,
   searchTermFromRoute,
@@ -81,6 +87,18 @@ function assertField(name: string, expected: string) {
   return { name, pass: true as const };
 }
 
+function assertFacetField(name: string, expected: string) {
+  const field = EGGHEAD_TYPESENSE_COLLECTION_SCHEMA.fields.find(
+    (candidate) => candidate.name === expected,
+  );
+
+  if (!field || field.facet !== true) {
+    throw new Error(`${name}: schema field ${expected} is not faceted`);
+  }
+
+  return { name, pass: true as const };
+}
+
 const courseLinkedLessonResource = {
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
   fields: {
@@ -98,6 +116,7 @@ const courseLinkedLessonResource = {
 };
 
 const courseLinkedLesson = searchDocumentFromResource({
+  instructorNames: ["John  Lindquist", "Joel Hooks", "John Lindquist"],
   parentCourseSlug: "modern-three-js",
   parentCourseTitle: "Modern Three.js",
   resource: courseLinkedLessonResource,
@@ -195,6 +214,8 @@ const checks = [
     true,
   ),
   assertField("schema exposes course linkage", "courseLinked"),
+  assertFacetField("schema facets instructor display names", "instructorNames"),
+  assertFacetField("schema facets normalized instructor keys", "instructorKeys"),
   assertEqual(
     "postType lesson resources classify as lessons",
     searchDocumentTypeFromResource(courseLinkedLessonResource),
@@ -215,6 +236,16 @@ const checks = [
     "course-linked lesson parent path is course path",
     courseLinkedLesson.parentResources[0]?.path ?? "",
     "/modern-three-js",
+  ),
+  assertEqual(
+    "search document preserves multiple normalized contributors",
+    courseLinkedLesson.instructorNames.join(","),
+    "John Lindquist,Joel Hooks",
+  ),
+  assertEqual(
+    "search document indexes normalized contributor keys",
+    courseLinkedLesson.instructorKeys.join(","),
+    "johnlindquist,joelhooks",
   ),
   assertEqual(
     "standalone lesson path uses root single",
@@ -294,6 +325,31 @@ const checks = [
     "Łukasz Hernández 李 🥚",
   ),
   assertEqual(
+    "instructor display names normalize whitespace and mojibake",
+    normalizeInstructorDisplayName("  Łukasz   HernÃ¡ndez "),
+    "Łukasz Hernández",
+  ),
+  assertEqual(
+    "instructor filter keys fold case accents and spacing",
+    instructorMatchKey(" Jöhn  Líndquist "),
+    "johnlindquist",
+  ),
+  assertEqual(
+    "Typesense query searches instructor display names",
+    typesenseSearchParameters("John Lindquist").query_by,
+    "title,description,summary,body,instructorNames",
+  ),
+  assertEqual(
+    "Typesense combines type and normalized instructor filters",
+    typesenseFilter(" lesson ", " Jöhn  Líndquist "),
+    "type:=lesson && instructorKeys:=`johnlindquist`",
+  ),
+  assertEqual(
+    "Typesense supports instructor filtering without a text query",
+    typesenseSearchParameters("", null, "John Lindquist").filter_by,
+    `type:=[${SEARCH_CONTENT_TYPE_VALUES.join(", ")}] && instructorKeys:=\`johnlindquist\``,
+  ),
+  assertEqual(
     "path segment search treats encoded plus as a space",
     searchTermFromRoute({
       params: { all: ["react%2Bbeautiful%2Bdnd"] },
@@ -323,6 +379,9 @@ console.log(
     invariant: {
       collectionName: EGGHEAD_TYPESENSE_COLLECTION_NAME,
       indexedResultUrlField: "path",
+      indexedInstructorFields: ["instructorNames", "instructorKeys"],
+      instructorSearchRunsThroughTypesense: true,
+      reindexRequiredForInstructorFields: true,
       podcastEpisodeUrlShape: "/:podcastShowSlug/:episodeSlug",
       legacyUrlsPreservedAsMetadata: true,
       liveTypesenseDependencyAdded: hasTypesenseDependency(),

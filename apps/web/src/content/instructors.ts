@@ -1,13 +1,22 @@
 import type { RowDataPacket } from "mysql2";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
-import { repairDoubleEncodedUtf8 } from "./encoding";
+import {
+  comparableInstructorName,
+  instructorMatchKey,
+  normalizeInstructorDisplayName,
+} from "./encoding";
 import { publishedResourceSql } from "./publication";
 
 type ContributorRow = RowDataPacket & {
   name: string;
   resourceCount: number;
   userId: string;
+};
+
+type ContentContributorRow = RowDataPacket & {
+  contentId: string;
+  name: string;
 };
 
 export type SearchInstructor = {
@@ -17,29 +26,8 @@ export type SearchInstructor = {
 
 type ResolvedInstructor = SearchInstructor & { userIds: string[] };
 
-// Letters whose base form is not an NFD decomposition (ł has no combining mark).
-const FOLDED_LETTERS: Record<string, string> = {
-  æ: "ae",
-  đ: "d",
-  ł: "l",
-  ø: "o",
-  œ: "oe",
-  ß: "ss",
-};
-
 function comparableName(value: string) {
-  return value
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{M}/gu, "")
-    .replace(/[æđłøœß]/g, (letter) => FOLDED_LETTERS[letter] ?? letter);
-}
-
-function matchKey(value: string) {
-  const comparable = comparableName(value);
-  // Names written entirely in non-Latin scripts strip to nothing — fall back
-  // to the comparable form so they keep distinct keys instead of merging.
-  return comparable.replace(/[^a-z0-9]/g, "") || comparable.trim();
+  return comparableInstructorName(value);
 }
 
 async function contributorRows(): Promise<ContributorRow[]> {
@@ -77,8 +65,9 @@ async function allInstructors(): Promise<ResolvedInstructor[]> {
 
   const byKey = new Map<string, ResolvedInstructor>();
   for (const contributor of contributors) {
-    const name = repairDoubleEncodedUtf8(contributor.name);
-    const key = matchKey(name);
+    const name = normalizeInstructorDisplayName(contributor.name);
+    const key = instructorMatchKey(name);
+    if (!key) continue;
     const existing = byKey.get(key);
     if (existing) {
       existing.resourceCount += contributor.resourceCount;
@@ -121,8 +110,63 @@ export async function searchInstructorsByName(
 }
 
 export async function instructorUserIdsForName(name: string): Promise<string[]> {
-  const key = matchKey(name);
+  const key = instructorMatchKey(name);
   if (!key) return [];
   const instructors = await allInstructors();
-  return instructors.find((instructor) => matchKey(instructor.name) === key)?.userIds ?? [];
+  return (
+    instructors.find((instructor) => instructorMatchKey(instructor.name) === key)?.userIds ?? []
+  );
+}
+
+export async function instructorNamesByContentId(contentIds: readonly string[]) {
+  const uniqueContentIds = [...new Set(contentIds)];
+  const namesByContentId = new Map<string, string[]>();
+  if (uniqueContentIds.length === 0) return namesByContentId;
+
+  const connection = await createLocalMysqlConnection();
+  try {
+    const contentIdBatches = Array.from(
+      { length: Math.ceil(uniqueContentIds.length / 1_000) },
+      (_, batchIndex) => uniqueContentIds.slice(batchIndex * 1_000, (batchIndex + 1) * 1_000),
+    );
+    const rowBatches = await Promise.all(
+      contentIdBatches.map(async (contentIdBatch) => {
+        const [rows] = await connection.execute<ContentContributorRow[]>(
+          `
+            SELECT DISTINCT contribution.contentId, user.name
+            FROM egghead_ContentContribution contribution
+            JOIN egghead_User user ON user.id = contribution.userId
+            WHERE contribution.contentId IN (${contentIdBatch.map(() => "?").join(", ")})
+              AND user.name IS NOT NULL
+              AND user.name != ''
+            ORDER BY contribution.contentId, user.name
+          `,
+          contentIdBatch,
+        );
+        return rows;
+      }),
+    );
+
+    const keysByContentId = new Map<string, Set<string>>();
+    for (const rows of rowBatches) {
+      for (const row of rows) {
+        const name = normalizeInstructorDisplayName(row.name);
+        const key = instructorMatchKey(name);
+        if (!key) continue;
+
+        const keys = keysByContentId.get(row.contentId) ?? new Set<string>();
+        if (keys.has(key)) continue;
+        keys.add(key);
+        keysByContentId.set(row.contentId, keys);
+
+        const names = namesByContentId.get(row.contentId) ?? [];
+        names.push(name);
+        namesByContentId.set(row.contentId, names);
+      }
+    }
+
+    return namesByContentId;
+  } finally {
+    await connection.end();
+  }
 }

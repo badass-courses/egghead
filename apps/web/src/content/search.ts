@@ -2,8 +2,8 @@ import type { RowDataPacket } from "mysql2";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
-import { doubleEncodedUtf8Variant } from "./encoding";
-import { instructorUserIdsForName } from "./instructors";
+import { doubleEncodedUtf8Variant, instructorMatchKey } from "./encoding";
+import { instructorNamesByContentId, instructorUserIdsForName } from "./instructors";
 import { parentCourseSlugsForLessonIds } from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
 import { contentResourceSlugSql } from "./resource-slug";
@@ -145,13 +145,17 @@ async function searchDocumentsFromRows(rows: SearchResourceRow[]) {
   const connection = await createLocalMysqlConnection();
 
   try {
-    const parentCourseSlugs = await parentCourseSlugsForLessonIds(
-      connection,
-      rows.filter((row) => searchDocumentTypeFromResource(row) === "lesson").map((row) => row.id),
-    );
+    const [parentCourseSlugs, instructorNames] = await Promise.all([
+      parentCourseSlugsForLessonIds(
+        connection,
+        rows.filter((row) => searchDocumentTypeFromResource(row) === "lesson").map((row) => row.id),
+      ),
+      instructorNamesByContentId(rows.map((row) => row.id)),
+    ]);
 
     return rows.map((row) =>
       searchDocumentFromResource({
+        instructorNames: instructorNames.get(row.id),
         parentCourseSlug: parentCourseSlugs.get(row.id),
         resource: row,
       }),
@@ -182,29 +186,53 @@ async function searchSqlContent(
   return documents.map(searchResultFromDocument);
 }
 
-function typesenseFilter(typeFilter?: string | null) {
-  const normalizedType = normalizedSearchContentType(typeFilter);
-  if (normalizedType === "invalid") return "type:=__invalid__";
-  if (normalizedType) return `type:=${normalizedType}`;
-  return `type:=[${SEARCH_CONTENT_TYPE_VALUES.join(", ")}]`;
+function typesenseFilterValue(value: string) {
+  return `\`${value.replaceAll("`", "\\`")}\``;
 }
 
-async function searchTypesenseContent(term: string, typeFilter?: string | null) {
-  if (!isEggheadTypesenseSearchConfigured()) return null;
+export function typesenseFilter(typeFilter?: string | null, instructorFilter?: string | null) {
+  const normalizedType = normalizedSearchContentType(typeFilter);
+  const filters = [
+    normalizedType === "invalid"
+      ? "type:=__invalid__"
+      : normalizedType
+        ? `type:=${normalizedType}`
+        : `type:=[${SEARCH_CONTENT_TYPE_VALUES.join(", ")}]`,
+  ];
+  const instructorKey = instructorMatchKey(instructorFilter ?? "");
+  if (instructorKey) {
+    filters.push(`instructorKeys:=${typesenseFilterValue(instructorKey)}`);
+  }
+  return filters.join(" && ");
+}
 
-  const config = getEggheadTypesenseConfig();
-  const client = createEggheadTypesenseSearchClient();
+export function typesenseSearchParameters(
+  term: string,
+  typeFilter?: string | null,
+  instructorFilter?: string | null,
+) {
   const normalized = term.trim();
-  const filter = typesenseFilter(typeFilter);
-  const searchParams = {
+  return {
     q: normalized || "*",
-    query_by: "title,description,summary,body",
+    query_by: "title,description,summary,body,instructorNames",
     per_page: 24,
     sort_by: normalized
       ? "_text_match:desc,updated_at_timestamp:desc"
       : "updated_at_timestamp:desc",
-    ...(filter ? { filter_by: filter } : {}),
+    filter_by: typesenseFilter(typeFilter, instructorFilter),
   };
+}
+
+async function searchTypesenseContent(
+  term: string,
+  typeFilter?: string | null,
+  instructorFilter?: string | null,
+) {
+  if (!isEggheadTypesenseSearchConfigured()) return null;
+
+  const config = getEggheadTypesenseConfig();
+  const client = createEggheadTypesenseSearchClient();
+  const searchParams = typesenseSearchParameters(term, typeFilter, instructorFilter);
   const response = await client
     .collections<SearchIndexDocument>(config.collectionName)
     .documents()
@@ -235,15 +263,11 @@ export async function searchContent(
   cacheLife("minutes");
   cacheTag("egghead-search");
 
-  // The Typesense schema has no instructor field yet, so instructor-filtered
-  // searches always run against SQL where contributions are joinable.
-  if (!instructorFilter?.trim()) {
-    try {
-      const typesenseResults = await searchTypesenseContent(term, typeFilter);
-      if (typesenseResults) return typesenseResults;
-    } catch {
-      return searchSqlContent(term, typeFilter, instructorFilter);
-    }
+  try {
+    const typesenseResults = await searchTypesenseContent(term, typeFilter, instructorFilter);
+    if (typesenseResults) return typesenseResults;
+  } catch {
+    return searchSqlContent(term, typeFilter, instructorFilter);
   }
 
   return searchSqlContent(term, typeFilter, instructorFilter);

@@ -89,6 +89,32 @@ export function repairDoubleEncodedUtf8(value: string) {
   return repaired;
 }
 
+export function normalizeInstructorDisplayName(value: string) {
+  return repairDoubleEncodedUtf8(value).trim().replace(/\s+/g, " ");
+}
+
+const FOLDED_INSTRUCTOR_LETTERS: Record<string, string> = {
+  æ: "ae",
+  đ: "d",
+  ł: "l",
+  ø: "o",
+  œ: "oe",
+  ß: "ss",
+};
+
+export function comparableInstructorName(value: string) {
+  return normalizeInstructorDisplayName(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[æđłøœß]/g, (letter) => FOLDED_INSTRUCTOR_LETTERS[letter] ?? letter);
+}
+
+export function instructorMatchKey(value: string) {
+  const comparable = comparableInstructorName(value);
+  return comparable.replace(/[^a-z0-9]/g, "") || comparable.trim();
+}
+
 export function doubleEncodedUtf8Variant(value: string) {
   const bytes = Buffer.from(value, "utf8").toString("latin1");
   let variant = "";
