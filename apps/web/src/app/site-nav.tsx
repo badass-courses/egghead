@@ -77,7 +77,7 @@ function AccountLink({
 
   return (
     <Link
-      aria-label={authenticated ? "Account, signed in" : undefined}
+      aria-label={authenticated ? "Your profile" : undefined}
       className={cn(
         "press rounded-xl text-sm font-extrabold",
         mobile
@@ -87,7 +87,7 @@ function AccountLink({
           ? "border border-yolk-shadow/40 bg-yolk-grad text-yolk-foreground shadow-btn hover:shadow-btn-hover"
           : "border border-border-strong bg-raised-grad text-foreground shadow-btn-ghost",
       )}
-      href="/login"
+      href={authenticated ? "/profile" : "/login"}
       prefetch={false}
     >
       {authenticated ? (
@@ -96,7 +96,7 @@ function AccountLink({
           className="size-2 rounded-full bg-sage shadow-[0_0_4px_var(--color-sage)]"
         />
       ) : null}
-      {authenticated ? "Signed in" : anonymous ? "Sign in" : "Account"}
+      {authenticated ? "Profile" : anonymous ? "Sign in" : "Account"}
     </Link>
   );
 }
