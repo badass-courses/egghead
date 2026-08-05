@@ -17,6 +17,7 @@
     "@egghead/ui": "workspace:*",
     "@mux/mux-player-react": "3.13.0",
     "drizzle-orm": "0.36.0",
+    "inngest": "3.54.2",
     "mysql2": "^3.22.5",
     "next": "16.0.10",
     "next-auth": "5.0.0-beta.25",
