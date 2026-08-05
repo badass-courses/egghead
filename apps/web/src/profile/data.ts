@@ -16,6 +16,7 @@ import {
   type PublicContentFamily,
 } from "../content/routes";
 import { createLocalMysqlConnection } from "../db/local-docker";
+import { gravatarUrlForEmail } from "./gravatar";
 import {
   ownerScopedNameUpdate,
   parsePublicProfileId,
@@ -38,6 +39,10 @@ type PublicUserRow = RowDataPacket & {
   name: string | null;
   image: string | null;
   createdAt: Date | null;
+};
+
+type PublicProfileGravatarRow = RowDataPacket & {
+  email: string;
 };
 
 type AccountRow = RowDataPacket & {
@@ -94,6 +99,13 @@ export const PRIVATE_PROFILE_USER_SQL = `
 
 export const PUBLIC_PROFILE_USER_SQL = `
   SELECT user.id, user.name, user.image, user.createdAt
+  FROM egghead_User user
+  WHERE user.id = ?
+  LIMIT 1
+`;
+
+export const PUBLIC_PROFILE_GRAVATAR_SQL = `
+  SELECT user.email
   FROM egghead_User user
   WHERE user.id = ?
   LIMIT 1
@@ -380,6 +392,33 @@ export async function getPublicLearnerProfile(
     ]);
 
     return projectPublicLearnerProfile(user, completions, completionStats);
+  } finally {
+    await connection.end();
+  }
+}
+
+export async function getPublicProfileGravatarUrl(
+  candidatePublicId: string,
+): Promise<string | null> {
+  const publicId = parsePublicProfileId(candidatePublicId);
+  if (!publicId) return null;
+
+  const connection = await createLocalMysqlConnection();
+
+  try {
+    const [rows] = await connection.execute<PublicProfileGravatarRow[]>(
+      PUBLIC_PROFILE_GRAVATAR_SQL,
+      [publicId],
+    );
+    const email = rows[0]?.email.trim();
+    if (!email) return null;
+
+    const url = gravatarUrlForEmail(email, 176);
+    const response = await fetch(url, { cache: "force-cache", method: "HEAD" });
+
+    return response.ok ? url : null;
+  } catch {
+    return null;
   } finally {
     await connection.end();
   }

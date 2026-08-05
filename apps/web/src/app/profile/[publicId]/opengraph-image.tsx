@@ -1,7 +1,7 @@
 import { EggoMark } from "@egghead/ui/eggo-mark";
 import { ImageResponse } from "next/og";
 
-import { getPublicLearnerProfile } from "../../../profile/data";
+import { getPublicLearnerProfile, getPublicProfileGravatarUrl } from "../../../profile/data";
 
 export const alt = "Egghead learner profile";
 export const size = { width: 1200, height: 630 };
@@ -25,6 +25,12 @@ export default async function OpenGraphImage({
 }) {
   const { publicId } = await params;
   const profile = await getPublicLearnerProfile(publicId);
+  const gravatarUrl = profile?.avatarUrl
+    ? null
+    : profile
+      ? await getPublicProfileGravatarUrl(publicId)
+      : null;
+  const avatarUrl = profile?.avatarUrl ?? gravatarUrl;
   const displayName = imageDisplayName(profile?.displayName ?? "Egghead learner");
 
   return new ImageResponse(
@@ -99,10 +105,10 @@ export default async function OpenGraphImage({
             justifyContent: "center",
             overflow: "hidden",
             width: 176,
-            ...avatarBackgroundStyle(profile?.avatarUrl ?? null),
+            ...avatarBackgroundStyle(avatarUrl),
           }}
         >
-          {profile?.avatarUrl ? null : <EggoMark size={112} />}
+          {avatarUrl ? null : <EggoMark size={112} />}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>

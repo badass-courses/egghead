@@ -4,7 +4,8 @@ import { notFound } from "next/navigation";
 import { cache, Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 
-import { getPublicLearnerProfile } from "../../../profile/data";
+import { getPublicLearnerProfile, getPublicProfileGravatarUrl } from "../../../profile/data";
+import { ProfileAvatar } from "../profile-avatar";
 import { ShareProfileButton } from "../share-profile-button";
 
 const loadPublicProfile = cache(getPublicLearnerProfile);
@@ -86,6 +87,7 @@ async function PublicProfileContent({ params }: { params: Promise<{ publicId: st
   const profile = await loadPublicProfile(publicId);
   if (!profile) notFound();
 
+  const avatarUrl = profile.avatarUrl ?? (await getPublicProfileGravatarUrl(profile.publicId));
   const publicPath = `/profile/${encodeURIComponent(profile.publicId)}`;
 
   return (
@@ -94,9 +96,17 @@ async function PublicProfileContent({ params }: { params: Promise<{ publicId: st
         <header className="breakout border-b border-border-strong pb-8 sm:pb-10">
           <div className="flex flex-col gap-7 sm:flex-row sm:items-end sm:justify-between">
             <div className="flex min-w-0 items-center gap-4 sm:gap-5">
-              <div className="grid size-16 shrink-0 place-items-center rounded-2xl border border-border-strong bg-navy-grad text-2xl font-black text-cream shadow-btn-navy sm:size-20 sm:text-3xl">
-                {initialFor(profile.displayName)}
-              </div>
+              {avatarUrl ? (
+                <ProfileAvatar
+                  alt={`${profile.displayName}'s profile picture`}
+                  fallback={initialFor(profile.displayName)}
+                  src={avatarUrl}
+                />
+              ) : (
+                <div className="grid size-16 shrink-0 place-items-center rounded-2xl border border-border-strong bg-navy-grad text-2xl font-black text-cream shadow-btn-navy sm:size-20 sm:text-3xl">
+                  {initialFor(profile.displayName)}
+                </div>
+              )}
               <div className="min-w-0">
                 <p className="eyebrow mb-2">Egghead learner</p>
                 <h1 className="text-balance text-4xl font-black tracking-tight">
