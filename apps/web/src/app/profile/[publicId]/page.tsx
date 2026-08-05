@@ -9,6 +9,7 @@ import { ProfileAvatar } from "../profile-avatar";
 import { ShareProfileButton } from "../share-profile-button";
 
 const loadPublicProfile = cache(getPublicLearnerProfile);
+const profilePanelClassName = "rounded-2xl border border-border-strong bg-surface-grad shadow-card";
 
 function initialFor(name: string) {
   return name.trim().charAt(0).toUpperCase() || "E";
@@ -33,7 +34,7 @@ export async function generateMetadata({
   if (!profile) return { title: "Learner not found | egghead" };
 
   const title = `${profile.displayName}'s learning profile | egghead`;
-  const description = `${profile.learning.completedCount} published Egghead completions.`;
+  const description = `${profile.learning.completedCount} published egghead completions.`;
   const canonicalPath = `/profile/${encodeURIComponent(profile.publicId)}`;
 
   return {
@@ -54,21 +55,24 @@ export async function generateMetadata({
 function PublicProfileFallback() {
   return (
     <main>
-      <Container as="div" className="gap-y-10" size="wide">
+      <Container as="div" className="gap-y-6 sm:gap-y-8" size="wide">
         <output
           aria-label="Loading learner profile"
-          className="breakout border-b border-border-strong pb-8 sm:pb-10"
+          className={`${profilePanelClassName} animate-pulse p-5 motion-reduce:animate-none sm:p-8`}
         >
           <div className="flex items-center gap-4 sm:gap-5">
-            <div className="size-16 rounded-2xl border border-border-strong bg-well shadow-well sm:size-20" />
+            <div className="size-16 rounded-2xl bg-well shadow-well sm:size-20" />
             <div className="grid flex-1 gap-3">
-              <div className="h-3 w-28 rounded-full bg-border-strong" />
-              <div className="h-9 w-full max-w-sm rounded-lg bg-border-soft" />
-              <div className="h-3 w-36 rounded-full bg-border" />
+              <div className="h-9 w-full max-w-sm rounded-lg bg-well" />
+              <div className="h-3 w-36 rounded-full bg-border-strong" />
             </div>
           </div>
           <span className="sr-only">Loading learner profile</span>
         </output>
+        <div
+          aria-hidden
+          className="h-56 animate-pulse rounded-2xl bg-well shadow-well motion-reduce:animate-none"
+        />
       </Container>
     </main>
   );
@@ -92,9 +96,9 @@ async function PublicProfileContent({ params }: { params: Promise<{ publicId: st
 
   return (
     <main>
-      <Container as="div" className="gap-y-10" size="wide">
-        <header className="breakout border-b border-border-strong pb-8 sm:pb-10">
-          <div className="flex flex-col gap-7 sm:flex-row sm:items-end sm:justify-between">
+      <Container as="div" className="gap-y-6 sm:gap-y-8" size="wide">
+        <header className={`${profilePanelClassName} overflow-hidden`}>
+          <div className="grid gap-7 p-5 sm:p-8 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.65fr)] lg:items-center">
             <div className="flex min-w-0 items-center gap-4 sm:gap-5">
               {avatarUrl ? (
                 <ProfileAvatar
@@ -108,107 +112,111 @@ async function PublicProfileContent({ params }: { params: Promise<{ publicId: st
                 </div>
               )}
               <div className="min-w-0">
-                <p className="eyebrow mb-2">Egghead learner</p>
                 <h1 className="text-balance text-4xl font-black tracking-tight">
                   {profile.displayName}
                 </h1>
                 <p className="mt-2 text-sm font-bold text-muted-foreground">
-                  {profile.memberSince ? `Member since ${profile.memberSince}` : "Egghead member"}
+                  {profile.memberSince ? `Member since ${profile.memberSince}` : "egghead member"}
                 </p>
               </div>
             </div>
 
-            <div className="max-w-sm sm:text-right">
-              <p className="text-sm text-muted-foreground">
-                This public page shows a name, membership date, and published learning activity.
+            <div className="grid gap-4">
+              <p className="max-w-md text-sm text-muted-foreground">
+                This public profile shows a name, membership date, and published learning activity.
               </p>
-              <div className="mt-3 sm:flex sm:justify-end">
+              <dl className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-well px-4 py-3 shadow-well">
+                  <dd className="text-xl font-black tabular-nums">
+                    {profile.learning.completedCount}
+                  </dd>
+                  <dt className="mt-0.5 text-xs font-extrabold text-muted-foreground">
+                    Published {profile.learning.completedCount === 1 ? "completion" : "completions"}
+                  </dt>
+                </div>
+                <div className="rounded-xl bg-well px-4 py-3 shadow-well">
+                  <dd className="text-xl font-black tabular-nums">
+                    {profile.learning.activeMonthCount}
+                  </dd>
+                  <dt className="mt-0.5 text-xs font-extrabold text-muted-foreground">
+                    Active {profile.learning.activeMonthCount === 1 ? "month" : "months"}
+                  </dt>
+                </div>
+              </dl>
+              <div className="justify-self-start">
                 <ShareProfileButton path={publicPath} />
               </div>
             </div>
           </div>
-
-          <dl className="mt-8 flex flex-wrap gap-x-8 gap-y-3 border-t border-border-soft pt-5 text-sm">
-            <div className="flex items-baseline gap-2">
-              <dd className="text-xl font-black tabular-nums">{profile.learning.completedCount}</dd>
-              <dt className="font-bold text-muted-foreground">
-                published {profile.learning.completedCount === 1 ? "completion" : "completions"}
-              </dt>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <dd className="text-xl font-black tabular-nums">
-                {profile.learning.activeMonthCount}
-              </dd>
-              <dt className="font-bold text-muted-foreground">
-                active {profile.learning.activeMonthCount === 1 ? "month" : "months"}
-              </dt>
-            </div>
-          </dl>
         </header>
 
-        <section className="breakout" aria-labelledby="completed-learning-heading">
-          <div className="flex flex-col gap-2 border-b border-border-strong pb-5 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="eyebrow mb-2">Learning record</p>
-              <h2 className="text-2xl font-black tracking-tight" id="completed-learning-heading">
-                Completed learning
-              </h2>
-            </div>
-            {profile.learning.history.length > 0 ? (
-              <p className="max-w-md text-sm text-muted-foreground sm:text-right">
-                Published Egghead resources, newest first.
-              </p>
-            ) : null}
-          </div>
-
-          {profile.learning.history.length > 0 ? (
-            <div>
-              {profile.learning.history.map((month) => (
-                <section
-                  className="grid gap-3 border-b border-border-soft py-6 sm:grid-cols-[10rem_1fr] sm:gap-8"
-                  key={month.key}
+        <section aria-labelledby="completed-learning-heading" className={profilePanelClassName}>
+          <div className="grid gap-6 p-5 sm:p-8">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-2xl font-black tracking-tight" id="completed-learning-heading">
+                  Completed learning
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Published egghead resources, newest first.
+                </p>
+              </div>
+              {profile.learning.history.length > 0 ? (
+                <Link
+                  className="text-sm font-extrabold underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
+                  href="/courses"
                 >
-                  <h3 className="text-sm font-extrabold uppercase tracking-[0.08em] text-muted-foreground">
-                    {month.label}
-                  </h3>
-                  <ol className="divide-y divide-border-soft">
-                    {month.completions.map((completion) => (
-                      <li
-                        className="grid gap-1 py-3 first:pt-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-baseline sm:gap-6"
-                        key={`${completion.resourceId}:${completion.completedAt}`}
-                      >
-                        <Link
-                          className="font-extrabold underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
-                          href={completion.href}
-                        >
-                          {completion.title}
-                        </Link>
-                        <time
-                          className="text-xs font-bold text-muted-foreground"
-                          dateTime={completion.completedAt}
-                        >
-                          {formatCompletionDate(completion.completedAt)}
-                        </time>
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-              ))}
+                  Browse courses
+                </Link>
+              ) : null}
             </div>
-          ) : (
-            <div className="border-b border-border-soft py-10 sm:py-14">
-              <p className="text-lg font-black">No published completions yet</p>
-              <p className="mt-1 max-w-lg text-sm text-muted-foreground">
-                Completed Egghead lessons and courses will appear here in chronological order.
-              </p>
-              <Link
-                className="mt-5 inline-flex text-sm font-extrabold underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
-                href="/courses"
-              >
-                Browse courses
-              </Link>
-            </div>
-          )}
+
+            {profile.learning.history.length > 0 ? (
+              <div className="grid gap-7">
+                {profile.learning.history.map((month) => (
+                  <section key={month.key}>
+                    <h3 className="text-sm font-extrabold uppercase tracking-[0.08em] text-muted-foreground">
+                      {month.label}
+                    </h3>
+                    <ol className="mt-3 grid gap-2">
+                      {month.completions.map((completion) => (
+                        <li
+                          className="grid gap-1 rounded-xl border border-border-strong bg-well px-4 py-3 shadow-well sm:grid-cols-[minmax(0,1fr)_auto] sm:items-baseline sm:gap-6"
+                          key={`${completion.resourceId}:${completion.completedAt}`}
+                        >
+                          <Link
+                            className="font-extrabold underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
+                            href={completion.href}
+                          >
+                            {completion.title}
+                          </Link>
+                          <time
+                            className="text-xs font-bold text-muted-foreground"
+                            dateTime={completion.completedAt}
+                          >
+                            {formatCompletionDate(completion.completedAt)}
+                          </time>
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border-strong bg-well/50 p-5 sm:p-6">
+                <p className="text-lg font-black">No published completions yet</p>
+                <p className="mt-1 max-w-lg text-sm text-muted-foreground">
+                  Completed egghead lessons and courses will appear here in chronological order.
+                </p>
+                <Link
+                  className="mt-5 inline-flex rounded-lg border border-border-strong bg-surface-grad px-4 py-2 text-sm font-extrabold text-foreground shadow-btn-ghost"
+                  href="/courses"
+                >
+                  Browse courses
+                </Link>
+              </div>
+            )}
+          </div>
         </section>
       </Container>
     </main>

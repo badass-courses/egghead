@@ -36,7 +36,7 @@ export function GithubAccountControl({ connected, disconnectAllowed }: GithubAcc
 
   return (
     <div>
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-y border-border-soft py-4">
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border-strong bg-well p-4 shadow-well">
         <div>
           <p className="font-extrabold">GitHub</p>
           <p
@@ -66,12 +66,12 @@ export function GithubAccountControl({ connected, disconnectAllowed }: GithubAcc
       <div className="mt-3 min-h-10 text-xs text-muted-foreground" id="github-disconnect-note">
         {connectionIsVisible && !disconnectAllowed ? (
           <p>
-            GitHub is currently the only sign-in method supported by Egghead, so it cannot be
+            GitHub is currently the only sign-in method supported by egghead, so it cannot be
             disconnected yet.
           </p>
         ) : null}
         {connectionIsVisible && disconnectAllowed && !result ? (
-          <p>Disconnecting removes this GitHub identity from your Egghead account.</p>
+          <p>Disconnecting removes this GitHub identity from your egghead account.</p>
         ) : null}
         {!connectionIsVisible && !result ? (
           <p>No GitHub identity is linked to this account.</p>
