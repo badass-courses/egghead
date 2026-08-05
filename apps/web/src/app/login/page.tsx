@@ -98,10 +98,10 @@ function loginErrorMessage(error: string | undefined) {
   return null;
 }
 
-async function signInWithGithub() {
+async function signInWithGithub(callbackUrl: string) {
   "use server";
 
-  await signIn("github", { redirectTo: "/" });
+  await signIn("github", { redirectTo: safeCallbackPath(callbackUrl) });
 }
 
 async function signInWithEmail(callbackUrl: string, formData: FormData) {
@@ -174,6 +174,7 @@ async function AccountState({
 
   const errorMessage = loginErrorMessage(error);
   const signInWithEmailAndCallback = signInWithEmail.bind(null, callbackUrl);
+  const signInWithGithubAndCallback = signInWithGithub.bind(null, callbackUrl);
   const description =
     emailAuthConfigured && githubAuthConfigured
       ? "Use a secure email link, or continue with GitHub."
@@ -231,7 +232,7 @@ async function AccountState({
       ) : null}
 
       {githubAuthConfigured ? (
-        <form action={signInWithGithub}>
+        <form action={signInWithGithubAndCallback}>
           <Button className="w-full" type="submit" variant="ghost">
             <GithubIcon />
             Continue with GitHub
