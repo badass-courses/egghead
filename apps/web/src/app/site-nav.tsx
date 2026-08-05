@@ -20,6 +20,11 @@ const NAV_LINKS = [
 
 export type SiteAccountState = "authenticated" | "anonymous" | "unknown";
 
+type SiteNavAccount = {
+  displayName: string;
+  hasProSubscription: boolean;
+};
+
 function isActive(pathname: string | null, href: string) {
   if (pathname === null) return false;
   if (href === "/") return pathname === "/";
@@ -59,25 +64,40 @@ function EggIcon() {
 /* The layout streams pathname and account state through one Suspense
    boundary. Its fallback keeps the same shelf visible without claiming
    the visitor is signed in or signed out before the request resolves. */
-export function SiteNav({ accountState }: { accountState: SiteAccountState }) {
+export function SiteNav({
+  account,
+  accountState,
+}: {
+  account?: SiteNavAccount;
+  accountState: SiteAccountState;
+}) {
   const pathname = usePathname();
 
-  return <SiteNavView accountState={accountState} pathname={pathname} />;
+  return (
+    <SiteNavView
+      accountState={accountState}
+      pathname={pathname}
+      {...(account ? { account } : {})}
+    />
+  );
 }
 
 function AccountLink({
+  account,
   accountState,
   mobile = false,
 }: {
+  account?: SiteNavAccount;
   accountState: SiteAccountState;
   mobile?: boolean;
 }) {
   const authenticated = accountState === "authenticated";
   const anonymous = accountState === "anonymous";
+  const accountName = account?.displayName || "Profile";
+  const proLabel = account?.hasProSubscription ? "Pro" : "Free";
 
   return (
     <Link
-      aria-label={authenticated ? "Account, signed in" : undefined}
       className={cn(
         "press rounded-xl text-sm font-extrabold",
         mobile
@@ -87,24 +107,36 @@ function AccountLink({
           ? "border border-yolk-shadow/40 bg-yolk-grad text-yolk-foreground shadow-btn hover:shadow-btn-hover"
           : "border border-border-strong bg-raised-grad text-foreground shadow-btn-ghost",
       )}
-      href="/login"
+      href={authenticated ? "/profile" : "/login"}
+      aria-label={authenticated ? `Your profile, ${accountName}, ${proLabel} account` : undefined}
       prefetch={false}
     >
       {authenticated ? (
         <span
           aria-hidden
-          className="size-2 rounded-full bg-sage shadow-[0_0_4px_var(--color-sage)]"
+          className="size-2 shrink-0 rounded-full bg-sage shadow-[0_0_4px_var(--color-sage)]"
         />
       ) : null}
-      {authenticated ? "Signed in" : anonymous ? "Sign in" : "Account"}
+      {authenticated ? (
+        <span className="grid min-w-0 text-left leading-tight">
+          <span className="max-w-[8rem] truncate">{accountName}</span>
+          <span className="text-[0.65rem] font-black uppercase tracking-[0.12em] text-muted-foreground">
+            {proLabel}
+          </span>
+        </span>
+      ) : (
+        <span>{anonymous ? "Sign in" : "Account"}</span>
+      )}
     </Link>
   );
 }
 
 export function SiteNavView({
+  account,
   accountState,
   pathname,
 }: {
+  account?: SiteNavAccount;
   accountState: SiteAccountState;
   pathname: string | null;
 }) {
@@ -198,7 +230,7 @@ export function SiteNavView({
             <SearchIcon />
           </Link>
 
-          <AccountLink accountState={accountState} />
+          <AccountLink accountState={accountState} {...(account ? { account } : {})} />
 
           <button
             aria-expanded={menuOpen}
@@ -250,7 +282,7 @@ export function SiteNavView({
 
             <div className="my-2 border-t border-border-soft" />
 
-            <AccountLink accountState={accountState} mobile />
+            <AccountLink accountState={accountState} mobile {...(account ? { account } : {})} />
           </div>
         ) : null}
       </div>
