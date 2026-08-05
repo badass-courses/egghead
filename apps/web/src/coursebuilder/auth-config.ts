@@ -2,7 +2,9 @@ import type { NextAuthConfig } from "next-auth";
 import GithubProvider from "@auth/core/providers/github";
 
 import { getCourseBuilderAdapter } from "../db/adapter";
+import { getEggheadRuntime } from "../db/local-docker";
 import { getEnv } from "../env";
+import { createPostmarkEmailProvider } from "./email-provider";
 
 export function isGithubAuthConfigured() {
   const githubClientId = getEnv("GITHUB_CLIENT_ID");
@@ -11,19 +13,40 @@ export function isGithubAuthConfigured() {
   return Boolean(githubClientId && githubClientSecret);
 }
 
-function getAuthProviders() {
+export function isEmailAuthConfigured() {
+  const postmarkApiKey = getEnv("POSTMARK_API_KEY");
+  const postmarkFromEmail = getEnv("POSTMARK_FROM_EMAIL");
+
+  return Boolean(getEggheadRuntime() === "local" && postmarkApiKey && postmarkFromEmail);
+}
+
+function getAuthProviders(): NextAuthConfig["providers"] {
   const githubClientId = getEnv("GITHUB_CLIENT_ID");
   const githubClientSecret = getEnv("GITHUB_CLIENT_SECRET");
+  const postmarkApiKey = getEnv("POSTMARK_API_KEY");
+  const postmarkFromEmail = getEnv("POSTMARK_FROM_EMAIL");
+  const providers: NextAuthConfig["providers"] = [];
 
-  if (!githubClientId || !githubClientSecret) return [];
+  if (githubClientId && githubClientSecret) {
+    providers.push(
+      GithubProvider({
+        clientId: githubClientId,
+        clientSecret: githubClientSecret,
+        allowDangerousEmailAccountLinking: true,
+      }),
+    );
+  }
 
-  return [
-    GithubProvider({
-      clientId: githubClientId,
-      clientSecret: githubClientSecret,
-      allowDangerousEmailAccountLinking: true,
-    }),
-  ];
+  if (getEggheadRuntime() === "local" && postmarkApiKey && postmarkFromEmail) {
+    providers.push(
+      createPostmarkEmailProvider({
+        apiKey: postmarkApiKey,
+        from: postmarkFromEmail,
+      }),
+    );
+  }
+
+  return providers;
 }
 
 export const authConfig = {
@@ -43,6 +66,7 @@ export const authConfig = {
   pages: {
     error: "/login",
     signIn: "/login",
+    verifyRequest: "/check-your-email",
   },
   secret: getEnv("AUTH_SECRET") ?? "local-dev-only-egghead-phase-0",
   trustHost: true,

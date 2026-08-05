@@ -345,7 +345,7 @@ export function robotsPolicy(): MetadataRoute.Robots {
     rules: {
       userAgent: "*",
       allow: "/",
-      disallow: ["/api/", "/login", "/logout"],
+      disallow: ["/api/", "/check-your-email", "/login", "/logout"],
     },
     sitemap: absoluteSitemapUrl("/sitemap.xml"),
   };
