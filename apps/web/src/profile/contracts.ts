@@ -120,7 +120,10 @@ export function projectPublicLearnerProfile(
     createdAt: Date | null;
   },
   completions: readonly ProfileCompletion[],
-  completedCount = completions.length,
+  totals?: {
+    completedCount: number;
+    activeMonthCount: number;
+  },
 ): PublicLearnerProfile {
   const historyByMonth = new Map<string, CompletionHistoryMonth>();
 
@@ -155,8 +158,8 @@ export function projectPublicLearnerProfile(
     avatarUrl: safePublicAvatarUrl(user.image),
     memberSince: user.createdAt ? monthLabel(user.createdAt) : null,
     learning: {
-      completedCount,
-      activeMonthCount: history.length,
+      completedCount: totals?.completedCount ?? completions.length,
+      activeMonthCount: totals?.activeMonthCount ?? history.length,
       history,
     },
   };

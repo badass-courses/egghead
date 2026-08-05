@@ -7,10 +7,13 @@ import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
 
 import { normalizeRequestCountry } from "../../access/evaluate";
+import { isEmailAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { getPrivateAccountProfile } from "../../profile/data";
+import { gravatarUrlForEmail } from "../../profile/gravatar";
 import { updateProfileName } from "./actions";
 import { GithubAccountControl } from "./github-account-control";
+import { ProfileAvatar } from "./profile-avatar";
 import { ShareProfileButton } from "./share-profile-button";
 
 export const metadata: Metadata = {
@@ -93,6 +96,7 @@ async function ProfileContent({
       actorUserId: currentUser.id,
       profileUserId: currentUser.id,
       requestCountry,
+      emailAuthConfigured: isEmailAuthConfigured(),
     }),
     searchParams,
   ]);
@@ -115,9 +119,11 @@ async function ProfileContent({
         <header className="breakout border-b border-border-strong pb-8 sm:pb-10">
           <div className="flex flex-col gap-7 sm:flex-row sm:items-end sm:justify-between">
             <div className="flex min-w-0 items-center gap-4 sm:gap-5">
-              <div className="grid size-16 shrink-0 place-items-center rounded-2xl border border-border-strong bg-navy-grad text-2xl font-black text-cream shadow-btn-navy sm:size-20 sm:text-3xl">
-                {initialFor(profile.name)}
-              </div>
+              <ProfileAvatar
+                alt={`${name}'s profile picture`}
+                fallback={initialFor(profile.name)}
+                src={gravatarUrlForEmail(profile.email, 160)}
+              />
               <div className="min-w-0">
                 <p className="eyebrow mb-2">Account</p>
                 <h1 className="truncate text-4xl font-black tracking-tight">{name}</h1>

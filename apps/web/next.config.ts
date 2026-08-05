@@ -5,6 +5,15 @@ const nextConfig: NextConfig = {
   experimental: {
     isolatedDevBuild: false,
   },
+  images: {
+    remotePatterns: [
+      {
+        hostname: "www.gravatar.com",
+        pathname: "/avatar/**",
+        protocol: "https",
+      },
+    ],
+  },
   transpilePackages: ["@egghead/ui"],
 };
 

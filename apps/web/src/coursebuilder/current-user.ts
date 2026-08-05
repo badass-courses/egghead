@@ -59,6 +59,18 @@ export async function getCurrentUser() {
   return session?.user ?? null;
 }
 
+export async function getCurrentUserWithAccess() {
+  const sessionUser = await getCurrentUser();
+  if (!sessionUser?.id) return null;
+
+  const access = await evaluateContentAccessForUser({ userId: sessionUser.id });
+
+  return {
+    displayName: sessionUser.name?.trim() || "Account",
+    hasProSubscription: access.granted,
+  };
+}
+
 export async function getCurrentUserFromRequest(
   request: Request,
   context: CurrentUserContext = {},

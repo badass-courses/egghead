@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import { isEmailAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { profileNameSchema } from "../../profile/contracts";
 import { updatePrivateProfileName } from "../../profile/data";
@@ -43,6 +44,7 @@ export async function disconnectGithubAccount(): Promise<GithubDisconnectActionR
     const result = await disconnectPrivateGithubAccount({
       actorUserId: currentUser.id,
       profileUserId: currentUser.id,
+      emailSignInAvailable: isEmailAuthConfigured() && Boolean(currentUser.email?.trim()),
     });
 
     if (result.status === "disconnected") {

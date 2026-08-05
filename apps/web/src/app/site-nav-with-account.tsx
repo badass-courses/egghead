@@ -1,8 +1,13 @@
-import { getCurrentUser } from "../coursebuilder/current-user";
+import { getCurrentUserWithAccess } from "../coursebuilder/current-user";
 import { SiteNav } from "./site-nav";
 
 export async function SiteNavWithAccount() {
-  const currentUser = await getCurrentUser();
+  const account = await getCurrentUserWithAccess();
 
-  return <SiteNav accountState={currentUser ? "authenticated" : "anonymous"} />;
+  return (
+    <SiteNav
+      accountState={account ? "authenticated" : "anonymous"}
+      {...(account ? { account } : {})}
+    />
+  );
 }

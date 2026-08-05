@@ -60,6 +60,7 @@ function firstGithubAccountIndex(accounts: readonly { provider: string }[]) {
 
 export function summarizeGithubConnection(
   accounts: readonly { provider: string }[],
+  emailSignInAvailable: boolean,
 ): GithubConnectionState {
   const githubIndex = firstGithubAccountIndex(accounts);
   if (githubIndex === -1) {
@@ -70,9 +71,9 @@ export function summarizeGithubConnection(
     };
   }
 
-  const hasRemainingSignInMethod = accounts.some(
-    (account, index) => index !== githubIndex && isEnabledSignInAccount(account),
-  );
+  const hasRemainingSignInMethod =
+    emailSignInAvailable ||
+    accounts.some((account, index) => index !== githubIndex && isEnabledSignInAccount(account));
 
   return {
     connected: true,
@@ -85,6 +86,7 @@ export function planOwnerGithubDisconnect(input: {
   actorUserId: string | null;
   profileUserId: string;
   accounts: readonly AuthAccountReference[];
+  emailSignInAvailable: boolean;
 }): GithubDisconnectPlan {
   const userId = requireProfileOwner(input.actorUserId, input.profileUserId);
   const ownedAccounts = input.accounts
@@ -100,9 +102,11 @@ export function planOwnerGithubDisconnect(input: {
   const account = ownedAccounts[githubIndex];
   if (!account) return { status: "missing" };
 
-  const hasRemainingSignInMethod = ownedAccounts.some(
-    (candidate, index) => index !== githubIndex && isEnabledSignInAccount(candidate),
-  );
+  const hasRemainingSignInMethod =
+    input.emailSignInAvailable ||
+    ownedAccounts.some(
+      (candidate, index) => index !== githubIndex && isEnabledSignInAccount(candidate),
+    );
   if (!hasRemainingSignInMethod) return { status: "last-sign-in-method" };
 
   return {
@@ -120,6 +124,7 @@ export function githubDisconnectResultForAffectedRows(affectedRows: number) {
 export async function disconnectPrivateGithubAccount(input: {
   actorUserId: string | null;
   profileUserId: string;
+  emailSignInAvailable: boolean;
 }): Promise<GithubDisconnectResult> {
   const userId = requireProfileOwner(input.actorUserId, input.profileUserId);
   const connection = await createLocalMysqlConnection();
@@ -134,6 +139,7 @@ export async function disconnectPrivateGithubAccount(input: {
       actorUserId: userId,
       profileUserId: userId,
       accounts: accountRows,
+      emailSignInAvailable: input.emailSignInAvailable,
     });
 
     if (plan.status !== "ready") {

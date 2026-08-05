@@ -51,8 +51,9 @@ type CompletionRow = RowDataPacket & {
   fields: unknown;
 };
 
-type CompletionCountRow = RowDataPacket & {
+type CompletionStatsRow = RowDataPacket & {
   completedCount: number | string;
+  activeMonthCount: number | string;
 };
 
 type CourseAccessRow = RowDataPacket & {
@@ -110,6 +111,28 @@ export const PRIVATE_PROFILE_ACCOUNTS_SQL = `
   FROM egghead_Account account
   WHERE account.userId = ?
   ORDER BY account.provider ASC
+`;
+
+const PROFILE_COMPLETION_FAMILIES = [
+  "course",
+  "lesson",
+  ...STANDALONE_PUBLIC_CONTENT_FAMILIES,
+] as const;
+const PROFILE_COMPLETION_FAMILY_SQL = PROFILE_COMPLETION_FAMILIES.map(
+  (family) => `'${family}'`,
+).join(", ");
+
+export const ROUTABLE_PROFILE_COMPLETION_SQL = `
+  AND JSON_TYPE(JSON_EXTRACT(resource.fields, '$.slug')) = 'STRING'
+  AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')))) NOT IN ('', 'null')
+  AND CAST(
+    CASE
+      WHEN JSON_TYPE(JSON_EXTRACT(resource.fields, '$.postType')) = 'STRING'
+        AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')))) NOT IN ('', 'null')
+      THEN TRIM(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')))
+      ELSE resource.type
+    END AS BINARY
+  ) IN (${PROFILE_COMPLETION_FAMILY_SQL})
 `;
 
 function isPublicContentFamily(value: string): value is PublicContentFamily {
@@ -181,6 +204,7 @@ async function readPublishedCompletions(userId: string, limit: number) {
         WHERE progress.userId = ?
           AND progress.completedAt IS NOT NULL
           ${publishedResourceSql("resource")}
+          ${ROUTABLE_PROFILE_COMPLETION_SQL}
         ORDER BY progress.completedAt DESC, progress.resourceId ASC
         LIMIT ${safeLimit}
       `,
@@ -195,13 +219,15 @@ async function readPublishedCompletions(userId: string, limit: number) {
   }
 }
 
-async function countPublishedCompletions(userId: string) {
+async function readPublishedCompletionStats(userId: string) {
   const connection = await createLocalMysqlConnection();
 
   try {
-    const [rows] = await connection.execute<CompletionCountRow[]>(
+    const [rows] = await connection.execute<CompletionStatsRow[]>(
       `
-        SELECT COUNT(*) AS completedCount
+        SELECT
+          COUNT(*) AS completedCount,
+          COUNT(DISTINCT DATE_FORMAT(progress.completedAt, '%Y-%m')) AS activeMonthCount
         FROM egghead_ResourceProgress progress
         JOIN egghead_ContentResource resource
           ON resource.id = progress.resourceId
@@ -213,7 +239,10 @@ async function countPublishedCompletions(userId: string) {
       [userId],
     );
 
-    return Number(rows[0]?.completedCount ?? 0);
+    return {
+      completedCount: Number(rows[0]?.completedCount ?? 0),
+      activeMonthCount: Number(rows[0]?.activeMonthCount ?? 0),
+    };
   } finally {
     await connection.end();
   }
@@ -289,13 +318,14 @@ export async function getPrivateAccountProfile(input: {
   actorUserId: string | null;
   profileUserId: string;
   requestCountry: string | null;
+  emailAuthConfigured: boolean;
 }): Promise<PrivateAccountProfile | null> {
   const userId = requireProfileOwner(input.actorUserId, input.profileUserId);
-  const [identity, entitlementRows, recentlyCompleted, completedCount] = await Promise.all([
+  const [identity, entitlementRows, recentlyCompleted, completionStats] = await Promise.all([
     readIdentityWithAccounts(userId),
     readAccessEntitlementsForUser(userId),
     readPublishedCompletions(userId, 6),
-    countPublishedCompletions(userId),
+    readPublishedCompletionStats(userId),
   ]);
 
   if (!identity.user) return null;
@@ -313,14 +343,17 @@ export async function getPrivateAccountProfile(input: {
     email: identity.user.email,
     memberSince: identity.user.createdAt,
     publicProfilePath: `/profile/${encodeURIComponent(identity.user.id)}`,
-    githubConnection: summarizeGithubConnection(identity.accounts),
+    githubConnection: summarizeGithubConnection(
+      identity.accounts,
+      input.emailAuthConfigured && Boolean(identity.user.email.trim()),
+    ),
     learningAccess: {
       libraryWide: access.granted,
       courseSpecific,
       legacyProQuarantined: access.ignored.quarantineEntitlements > 0,
     },
     learning: {
-      completedCount,
+      completedCount: completionStats.completedCount,
       recentlyCompleted,
     },
   };
@@ -341,12 +374,12 @@ export async function getPublicLearnerProfile(
     const user = userRows[0];
     if (!user) return null;
 
-    const [completions, completedCount] = await Promise.all([
+    const [completions, completionStats] = await Promise.all([
       readPublishedCompletions(publicId, 100),
-      countPublishedCompletions(publicId),
+      readPublishedCompletionStats(publicId),
     ]);
 
-    return projectPublicLearnerProfile(user, completions, completedCount);
+    return projectPublicLearnerProfile(user, completions, completionStats);
   } finally {
     await connection.end();
   }

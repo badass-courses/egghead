@@ -9,6 +9,7 @@ import {
   PRIVATE_PROFILE_ACCOUNTS_SQL,
   OWNER_SCOPED_NAME_UPDATE_SQL,
   PUBLIC_PROFILE_USER_SQL,
+  ROUTABLE_PROFILE_COMPLETION_SQL,
 } from "../apps/web/src/profile/data";
 import {
   githubDisconnectResultForAffectedRows,
@@ -102,7 +103,10 @@ const ownerUpdate = ownerScopedNameUpdate({
   profileUserId: validPublicId,
   name: "  Ada Lovelace  ",
 });
-const publicProjection = projectPublicLearnerProfile(broadUserShape, completions, 10);
+const publicProjection = projectPublicLearnerProfile(broadUserShape, completions, {
+  completedCount: 10,
+  activeMonthCount: 7,
+});
 const emptyProjection = projectPublicLearnerProfile(
   {
     id: uuidPublicId,
@@ -116,6 +120,7 @@ const serializedProjection = JSON.stringify(publicProjection).toLowerCase();
 const publicQuery = PUBLIC_PROFILE_USER_SQL.toLowerCase();
 const updateQuery = OWNER_SCOPED_NAME_UPDATE_SQL.toLowerCase();
 const privateAccountsQuery = PRIVATE_PROFILE_ACCOUNTS_SQL.toLowerCase();
+const routableCompletionQuery = ROUTABLE_PROFILE_COMPLETION_SQL.toLowerCase();
 const disconnectReadQuery = OWNER_AUTH_ACCOUNTS_FOR_UPDATE_SQL.toLowerCase();
 const disconnectQuery = OWNER_SCOPED_GITHUB_DISCONNECT_SQL.toLowerCase();
 const ownerWithTwoGithubAccounts = [
@@ -134,6 +139,7 @@ const readyDisconnect = planOwnerGithubDisconnect({
   actorUserId: validPublicId,
   profileUserId: validPublicId,
   accounts: ownerWithTwoGithubAccounts,
+  emailSignInAvailable: false,
 });
 
 const checks = [
@@ -182,11 +188,27 @@ const checks = [
   assertNotIncludes("public user lookup does not select flexible fields", publicQuery, "fields"),
   assertIncludes("public lookup selects the explicit image field", publicQuery, "user.image"),
   assertIncludes("profile update scopes the row in SQL", updateQuery, "where id = ?"),
+  assertIncludes(
+    "completion history filters missing and non-string slugs before limiting rows",
+    routableCompletionQuery,
+    "json_type(json_extract(resource.fields, '$.slug')) = 'string'",
+  ),
+  assertIncludes(
+    "completion history rejects blank and null-like slugs before limiting rows",
+    routableCompletionQuery,
+    "not in ('', 'null')",
+  ),
+  assertIncludes(
+    "completion history filters unsupported content families before limiting rows",
+    routableCompletionQuery,
+    "end as binary",
+  ),
   expectThrow("GitHub disconnect rejects an anonymous actor", () =>
     planOwnerGithubDisconnect({
       actorUserId: null,
       profileUserId: validPublicId,
       accounts: ownerWithTwoGithubAccounts,
+      emailSignInAvailable: false,
     }),
   ),
   expectThrow("GitHub disconnect rejects a cross-user target", () =>
@@ -194,6 +216,7 @@ const checks = [
       actorUserId: validPublicId,
       profileUserId: "different_user_123",
       accounts: ownerWithTwoGithubAccounts,
+      emailSignInAvailable: false,
     }),
   ),
   assertDeepEqual(
@@ -208,6 +231,7 @@ const checks = [
           providerAccountId: "unsupported-google-account",
         },
       ],
+      emailSignInAvailable: false,
     }),
     { status: "missing" },
   ),
@@ -228,8 +252,32 @@ const checks = [
           providerAccountId: "not-enabled-in-egghead",
         },
       ],
+      emailSignInAvailable: false,
     }),
     { status: "last-sign-in-method" },
+  ),
+  assertDeepEqual(
+    "GitHub disconnect is enabled when email sign-in remains available",
+    planOwnerGithubDisconnect({
+      actorUserId: validPublicId,
+      profileUserId: validPublicId,
+      accounts: [
+        {
+          userId: validPublicId,
+          provider: "github",
+          providerAccountId: "only-github-account",
+        },
+      ],
+      emailSignInAvailable: true,
+    }),
+    {
+      status: "ready",
+      account: {
+        userId: validPublicId,
+        provider: "github",
+        providerAccountId: "only-github-account",
+      },
+    },
   ),
   assertDeepEqual(
     "GitHub disconnect chooses one exact owner account deterministically",
@@ -256,6 +304,7 @@ const checks = [
         },
         ...ownerWithTwoGithubAccounts,
       ],
+      emailSignInAvailable: false,
     }),
     readyDisconnect,
   ),
@@ -270,8 +319,17 @@ const checks = [
     { status: "conflict" },
   ),
   assertDeepEqual(
-    "connected account state is disallowed for the only GitHub sign-in",
-    summarizeGithubConnection([{ provider: "github" }]),
+    "connected account state allows GitHub disconnect when email sign-in is available",
+    summarizeGithubConnection([{ provider: "github" }], true),
+    {
+      connected: true,
+      disconnectAllowed: true,
+      blockedReason: null,
+    },
+  ),
+  assertDeepEqual(
+    "connected account state protects GitHub when email sign-in is unavailable",
+    summarizeGithubConnection([{ provider: "github" }], false),
     {
       connected: true,
       disconnectAllowed: false,
@@ -280,7 +338,7 @@ const checks = [
   ),
   assertDeepEqual(
     "connected account state allows removing one of two GitHub sign-ins",
-    summarizeGithubConnection([{ provider: "github" }, { provider: "github" }]),
+    summarizeGithubConnection([{ provider: "github" }, { provider: "github" }], false),
     {
       connected: true,
       disconnectAllowed: true,
@@ -289,7 +347,7 @@ const checks = [
   ),
   assertDeepEqual(
     "connected account state represents a missing GitHub account",
-    summarizeGithubConnection([]),
+    summarizeGithubConnection([], true),
     {
       connected: false,
       disconnectAllowed: false,
@@ -376,9 +434,9 @@ const checks = [
     10,
   ),
   assertEqual(
-    "active month count comes from the public completion history",
+    "active month count can exceed the months in truncated public history",
     publicProjection.learning.activeMonthCount,
-    2,
+    7,
   ),
   assertDeepEqual(
     "completion history is grouped newest month first",
