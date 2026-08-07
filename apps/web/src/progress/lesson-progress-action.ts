@@ -4,6 +4,7 @@ import { logger } from "@coursebuilder/core/utils/logger";
 
 import { getLessonById } from "../content/lesson";
 import { getCurrentUser } from "../coursebuilder/current-user";
+import { recordAnonymousLessonCompletion } from "./anonymous-lesson-progress";
 import { completeResourceForUser, uncompleteResourceForUser } from "./resource-progress";
 
 export type LessonProgressSource = "lesson_player_ended" | "lesson_progress_control";
@@ -15,7 +16,12 @@ export type CompleteLessonProgressResult =
       completedAt: string;
     }
   | {
-      status: "authentication_required" | "invalid_resource" | "failed";
+      status: "anonymous_completed";
+      resourceId: string;
+      completedAt: null;
+    }
+  | {
+      status: "anonymous_limit_reached" | "authentication_required" | "invalid_resource" | "failed";
       resourceId: string;
       completedAt: null;
     };
@@ -39,15 +45,6 @@ export async function completeLessonProgress(input: {
   const resourceId = typeof input?.resourceId === "string" ? input.resourceId : "";
   const source =
     input?.source === "lesson_player_ended" ? "lesson_player_ended" : "lesson_progress_control";
-  const user = await getCurrentUser();
-
-  if (!user?.id) {
-    return {
-      status: "authentication_required",
-      resourceId,
-      completedAt: null,
-    };
-  }
 
   if (resourceId.length === 0) {
     return {
@@ -58,12 +55,38 @@ export async function completeLessonProgress(input: {
   }
 
   try {
-    const lesson = await getLessonById(resourceId);
+    const [user, lesson] = await Promise.all([getCurrentUser(), getLessonById(resourceId)]);
 
     if (!lesson || lesson.id !== resourceId) {
       return {
         status: "invalid_resource",
         resourceId,
+        completedAt: null,
+      };
+    }
+
+    if (!user?.id) {
+      if (source !== "lesson_player_ended") {
+        return {
+          status: "authentication_required",
+          resourceId: lesson.id,
+          completedAt: null,
+        };
+      }
+
+      const anonymousCompletion = await recordAnonymousLessonCompletion(lesson.id);
+
+      if (anonymousCompletion.status === "limit_reached") {
+        return {
+          status: "anonymous_limit_reached",
+          resourceId: lesson.id,
+          completedAt: null,
+        };
+      }
+
+      return {
+        status: "anonymous_completed",
+        resourceId: lesson.id,
         completedAt: null,
       };
     }

@@ -1,9 +1,11 @@
 import type { NextAuthConfig } from "next-auth";
 import GithubProvider from "@auth/core/providers/github";
+import { logger } from "@coursebuilder/core/utils/logger";
 
 import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEggheadRuntime } from "../db/local-docker";
 import { getEnv } from "../env";
+import { claimAnonymousLessonCompletions } from "../progress/anonymous-lesson-progress";
 import { createPostmarkEmailProvider } from "./email-provider";
 
 export function isGithubAuthConfigured() {
@@ -52,6 +54,22 @@ function getAuthProviders(): NextAuthConfig["providers"] {
 export const authConfig = {
   adapter: getCourseBuilderAdapter(),
   providers: getAuthProviders(),
+  events: {
+    signIn: async ({ user }) => {
+      if (!user.id) return;
+
+      try {
+        await claimAnonymousLessonCompletions(user.id);
+      } catch (error) {
+        logger.error(
+          error instanceof Error
+            ? error
+            : new Error("Unknown anonymous lesson progress claim failure"),
+          { operation: "claimAnonymousLessonCompletions" },
+        );
+      }
+    },
+  },
   callbacks: {
     session: ({ session, user }) => {
       if (session.user && user.id) {

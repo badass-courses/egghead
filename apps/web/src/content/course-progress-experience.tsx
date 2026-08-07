@@ -33,7 +33,16 @@ export async function CourseLessonProgressExperience({
   const progressKey = `${course.id}:${progress.isAuthenticated}:${progress.initialCompletedLessonIds.join("|")}`;
 
   return (
-    <LessonProgressProvider key={progressKey} {...progress}>
+    <LessonProgressProvider
+      key={progressKey}
+      course={{
+        id: course.id,
+        slug: course.slug,
+        title: course.title,
+        lessonIds: course.lessons.map((item) => item.id),
+      }}
+      {...progress}
+    >
       <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-x-0 min-[960px]:gap-y-flow">
         <div className="egghead-lesson-player-cell min-w-0">
           <LessonPlayerExperience lesson={lesson} />

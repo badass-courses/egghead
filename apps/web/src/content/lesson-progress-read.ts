@@ -1,6 +1,7 @@
 import { logger } from "@coursebuilder/core/utils/logger";
 
 import { getCurrentUser } from "../coursebuilder/current-user";
+import { readAnonymousCompletedLessonIds } from "../progress/anonymous-lesson-progress";
 import { readCompletedResourceIdsForUser } from "../progress/resource-progress";
 
 export type LessonProgressSnapshot = {
@@ -14,8 +15,13 @@ export async function getLessonProgressSnapshot(
   const user = await getCurrentUser();
 
   if (!user?.id) {
+    const requestedResourceIds = new Set(resourceIds);
+    const anonymousCompletedLessonIds = await readAnonymousCompletedLessonIds();
+
     return {
-      initialCompletedLessonIds: [],
+      initialCompletedLessonIds: anonymousCompletedLessonIds.filter((resourceId) =>
+        requestedResourceIds.has(resourceId),
+      ),
       isAuthenticated: false,
     };
   }

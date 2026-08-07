@@ -223,6 +223,47 @@ export async function completeResourceForUser(input: {
   }
 }
 
+export async function completeResourcesForUser(input: {
+  userId: string;
+  resourceIds: readonly string[];
+  source: string;
+}) {
+  const resourceIds = [...new Set(input.resourceIds.filter(Boolean))];
+  if (resourceIds.length === 0) return { affectedRows: 0 };
+
+  const connection = await createLocalMysqlConnection();
+  const fields = JSON.stringify({
+    source: input.source,
+    localOnly: true,
+  });
+  const values = resourceIds
+    .map(
+      () =>
+        "(?, ?, CURRENT_TIMESTAMP(3), CAST(? AS JSON), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))",
+    )
+    .join(", ");
+  const parameters = resourceIds.flatMap((resourceId) => [input.userId, resourceId, fields]);
+
+  try {
+    const [result] = await connection.execute<ResultSetHeader>(
+      `
+        INSERT INTO egghead_ResourceProgress
+          (userId, resourceId, completedAt, fields, createdAt, updatedAt)
+        VALUES ${values}
+        ON DUPLICATE KEY UPDATE
+          completedAt = COALESCE(completedAt, VALUES(completedAt)),
+          fields = VALUES(fields),
+          updatedAt = CURRENT_TIMESTAMP(3)
+      `,
+      parameters,
+    );
+
+    return { affectedRows: result.affectedRows };
+  } finally {
+    await connection.end();
+  }
+}
+
 export async function uncompleteResourceForUser(input: {
   userId: string;
   resourceId: string;

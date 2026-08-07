@@ -11,7 +11,8 @@ import {
   ResourceListHeaderTitle,
 } from "@egghead/ui/resource-list";
 
-import { getCurrentUserFromRequest } from "../coursebuilder/current-user";
+import { getCurrentUser, getCurrentUserFromRequest } from "../coursebuilder/current-user";
+import { anonymousLessonAccess } from "../progress/anonymous-lesson-progress";
 import { LessonProgressProvider } from "../progress/lesson-progress-provider";
 import type { CourseForPage } from "./course";
 import { CourseCurriculum, courseDurationLabel } from "./course-lesson-list";
@@ -109,27 +110,42 @@ function LessonAccessFallback({ lesson }: { lesson: LessonForPage }) {
    share this cached lookup instead of fetching the user twice. */
 const resolveLessonAccess = cache(async (lesson: LessonForPage) => {
   const accessRequired = lessonRequiresAccess(lesson);
-  const currentUser = accessRequired
-    ? await getCurrentUserFromRequest(
-        new Request("http://egghead.local/lesson", { headers: await headers() }),
-        { legacyRailsPlaylistId: lesson.parentCourseLegacyRailsPlaylistId },
-      )
-    : null;
-  const accessGranted = !accessRequired || currentUser?.contentAccess?.granted === true;
 
-  return { accessGranted, accessRequired, currentUser };
+  if (accessRequired) {
+    const currentUser = await getCurrentUserFromRequest(
+      new Request("http://egghead.local/lesson", { headers: await headers() }),
+      { legacyRailsPlaylistId: lesson.parentCourseLegacyRailsPlaylistId },
+    );
+    const accessGranted = currentUser.contentAccess?.granted === true;
+
+    return {
+      accessGranted,
+      accessReason: currentUser.contentAccess?.reason ?? "denied",
+      accessRequired,
+      anonymousLimitReached: false,
+    };
+  }
+
+  const sessionUser = await getCurrentUser();
+  const anonymousAccess = sessionUser?.id ? null : await anonymousLessonAccess(lesson.id);
+  const accessGranted = Boolean(sessionUser?.id) || anonymousAccess?.canWatch !== false;
+
+  return {
+    accessGranted,
+    accessReason: anonymousAccess?.canWatch === false ? "anonymous_lesson_limit" : "free",
+    accessRequired,
+    anonymousLimitReached: anonymousAccess?.canWatch === false,
+  };
 });
 
 export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage }) {
-  const { accessGranted, accessRequired } = await resolveLessonAccess(lesson);
+  const { accessGranted, accessRequired, anonymousLimitReached } =
+    await resolveLessonAccess(lesson);
   const videoUrl = lesson.videoHlsUrl ?? lesson.videoDashUrl;
   const playbackId = lesson.videoMuxPlaybackId;
-  const canWatch = Boolean((playbackId || videoUrl) && accessGranted);
-  const videoState = canWatch
-    ? "allowed"
-    : playbackId || (videoUrl && accessRequired)
-      ? "gated"
-      : "unavailable";
+  const hasVideo = Boolean(playbackId || videoUrl);
+  const canWatch = hasVideo && accessGranted;
+  const videoState = canWatch ? "allowed" : hasVideo ? "gated" : "unavailable";
 
   return (
     <>
@@ -157,10 +173,21 @@ export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage
         >
           {videoState === "gated" ? (
             <div className="egghead-video-placeholder-content">
-              <p className="egghead-eyebrow">Access required</p>
-              <p>This lesson is available with an active egghead membership.</p>
-              <Link data-access-cta="login-or-subscribe" href="/login">
-                Sign in or subscribe
+              <p className="egghead-eyebrow">
+                {anonymousLimitReached ? "Keep your progress" : "Access required"}
+              </p>
+              <p>
+                {anonymousLimitReached
+                  ? "You've watched three lessons. Sign in to keep learning and save them to your account."
+                  : "This lesson is available with an active egghead membership."}
+              </p>
+              <Link
+                data-access-cta={
+                  anonymousLimitReached ? "anonymous-limit-login" : "login-or-subscribe"
+                }
+                href={`/login?${new URLSearchParams({ callbackUrl: lesson.canonicalPath }).toString()}`}
+              >
+                {anonymousLimitReached ? "Sign in to keep learning" : "Sign in or subscribe"}
               </Link>
             </div>
           ) : null}
@@ -171,14 +198,10 @@ export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage
 }
 
 export async function LessonFactsExperience({ lesson }: { lesson: LessonForPage }) {
-  const { accessRequired, currentUser } = await resolveLessonAccess(lesson);
+  const { accessReason, accessRequired } = await resolveLessonAccess(lesson);
 
   return (
-    <LessonFacts
-      accessReason={accessRequired ? (currentUser?.contentAccess?.reason ?? "denied") : "free"}
-      accessRequired={accessRequired}
-      lesson={lesson}
-    />
+    <LessonFacts accessReason={accessReason} accessRequired={accessRequired} lesson={lesson} />
   );
 }
 
