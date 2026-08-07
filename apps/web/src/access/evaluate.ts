@@ -42,7 +42,7 @@ export const ACCESS_ENTITLEMENT_ROWS_SQL = `
   ORDER BY entitlement.entitlementType ASC, entitlement.sourceType ASC
 `;
 
-type EntitlementRow = RowDataPacket & {
+export type AccessEntitlementRow = RowDataPacket & {
   entitlementType: string;
   sourceType: string;
   status: string | null;
@@ -60,6 +60,25 @@ export type AccessEvaluation = {
     quarantineEntitlements: number;
   };
 };
+
+export async function readAccessEntitlementsForUser(
+  userId: string,
+): Promise<AccessEntitlementRow[]> {
+  const connection = await createLocalMysqlConnection();
+
+  try {
+    const [rows] = await connection.execute<AccessEntitlementRow[]>(ACCESS_ENTITLEMENT_ROWS_SQL, [
+      userId,
+      AUTH_SUBSCRIPTION_SOURCE_TYPE,
+      userId,
+      userId,
+    ]);
+
+    return rows;
+  } finally {
+    await connection.end();
+  }
+}
 
 function sortedStrings(values: Iterable<string>): string[] {
   const result: string[] = [];
@@ -119,39 +138,38 @@ export function entitlementGrantsAccess(
   return normalizeRequestCountry(input.requestCountry) === restrictedToCountry;
 }
 
+export function evaluateAccessEntitlementRows(
+  rows: readonly AccessEntitlementRow[],
+  input: {
+    legacyRailsPlaylistId?: number | null;
+    requestCountry?: string | null;
+  },
+): AccessEvaluation {
+  const quarantineEntitlements = rows.filter(
+    (row) => row.entitlementType === QUARANTINE_ENTITLEMENT_TYPE,
+  ).length;
+  const grantRows = rows.filter((row) => entitlementGrantsAccess(row, input));
+  const entitlementTypes = sortedStrings(new Set(grantRows.map((row) => row.entitlementType)));
+  const sourceTypes = sortedStrings(new Set(grantRows.map((row) => row.sourceType)));
+  const granted = entitlementTypes.length > 0;
+
+  return {
+    granted,
+    reason: granted ? `granted:${entitlementTypes[0]}` : "denied:no_granting_entitlement",
+    entitlementTypes,
+    sourceTypes,
+    ignored: {
+      quarantineEntitlements,
+    },
+  };
+}
+
 export async function evaluateContentAccessForUser(input: {
   userId: string;
   legacyRailsPlaylistId?: number | null;
   requestCountry?: string | null;
 }): Promise<AccessEvaluation> {
-  const connection = await createLocalMysqlConnection();
+  const rows = await readAccessEntitlementsForUser(input.userId);
 
-  try {
-    const [rows] = await connection.execute<EntitlementRow[]>(ACCESS_ENTITLEMENT_ROWS_SQL, [
-      input.userId,
-      AUTH_SUBSCRIPTION_SOURCE_TYPE,
-      input.userId,
-      input.userId,
-    ]);
-
-    const quarantineEntitlements = rows.filter(
-      (row) => row.entitlementType === QUARANTINE_ENTITLEMENT_TYPE,
-    ).length;
-    const grantRows = rows.filter((row) => entitlementGrantsAccess(row, input));
-    const entitlementTypes = sortedStrings(new Set(grantRows.map((row) => row.entitlementType)));
-    const sourceTypes = sortedStrings(new Set(grantRows.map((row) => row.sourceType)));
-    const granted = entitlementTypes.length > 0;
-
-    return {
-      granted,
-      reason: granted ? `granted:${entitlementTypes[0]}` : "denied:no_granting_entitlement",
-      entitlementTypes,
-      sourceTypes,
-      ignored: {
-        quarantineEntitlements,
-      },
-    };
-  } finally {
-    await connection.end();
-  }
+  return evaluateAccessEntitlementRows(rows, input);
 }

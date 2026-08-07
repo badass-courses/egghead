@@ -8,6 +8,8 @@ type EnvKey =
   | "GITHUB_CLIENT_ID"
   | "GITHUB_CLIENT_SECRET"
   | "NEXT_PUBLIC_APP_URL"
+  | "POSTMARK_API_KEY"
+  | "POSTMARK_FROM_EMAIL"
   | "URL";
 
 export function getEnv(name: EnvKey) {
