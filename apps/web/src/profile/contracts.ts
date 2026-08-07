@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import type { PublicContentFamily } from "../content/routes";
+
 const PUBLIC_PROFILE_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 const PUBLIC_AVATAR_HOSTS = new Set([
   "avatars.githubusercontent.com",
@@ -14,17 +16,29 @@ export const profileNameSchema = z
   .min(1, "Add a display name.")
   .max(80, "Keep your display name to 80 characters or fewer.");
 
-export type ProfileCompletion = {
-  resourceId: string;
+export type ProfileCompletionFamily = "course" | "lesson" | PublicContentFamily;
+export type ProfileCompletionFilter = "course" | "lesson";
+
+export type ProfileCompletionCourse = {
   title: string;
   href: string;
+};
+
+export type ProfileCompletion = {
+  resourceId: string;
+  family: ProfileCompletionFamily;
+  title: string;
+  href: string;
+  course: ProfileCompletionCourse | null;
   completedAt: Date;
 };
 
 export type PublicCompletion = {
   resourceId: string;
+  family: ProfileCompletionFamily;
   title: string;
   href: string;
+  course: ProfileCompletionCourse | null;
   completedAt: string;
 };
 
@@ -40,7 +54,8 @@ export type PublicLearnerProfile = {
   avatarUrl: string | null;
   memberSince: string | null;
   learning: {
-    completedCount: number;
+    lessonCount: number;
+    courseCount: number;
     activeMonthCount: number;
     history: CompletionHistoryMonth[];
   };
@@ -121,7 +136,8 @@ export function projectPublicLearnerProfile(
   },
   completions: readonly ProfileCompletion[],
   totals?: {
-    completedCount: number;
+    lessonCount: number;
+    courseCount: number;
     activeMonthCount: number;
   },
 ): PublicLearnerProfile {
@@ -131,8 +147,10 @@ export function projectPublicLearnerProfile(
     const key = monthKey(completion.completedAt);
     const publicCompletion = {
       resourceId: completion.resourceId,
+      family: completion.family,
       title: completion.title,
       href: completion.href,
+      course: completion.course,
       completedAt: completion.completedAt.toISOString(),
     };
     const existing = historyByMonth.get(key);
@@ -158,7 +176,12 @@ export function projectPublicLearnerProfile(
     avatarUrl: safePublicAvatarUrl(user.image),
     memberSince: user.createdAt ? monthLabel(user.createdAt) : null,
     learning: {
-      completedCount: totals?.completedCount ?? completions.length,
+      lessonCount:
+        totals?.lessonCount ??
+        completions.filter((completion) => completion.family === "lesson").length,
+      courseCount:
+        totals?.courseCount ??
+        completions.filter((completion) => completion.family === "course").length,
       activeMonthCount: totals?.activeMonthCount ?? history.length,
       history,
     },

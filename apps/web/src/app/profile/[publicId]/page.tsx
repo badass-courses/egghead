@@ -5,6 +5,10 @@ import { cache, Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 
 import { getPublicLearnerProfile, getPublicProfileGravatarUrl } from "../../../profile/data";
+import {
+  CompletionFilterControls,
+  completionFilterFromSearchParam,
+} from "../completion-filter-controls";
 import { ProfileAvatar } from "../profile-avatar";
 import { ShareProfileButton } from "../share-profile-button";
 
@@ -34,7 +38,9 @@ export async function generateMetadata({
   if (!profile) return { title: "Learner not found | egghead" };
 
   const title = `${profile.displayName}'s learning profile | egghead`;
-  const description = `${profile.learning.completedCount} published egghead completions.`;
+  const lessonLabel = profile.learning.lessonCount === 1 ? "lesson" : "lessons";
+  const courseLabel = profile.learning.courseCount === 1 ? "course" : "courses";
+  const description = `${profile.learning.lessonCount} egghead ${lessonLabel} and ${profile.learning.courseCount} ${courseLabel} completed.`;
   const canonicalPath = `/profile/${encodeURIComponent(profile.publicId)}`;
 
   return {
@@ -78,21 +84,45 @@ function PublicProfileFallback() {
   );
 }
 
-export default function PublicProfilePage({ params }: { params: Promise<{ publicId: string }> }) {
+export default function PublicProfilePage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ publicId: string }>;
+  searchParams: Promise<{ completion?: string }>;
+}) {
   return (
     <Suspense fallback={<PublicProfileFallback />}>
-      <PublicProfileContent params={params} />
+      <PublicProfileContent params={params} searchParams={searchParams} />
     </Suspense>
   );
 }
 
-async function PublicProfileContent({ params }: { params: Promise<{ publicId: string }> }) {
-  const { publicId } = await params;
+async function PublicProfileContent({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ publicId: string }>;
+  searchParams: Promise<{ completion?: string }>;
+}) {
+  const [{ publicId }, query] = await Promise.all([params, searchParams]);
   const profile = await loadPublicProfile(publicId);
   if (!profile) notFound();
 
   const avatarUrl = profile.avatarUrl ?? (await getPublicProfileGravatarUrl(profile.publicId));
   const publicPath = `/profile/${encodeURIComponent(profile.publicId)}`;
+  const completionFilter = completionFilterFromSearchParam(query.completion);
+  const filteredHistory =
+    completionFilter === "all"
+      ? profile.learning.history
+      : profile.learning.history
+          .map((month) => ({
+            ...month,
+            completions: month.completions.filter(
+              (completion) => completion.family === completionFilter,
+            ),
+          }))
+          .filter((month) => month.completions.length > 0);
 
   return (
     <main>
@@ -125,13 +155,21 @@ async function PublicProfileContent({ params }: { params: Promise<{ publicId: st
               <p className="max-w-md text-sm text-muted-foreground">
                 This public profile shows a name, membership date, and published learning activity.
               </p>
-              <dl className="grid grid-cols-2 gap-3">
+              <dl className="grid grid-cols-3 gap-3">
                 <div className="rounded-xl bg-well px-4 py-3 shadow-well">
                   <dd className="text-xl font-black tabular-nums">
-                    {profile.learning.completedCount}
+                    {profile.learning.lessonCount}
                   </dd>
                   <dt className="mt-0.5 text-xs font-extrabold text-muted-foreground">
-                    Published {profile.learning.completedCount === 1 ? "completion" : "completions"}
+                    {profile.learning.lessonCount === 1 ? "Lesson" : "Lessons"}
+                  </dt>
+                </div>
+                <div className="rounded-xl bg-well px-4 py-3 shadow-well">
+                  <dd className="text-xl font-black tabular-nums">
+                    {profile.learning.courseCount}
+                  </dd>
+                  <dt className="mt-0.5 text-xs font-extrabold text-muted-foreground">
+                    {profile.learning.courseCount === 1 ? "Course" : "Courses"}
                   </dt>
                 </div>
                 <div className="rounded-xl bg-well px-4 py-3 shadow-well">
@@ -171,9 +209,13 @@ async function PublicProfileContent({ params }: { params: Promise<{ publicId: st
               ) : null}
             </div>
 
-            {profile.learning.history.length > 0 ? (
+            {profile.learning.lessonCount + profile.learning.courseCount > 0 ? (
+              <CompletionFilterControls activeFilter={completionFilter} basePath={publicPath} />
+            ) : null}
+
+            {filteredHistory.length > 0 ? (
               <div className="grid gap-7">
-                {profile.learning.history.map((month) => (
+                {filteredHistory.map((month) => (
                   <section key={month.key}>
                     <h3 className="text-sm font-extrabold uppercase tracking-[0.08em] text-muted-foreground">
                       {month.label}
@@ -184,12 +226,32 @@ async function PublicProfileContent({ params }: { params: Promise<{ publicId: st
                           className="grid gap-1 rounded-xl border border-border-strong bg-well px-4 py-3 shadow-well sm:grid-cols-[minmax(0,1fr)_auto] sm:items-baseline sm:gap-6"
                           key={`${completion.resourceId}:${completion.completedAt}`}
                         >
-                          <Link
-                            className="font-extrabold underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
-                            href={completion.href}
-                          >
-                            {completion.title}
-                          </Link>
+                          <div className="min-w-0">
+                            <Link
+                              className="font-extrabold underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
+                              href={completion.href}
+                            >
+                              {completion.title}
+                            </Link>
+                            {completion.family === "lesson" ? (
+                              <p className="mt-1 text-xs font-bold text-muted-foreground">
+                                Lesson
+                                {completion.course ? (
+                                  <>
+                                    {" in "}
+                                    <Link
+                                      className="underline decoration-border-strong underline-offset-4 hover:text-foreground hover:decoration-foreground"
+                                      href={completion.course.href}
+                                    >
+                                      {completion.course.title}
+                                    </Link>
+                                  </>
+                                ) : null}
+                              </p>
+                            ) : completion.family === "course" ? (
+                              <p className="mt-1 text-xs font-bold text-muted-foreground">Course</p>
+                            ) : null}
+                          </div>
                           <time
                             className="text-xs font-bold text-muted-foreground"
                             dateTime={completion.completedAt}
@@ -204,9 +266,15 @@ async function PublicProfileContent({ params }: { params: Promise<{ publicId: st
               </div>
             ) : (
               <div className="rounded-xl border border-dashed border-border-strong bg-well/50 p-5 sm:p-6">
-                <p className="text-lg font-black">No published completions yet</p>
+                <p className="text-lg font-black">
+                  {completionFilter === "all"
+                    ? "No published completions yet"
+                    : `No recent ${completionFilter} completions`}
+                </p>
                 <p className="mt-1 max-w-lg text-sm text-muted-foreground">
-                  Completed egghead lessons and courses will appear here in chronological order.
+                  {completionFilter === "all"
+                    ? "Completed egghead lessons and courses will appear here in chronological order."
+                    : `Published ${completionFilter} completions will appear here in chronological order.`}
                 </p>
                 <Link
                   className="mt-5 inline-flex rounded-lg border border-border-strong bg-surface-grad px-4 py-2 text-sm font-extrabold text-foreground shadow-btn-ghost"

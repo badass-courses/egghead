@@ -12,6 +12,10 @@ import { getCurrentUser } from "../../coursebuilder/current-user";
 import { getPrivateAccountProfile } from "../../profile/data";
 import { gravatarUrlForEmail } from "../../profile/gravatar";
 import { updateProfileName } from "./actions";
+import {
+  CompletionFilterControls,
+  completionFilterFromSearchParam,
+} from "./completion-filter-controls";
 import { GithubAccountControl } from "./github-account-control";
 import { ProfileAvatar } from "./profile-avatar";
 import { ShareProfileButton } from "./share-profile-button";
@@ -70,10 +74,16 @@ function ProfileFallback() {
   );
 }
 
+type ProfileSearchParams = {
+  completion?: string;
+  error?: string;
+  updated?: string;
+};
+
 export default function ProfilePage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; updated?: string }>;
+  searchParams: Promise<ProfileSearchParams>;
 }) {
   return (
     <Suspense fallback={<ProfileFallback />}>
@@ -82,29 +92,24 @@ export default function ProfilePage({
   );
 }
 
-async function ProfileContent({
-  searchParams,
-}: {
-  searchParams: Promise<{ error?: string; updated?: string }>;
-}) {
+async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileSearchParams> }) {
   const currentUser = await getCurrentUser();
   if (!currentUser?.id) redirect("/login?callbackUrl=%2Fprofile");
 
-  const requestHeaders = await headers();
+  const [requestHeaders, notice] = await Promise.all([headers(), searchParams]);
+  const completionFilter = completionFilterFromSearchParam(notice.completion);
   const requestCountry = normalizeRequestCountry(
     requestHeaders.get("x-vercel-ip-country") ??
       requestHeaders.get("cf-ipcountry") ??
       requestHeaders.get("x-country"),
   );
-  const [profile, notice] = await Promise.all([
-    getPrivateAccountProfile({
-      actorUserId: currentUser.id,
-      profileUserId: currentUser.id,
-      requestCountry,
-      emailAuthConfigured: isEmailAuthConfigured(),
-    }),
-    searchParams,
-  ]);
+  const profile = await getPrivateAccountProfile({
+    actorUserId: currentUser.id,
+    profileUserId: currentUser.id,
+    requestCountry,
+    emailAuthConfigured: isEmailAuthConfigured(),
+    ...(completionFilter === "all" ? {} : { recentCompletionFamily: completionFilter }),
+  });
 
   if (!profile) notFound();
 
@@ -236,17 +241,27 @@ async function ProfileContent({
                     Learning progress
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Your published completions and included courses.
+                    Your completed lessons and courses, plus included courses.
                   </p>
                 </div>
-                <div className="rounded-xl bg-well px-4 py-2 text-center shadow-well">
-                  <p className="text-xl font-black tabular-nums">
-                    {profile.learning.completedCount}
-                  </p>
-                  <p className="text-[0.7rem] font-extrabold uppercase tracking-[0.08em] text-muted-foreground">
-                    {profile.learning.completedCount === 1 ? "completion" : "completions"}
-                  </p>
-                </div>
+                <dl className="grid grid-cols-2 gap-2">
+                  <div className="min-w-24 rounded-xl bg-well px-4 py-2 text-center shadow-well">
+                    <dd className="text-xl font-black tabular-nums">
+                      {profile.learning.lessonCount}
+                    </dd>
+                    <dt className="text-xs font-extrabold text-muted-foreground">
+                      {profile.learning.lessonCount === 1 ? "Lesson" : "Lessons"}
+                    </dt>
+                  </div>
+                  <div className="min-w-24 rounded-xl bg-well px-4 py-2 text-center shadow-well">
+                    <dd className="text-xl font-black tabular-nums">
+                      {profile.learning.courseCount}
+                    </dd>
+                    <dt className="text-xs font-extrabold text-muted-foreground">
+                      {profile.learning.courseCount === 1 ? "Course" : "Courses"}
+                    </dt>
+                  </div>
+                </dl>
               </div>
 
               {hasIncludedCourses ? (
@@ -280,6 +295,11 @@ async function ProfileContent({
                     Browse courses
                   </Link>
                 </div>
+                {profile.learning.lessonCount + profile.learning.courseCount > 0 ? (
+                  <div className="mt-3">
+                    <CompletionFilterControls activeFilter={completionFilter} basePath="/profile" />
+                  </div>
+                ) : null}
                 {profile.learning.recentlyCompleted.length > 0 ? (
                   <ol className="mt-3 grid gap-2">
                     {profile.learning.recentlyCompleted.map((completion) => (
@@ -287,12 +307,32 @@ async function ProfileContent({
                         className="grid gap-1 rounded-xl border border-border-strong bg-well px-4 py-3 shadow-well sm:grid-cols-[minmax(0,1fr)_auto] sm:items-baseline sm:gap-6"
                         key={`${completion.resourceId}:${completion.completedAt.toISOString()}`}
                       >
-                        <Link
-                          className="font-extrabold underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
-                          href={completion.href}
-                        >
-                          {completion.title}
-                        </Link>
+                        <div className="min-w-0">
+                          <Link
+                            className="font-extrabold underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
+                            href={completion.href}
+                          >
+                            {completion.title}
+                          </Link>
+                          {completion.family === "lesson" ? (
+                            <p className="mt-1 text-xs font-bold text-muted-foreground">
+                              Lesson
+                              {completion.course ? (
+                                <>
+                                  {" in "}
+                                  <Link
+                                    className="underline decoration-border-strong underline-offset-4 hover:text-foreground hover:decoration-foreground"
+                                    href={completion.course.href}
+                                  >
+                                    {completion.course.title}
+                                  </Link>
+                                </>
+                              ) : null}
+                            </p>
+                          ) : completion.family === "course" ? (
+                            <p className="mt-1 text-xs font-bold text-muted-foreground">Course</p>
+                          ) : null}
+                        </div>
                         <time
                           className="text-xs font-bold text-muted-foreground"
                           dateTime={completion.completedAt.toISOString()}
@@ -304,10 +344,15 @@ async function ProfileContent({
                   </ol>
                 ) : (
                   <div className="mt-3 rounded-xl border border-dashed border-border-strong bg-well/50 p-5 sm:p-6">
-                    <p className="font-extrabold">No published completions yet</p>
+                    <p className="font-extrabold">
+                      {completionFilter === "all"
+                        ? "No published completions yet"
+                        : `No recent ${completionFilter} completions`}
+                    </p>
                     <p className="mt-1 max-w-lg text-sm text-muted-foreground">
-                      Finish a published resource and it will appear here and on your public
-                      profile.
+                      {completionFilter === "all"
+                        ? "Finish a published resource and it will appear here and on your public profile."
+                        : `Complete a published ${completionFilter} and it will appear here.`}
                     </p>
                   </div>
                 )}
