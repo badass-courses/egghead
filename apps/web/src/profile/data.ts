@@ -22,6 +22,7 @@ import {
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { gravatarUrlForEmail } from "./gravatar";
 import {
+  currentLearningStreakDays,
   ownerScopedNameUpdate,
   parsePublicProfileId,
   projectPublicLearnerProfile,
@@ -68,6 +69,14 @@ type CompletionStatsRow = RowDataPacket & {
   activeMonthCount: number | string;
 };
 
+type CompletionCountRow = RowDataPacket & {
+  totalCount: number | string;
+};
+
+type CompletionDayRow = RowDataPacket & {
+  completionDay: string;
+};
+
 type CourseAccessRow = RowDataPacket & {
   id: string;
   fields: unknown;
@@ -96,6 +105,25 @@ export type PrivateAccountProfile = {
     courseCount: number;
     recentlyCompleted: ProfileCompletion[];
   };
+};
+
+export type PrivateLearningProgress = {
+  completions: ProfileCompletion[];
+  lessonCount: number;
+  courseCount: number;
+  activeMonthCount: number;
+  currentStreakDays: number;
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+export type PrivateLearningProgressQuery = {
+  completionFamily?: ProfileCompletionFilter;
+  search?: string;
+  order: "newest" | "oldest";
+  page: number;
 };
 
 export const PRIVATE_PROFILE_USER_SQL = `
@@ -174,6 +202,19 @@ export const PUBLISHED_COMPLETION_STATS_SQL = `
   WHERE progress.userId = ?
     AND progress.completedAt IS NOT NULL
     ${publishedResourceSql("resource")}
+`;
+
+export const PUBLISHED_LEARNING_DAYS_SQL = `
+  SELECT DISTINCT DATE_FORMAT(progress.completedAt, '%Y-%m-%d') AS completionDay
+  FROM egghead_ResourceProgress progress
+  JOIN egghead_ContentResource resource
+    ON resource.id = progress.resourceId
+   AND resource.deletedAt IS NULL
+  WHERE progress.userId = ?
+    AND progress.completedAt IS NOT NULL
+    AND ${PROFILE_RESOURCE_FAMILY_SQL} IN (CAST('lesson' AS BINARY), CAST('course' AS BINARY))
+    ${publishedResourceSql("resource")}
+  ORDER BY completionDay DESC
 `;
 
 function isPublicContentFamily(value: string): value is PublicContentFamily {
@@ -312,6 +353,97 @@ async function readPublishedCompletionStats(userId: string) {
   }
 }
 
+async function readPublishedLearningDays(userId: string) {
+  const connection = await createLocalMysqlConnection();
+
+  try {
+    const [rows] = await connection.execute<CompletionDayRow[]>(PUBLISHED_LEARNING_DAYS_SQL, [
+      userId,
+    ]);
+    return rows.map((row) => row.completionDay);
+  } finally {
+    await connection.end();
+  }
+}
+
+async function readPublishedCompletionPage(userId: string, input: PrivateLearningProgressQuery) {
+  const connection = await createLocalMysqlConnection();
+  const pageSize = 24;
+  const requestedPage = Math.max(1, Math.floor(input.page));
+  const search = input.search?.trim().slice(0, 100) ?? "";
+  const conditions: string[] = [];
+  const parameters: string[] = [userId];
+
+  if (input.completionFamily) {
+    conditions.push(`${PROFILE_RESOURCE_FAMILY_SQL} = CAST(? AS BINARY)`);
+    parameters.push(input.completionFamily);
+  }
+
+  if (search) {
+    conditions.push(`JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.title')) LIKE ?`);
+    parameters.push(`%${search}%`);
+  }
+
+  const filterSql = conditions.map((condition) => `AND ${condition}`).join("\n");
+  const orderSql = input.order === "oldest" ? "ASC" : "DESC";
+
+  try {
+    const [countRows] = await connection.execute<CompletionCountRow[]>(
+      `
+        SELECT COUNT(*) AS totalCount
+        FROM egghead_ResourceProgress progress
+        JOIN egghead_ContentResource resource
+          ON resource.id = progress.resourceId
+         AND resource.deletedAt IS NULL
+        WHERE progress.userId = ?
+          AND progress.completedAt IS NOT NULL
+          ${publishedResourceSql("resource")}
+          ${ROUTABLE_PROFILE_COMPLETION_SQL}
+          ${filterSql}
+      `,
+      parameters,
+    );
+    const totalCount = Number(countRows[0]?.totalCount ?? 0);
+    const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * pageSize;
+
+    const [rows] = await connection.execute<CompletionRow[]>(
+      `
+        SELECT
+          progress.resourceId,
+          progress.completedAt,
+          resource.type,
+          resource.fields
+        FROM egghead_ResourceProgress progress
+        JOIN egghead_ContentResource resource
+          ON resource.id = progress.resourceId
+         AND resource.deletedAt IS NULL
+        WHERE progress.userId = ?
+          AND progress.completedAt IS NOT NULL
+          ${publishedResourceSql("resource")}
+          ${ROUTABLE_PROFILE_COMPLETION_SQL}
+          ${filterSql}
+        ORDER BY progress.completedAt ${orderSql}, progress.resourceId ASC
+        LIMIT ${pageSize}
+        OFFSET ${offset}
+      `,
+      parameters,
+    );
+    const parentCourses = await parentCourseRouteContextsForLessonIds(
+      connection,
+      rows.map((row) => row.resourceId),
+    );
+    const completions = rows
+      .map((row) => completionFromRow(row, parentCourses.get(row.resourceId) ?? null))
+      .filter((completion): completion is ProfileCompletion => completion !== null);
+
+    return { completions, page, pageSize, totalCount, totalPages };
+  } finally {
+    await connection.end();
+  }
+}
+
 function accessiblePlaylistIds(
   rows: readonly AccessEntitlementRow[],
   requestCountry: string | null,
@@ -422,6 +554,27 @@ export async function getPrivateAccountProfile(input: {
       courseCount: completionStats.courseCount,
       recentlyCompleted,
     },
+  };
+}
+
+export async function getPrivateLearningProgress(input: {
+  actorUserId: string | null;
+  profileUserId: string;
+  query: PrivateLearningProgressQuery;
+}): Promise<PrivateLearningProgress> {
+  const userId = requireProfileOwner(input.actorUserId, input.profileUserId);
+  const [progress, stats, learningDays] = await Promise.all([
+    readPublishedCompletionPage(userId, input.query),
+    readPublishedCompletionStats(userId),
+    readPublishedLearningDays(userId),
+  ]);
+
+  return {
+    ...progress,
+    lessonCount: stats.lessonCount,
+    courseCount: stats.courseCount,
+    activeMonthCount: stats.activeMonthCount,
+    currentStreakDays: currentLearningStreakDays(learningDays),
   };
 }
 

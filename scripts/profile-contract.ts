@@ -1,4 +1,5 @@
 import {
+  currentLearningStreakDays,
   ownerScopedNameUpdate,
   parsePublicProfileId,
   projectPublicLearnerProfile,
@@ -9,6 +10,7 @@ import {
   PRIVATE_PROFILE_ACCOUNTS_SQL,
   OWNER_SCOPED_NAME_UPDATE_SQL,
   PUBLISHED_COMPLETION_STATS_SQL,
+  PUBLISHED_LEARNING_DAYS_SQL,
   PUBLIC_PROFILE_USER_SQL,
   ROUTABLE_PROFILE_COMPLETION_SQL,
 } from "../apps/web/src/profile/data";
@@ -131,6 +133,8 @@ const updateQuery = OWNER_SCOPED_NAME_UPDATE_SQL.toLowerCase();
 const privateAccountsQuery = PRIVATE_PROFILE_ACCOUNTS_SQL.toLowerCase();
 const routableCompletionQuery = ROUTABLE_PROFILE_COMPLETION_SQL.toLowerCase();
 const completionStatsQuery = PUBLISHED_COMPLETION_STATS_SQL.toLowerCase();
+const learningDaysQuery = PUBLISHED_LEARNING_DAYS_SQL.toLowerCase();
+const streakToday = new Date("2026-08-07T12:00:00.000Z");
 const disconnectReadQuery = OWNER_AUTH_ACCOUNTS_FOR_UPDATE_SQL.toLowerCase();
 const disconnectQuery = OWNER_SCOPED_GITHUB_DISCONNECT_SQL.toLowerCase();
 const ownerWithTwoGithubAccounts = [
@@ -222,6 +226,48 @@ const checks = [
     "completion stats track courses separately",
     completionStatsQuery,
     "as coursecount",
+  ),
+  assertIncludes(
+    "learning streak days are distinct calendar days",
+    learningDaysQuery,
+    "select distinct date_format",
+  ),
+  assertIncludes("learning streak includes lessons", learningDaysQuery, "cast('lesson' as binary)"),
+  assertIncludes("learning streak includes courses", learningDaysQuery, "cast('course' as binary)"),
+  assertEqual(
+    "empty learning activity has no streak",
+    currentLearningStreakDays([], streakToday),
+    0,
+  ),
+  assertEqual(
+    "one completion day starts a streak",
+    currentLearningStreakDays(["2026-08-07"], streakToday),
+    1,
+  ),
+  assertEqual(
+    "multiple completions on one day increment the streak once",
+    currentLearningStreakDays(["2026-08-07", "2026-08-07"], streakToday),
+    1,
+  ),
+  assertEqual(
+    "consecutive completion days extend the streak",
+    currentLearningStreakDays(["2026-08-07", "2026-08-06", "2026-08-05"], streakToday),
+    3,
+  ),
+  assertEqual(
+    "a streak completed yesterday remains current",
+    currentLearningStreakDays(["2026-08-06", "2026-08-05"], streakToday),
+    2,
+  ),
+  assertEqual(
+    "a break before yesterday resets the streak",
+    currentLearningStreakDays(["2026-08-05", "2026-08-04"], streakToday),
+    0,
+  ),
+  assertEqual(
+    "a break within the chain stops the streak count",
+    currentLearningStreakDays(["2026-08-07", "2026-08-05"], streakToday),
+    1,
   ),
   expectThrow("GitHub disconnect rejects an anonymous actor", () =>
     planOwnerGithubDisconnect({

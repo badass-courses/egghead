@@ -115,6 +115,50 @@ export function safePublicAvatarUrl(value: string | null): string | null {
   }
 }
 
+const UTC_DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function utcDayNumber(date: Date) {
+  return Math.floor(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / MILLISECONDS_PER_DAY,
+  );
+}
+
+function utcDayNumberFromIsoDate(value: string) {
+  if (!UTC_DAY_PATTERN.test(value)) return null;
+
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== value) {
+    return null;
+  }
+
+  return Math.floor(timestamp / MILLISECONDS_PER_DAY);
+}
+
+export function currentLearningStreakDays(completionDays: readonly string[], today = new Date()) {
+  const todayNumber = utcDayNumber(today);
+  const completedDayNumbers = new Set<number>();
+
+  for (const completionDay of completionDays) {
+    const dayNumber = utcDayNumberFromIsoDate(completionDay);
+    if (dayNumber !== null && dayNumber <= todayNumber) completedDayNumbers.add(dayNumber);
+  }
+
+  let cursor = completedDayNumbers.has(todayNumber)
+    ? todayNumber
+    : completedDayNumbers.has(todayNumber - 1)
+      ? todayNumber - 1
+      : null;
+  let streak = 0;
+
+  while (cursor !== null && completedDayNumbers.has(cursor)) {
+    streak += 1;
+    cursor -= 1;
+  }
+
+  return streak;
+}
+
 function monthKey(date: Date) {
   return `${String(date.getUTCFullYear())}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }

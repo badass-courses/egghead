@@ -244,24 +244,32 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                     Your completed lessons and courses, plus included courses.
                   </p>
                 </div>
-                <dl className="grid grid-cols-2 gap-2">
-                  <div className="min-w-24 rounded-xl bg-well px-4 py-2 text-center shadow-well">
-                    <dd className="text-xl font-black tabular-nums">
-                      {profile.learning.lessonCount}
-                    </dd>
-                    <dt className="text-xs font-extrabold text-muted-foreground">
-                      {profile.learning.lessonCount === 1 ? "Lesson" : "Lessons"}
-                    </dt>
-                  </div>
-                  <div className="min-w-24 rounded-xl bg-well px-4 py-2 text-center shadow-well">
-                    <dd className="text-xl font-black tabular-nums">
-                      {profile.learning.courseCount}
-                    </dd>
-                    <dt className="text-xs font-extrabold text-muted-foreground">
-                      {profile.learning.courseCount === 1 ? "Course" : "Courses"}
-                    </dt>
-                  </div>
-                </dl>
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  <Link
+                    className="press inline-flex min-h-10 items-center justify-center rounded-lg border border-border-strong bg-surface-grad px-4 py-2 text-sm font-extrabold text-foreground shadow-btn-ghost"
+                    href="/profile/progress"
+                  >
+                    View all progress
+                  </Link>
+                  <dl className="grid grid-cols-2 gap-2">
+                    <div className="min-w-24 rounded-xl bg-well px-4 py-2 text-center shadow-well">
+                      <dd className="text-xl font-black tabular-nums">
+                        {profile.learning.lessonCount}
+                      </dd>
+                      <dt className="text-xs font-extrabold text-muted-foreground">
+                        {profile.learning.lessonCount === 1 ? "Lesson" : "Lessons"}
+                      </dt>
+                    </div>
+                    <div className="min-w-24 rounded-xl bg-well px-4 py-2 text-center shadow-well">
+                      <dd className="text-xl font-black tabular-nums">
+                        {profile.learning.courseCount}
+                      </dd>
+                      <dt className="text-xs font-extrabold text-muted-foreground">
+                        {profile.learning.courseCount === 1 ? "Course" : "Courses"}
+                      </dt>
+                    </div>
+                  </dl>
+                </div>
               </div>
 
               {hasIncludedCourses ? (
