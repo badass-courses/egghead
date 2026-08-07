@@ -135,6 +135,17 @@ async function ProgressContent({ searchParams }: { searchParams: Promise<Progres
                 </p>
               </div>
               <div className="grid gap-3">
+                <p
+                  aria-label={`Current learning streak: ${progress.currentStreakDays} ${progress.currentStreakDays === 1 ? "day" : "days"}`}
+                  className={`inline-flex min-h-10 items-center justify-self-start rounded-full px-4 py-2 text-sm font-extrabold tabular-nums lg:justify-self-end ${
+                    progress.currentStreakDays > 0
+                      ? "border border-sage-line bg-sage-wash text-sage-foreground"
+                      : "bg-well text-muted-foreground shadow-well"
+                  }`}
+                  title="Consecutive UTC days with a completed lesson or course"
+                >
+                  {progress.currentStreakDays}-day learning streak
+                </p>
                 <dl className="grid grid-cols-3 divide-x divide-border-strong rounded-xl bg-well py-4 shadow-well">
                   <div className="min-w-0 px-3 text-center sm:px-5 sm:text-left">
                     <dd className="text-2xl font-black tabular-nums">{progress.lessonCount}</dd>
@@ -157,17 +168,6 @@ async function ProgressContent({ searchParams }: { searchParams: Promise<Progres
                     </dt>
                   </div>
                 </dl>
-                <p
-                  aria-label={`Current learning streak: ${progress.currentStreakDays} ${progress.currentStreakDays === 1 ? "day" : "days"}`}
-                  className={`inline-flex min-h-10 items-center justify-self-start rounded-full px-4 py-2 text-sm font-extrabold tabular-nums lg:justify-self-end ${
-                    progress.currentStreakDays > 0
-                      ? "border border-sage-line bg-sage-wash text-sage-foreground"
-                      : "bg-well text-muted-foreground shadow-well"
-                  }`}
-                  title="Consecutive UTC days with a completed lesson or course"
-                >
-                  {progress.currentStreakDays}-day learning streak
-                </p>
               </div>
             </div>
           </div>
