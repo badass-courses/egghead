@@ -32,7 +32,7 @@ export function LessonHtmlVideo({
       data-access-state={accessState}
       data-video-state="allowed"
       onEnded={() => {
-        void completeLesson(lessonResourceId);
+        void completeLesson(lessonResourceId, "lesson_player_ended");
       }}
       poster={poster}
       preload="metadata"

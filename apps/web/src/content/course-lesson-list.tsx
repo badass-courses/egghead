@@ -142,7 +142,14 @@ export function CourseLessonList({
         const isActive = lesson.slug === activeLessonSlug;
         const isCompleted = completedLessonIds.has(lesson.id);
         const linkStatus = isActive ? "active" : isCompleted ? "completed" : "upcoming";
-        const indicatorStatus = isCompleted ? "completed" : isActive ? "active" : "upcoming";
+        const indicatorStatus =
+          isActive && isCompleted
+            ? "active-completed"
+            : isCompleted
+              ? "completed"
+              : isActive
+                ? "active"
+                : "upcoming";
 
         return (
           <ResourceListItem key={lesson.id}>

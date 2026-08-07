@@ -45,7 +45,7 @@ export function LessonMuxPlayer({
       }}
       minResolution="540p"
       onEnded={() => {
-        void completeLesson(lessonResourceId);
+        void completeLesson(lessonResourceId, "lesson_player_ended");
       }}
       playbackId={playbackId}
       playbackRates={[0.75, 1, 1.25, 1.5, 1.75, 2]}

@@ -232,7 +232,10 @@ export function CourseLessonNavigation({
   const duration = courseDurationLabel(course.lessons);
 
   return (
-    <aside className="relative min-w-0" aria-label={`${course.title} lessons`}>
+    <aside
+      className="relative order-3 min-w-0 min-[960px]:order-2"
+      aria-label={`${course.title} lessons`}
+    >
       <CourseCurriculum
         activeLessonSlug={activeLessonSlug}
         className="min-[960px]:absolute min-[960px]:inset-0 min-[960px]:rounded-l-none min-[960px]:border-l-0"
@@ -317,21 +320,23 @@ export async function CourseLessonPageStatic({
         <Stack gap="loose">
           <Suspense
             fallback={
-              <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-0">
+              <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-x-0 min-[960px]:gap-y-flow">
                 <div className="egghead-lesson-player-cell min-w-0">
                   <LessonVideoPlaceholder lesson={lesson} />
                 </div>
                 <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
+                <div className="order-2 min-[960px]:order-3 min-[960px]:col-span-2">
+                  <SectionHeader
+                    description={lesson.description}
+                    eyebrow="Course lesson"
+                    title={lesson.title}
+                  />
+                </div>
               </div>
             }
           >
             {learningComponent}
           </Suspense>
-          <SectionHeader
-            description={lesson.description}
-            eyebrow="Course lesson"
-            title={lesson.title}
-          />
           <Suspense
             fallback={
               <LessonFacts

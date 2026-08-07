@@ -223,6 +223,42 @@ export async function completeResourceForUser(input: {
   }
 }
 
+export async function uncompleteResourceForUser(input: {
+  userId: string;
+  resourceId: string;
+  source: string;
+}) {
+  const connection = await createLocalMysqlConnection();
+
+  try {
+    const [result] = await connection.execute<ResultSetHeader>(
+      `
+        UPDATE egghead_ResourceProgress
+        SET completedAt = NULL,
+            fields = CAST(? AS JSON),
+            updatedAt = CURRENT_TIMESTAMP(3)
+        WHERE userId = ?
+          AND resourceId = ?
+      `,
+      [
+        JSON.stringify({
+          source: input.source,
+          localOnly: true,
+        }),
+        input.userId,
+        input.resourceId,
+      ],
+    );
+
+    return {
+      affectedRows: result.affectedRows,
+      state: await readResourceProgress(input),
+    };
+  } finally {
+    await connection.end();
+  }
+}
+
 export function anonymousProgressState(): AnonymousProgressState {
   return {
     userProgressCreated: false,

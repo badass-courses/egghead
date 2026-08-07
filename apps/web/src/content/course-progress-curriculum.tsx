@@ -56,7 +56,10 @@ export function CourseLessonProgressNavigation({
   const duration = courseDurationLabel(course.lessons);
 
   return (
-    <aside className="relative min-w-0" aria-label={`${course.title} lessons`}>
+    <aside
+      className="relative order-3 min-w-0 min-[960px]:order-2"
+      aria-label={`${course.title} lessons`}
+    >
       <CourseCurriculum
         activeLessonSlug={activeLessonSlug}
         className="min-[960px]:absolute min-[960px]:inset-0 min-[960px]:rounded-l-none min-[960px]:border-l-0"

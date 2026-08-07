@@ -10,12 +10,17 @@ import {
   type ReactNode,
 } from "react";
 
-import { completeLessonProgress } from "./lesson-progress-action";
+import {
+  completeLessonProgress,
+  uncompleteLessonProgress,
+  type LessonProgressSource,
+} from "./lesson-progress-action";
 
 export type LessonProgressFeedback =
   | { status: "idle"; message: null }
   | { status: "saving"; message: "Saving lesson progress" }
   | { status: "completed"; message: "Lesson marked as watched" }
+  | { status: "uncompleted"; message: "Lesson marked as unwatched" }
   | { status: "authentication_required"; message: "Sign in to save progress" }
   | { status: "invalid_resource"; message: "This lesson could not be marked as watched" }
   | { status: "failed"; message: "Lesson progress could not be saved" };
@@ -23,7 +28,8 @@ export type LessonProgressFeedback =
 type LessonProgressContextValue = {
   completedLessonIds: ReadonlySet<string>;
   isAuthenticated: boolean;
-  completeLesson: (resourceId: string) => Promise<void>;
+  completeLesson: (resourceId: string, source?: LessonProgressSource) => Promise<void>;
+  uncompleteLesson: (resourceId: string) => Promise<void>;
   feedbackForLesson: (resourceId: string) => LessonProgressFeedback;
   isLessonCompleted: (resourceId: string) => boolean;
 };
@@ -73,7 +79,7 @@ export function LessonProgressProvider({
   }, []);
 
   const completeLesson = useCallback(
-    async (resourceId: string) => {
+    async (resourceId: string, source: LessonProgressSource = "lesson_progress_control") => {
       if (completedLessonIdsRef.current.has(resourceId)) return;
 
       if (!isAuthenticated) {
@@ -88,7 +94,7 @@ export function LessonProgressProvider({
       setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
 
       try {
-        const result = await completeLessonProgress({ resourceId });
+        const result = await completeLessonProgress({ resourceId, source });
 
         switch (result.status) {
           case "completed":
@@ -138,6 +144,72 @@ export function LessonProgressProvider({
     [addOptimisticCompletion, isAuthenticated, rollBackOptimisticCompletion, setFeedback],
   );
 
+  const uncompleteLesson = useCallback(
+    async (resourceId: string) => {
+      if (!completedLessonIdsRef.current.has(resourceId)) return;
+
+      if (!isAuthenticated) {
+        setFeedback(resourceId, {
+          status: "authentication_required",
+          message: "Sign in to save progress",
+        });
+        return;
+      }
+
+      rollBackOptimisticCompletion(resourceId);
+      setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
+
+      try {
+        const result = await uncompleteLessonProgress({ resourceId });
+
+        switch (result.status) {
+          case "uncompleted":
+            setFeedback(resourceId, {
+              status: "uncompleted",
+              message: "Lesson marked as unwatched",
+            });
+            return;
+          case "authentication_required":
+            addOptimisticCompletion(resourceId);
+            setFeedback(resourceId, {
+              status: "authentication_required",
+              message: "Sign in to save progress",
+            });
+            return;
+          case "invalid_resource":
+            addOptimisticCompletion(resourceId);
+            setFeedback(resourceId, {
+              status: "invalid_resource",
+              message: "This lesson could not be marked as watched",
+            });
+            return;
+          case "failed":
+            addOptimisticCompletion(resourceId);
+            setFeedback(resourceId, {
+              status: "failed",
+              message: "Lesson progress could not be saved",
+            });
+            return;
+          default:
+            result satisfies never;
+            addOptimisticCompletion(resourceId);
+            setFeedback(resourceId, {
+              status: "failed",
+              message: "Lesson progress could not be saved",
+            });
+            return;
+        }
+      } catch {
+        addOptimisticCompletion(resourceId);
+        setFeedback(resourceId, {
+          status: "failed",
+          message: "Lesson progress could not be saved",
+        });
+      }
+    },
+    [addOptimisticCompletion, isAuthenticated, rollBackOptimisticCompletion, setFeedback],
+  );
+
   const isLessonCompleted = useCallback(
     (resourceId: string) => completedLessonIds.has(resourceId),
     [completedLessonIds],
@@ -153,10 +225,18 @@ export function LessonProgressProvider({
       completedLessonIds,
       isAuthenticated,
       completeLesson,
+      uncompleteLesson,
       feedbackForLesson,
       isLessonCompleted,
     }),
-    [completedLessonIds, completeLesson, feedbackForLesson, isAuthenticated, isLessonCompleted],
+    [
+      completedLessonIds,
+      completeLesson,
+      feedbackForLesson,
+      isAuthenticated,
+      isLessonCompleted,
+      uncompleteLesson,
+    ],
   );
 
   return <LessonProgressContext.Provider value={value}>{children}</LessonProgressContext.Provider>;
