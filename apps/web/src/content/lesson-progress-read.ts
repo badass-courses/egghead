@@ -1,3 +1,5 @@
+import { logger } from "@coursebuilder/core/utils/logger";
+
 import { getCurrentUser } from "../coursebuilder/current-user";
 import { readCompletedResourceIdsForUser } from "../progress/resource-progress";
 
@@ -18,11 +20,23 @@ export async function getLessonProgressSnapshot(
     };
   }
 
-  return {
-    initialCompletedLessonIds: await readCompletedResourceIdsForUser({
-      userId: user.id,
-      resourceIds,
-    }),
-    isAuthenticated: true,
-  };
+  try {
+    return {
+      initialCompletedLessonIds: await readCompletedResourceIdsForUser({
+        userId: user.id,
+        resourceIds,
+      }),
+      isAuthenticated: true,
+    };
+  } catch (error) {
+    logger.error(
+      error instanceof Error ? error : new Error("Unknown lesson progress read failure"),
+      { operation: "readLessonProgressSnapshot" },
+    );
+
+    return {
+      initialCompletedLessonIds: [],
+      isAuthenticated: true,
+    };
+  }
 }

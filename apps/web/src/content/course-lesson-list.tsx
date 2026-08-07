@@ -99,16 +99,15 @@ export function CourseCurriculum({
             <ResourceListSection key={section.id} open>
               <ResourceListSectionSummary>
                 <ResourceListSectionTitle>{section.title}</ResourceListSectionTitle>
-                <ResourceListBadge
-                  aria-label={
-                    showProgress
-                      ? `${completedCount} of ${section.lessons.length} watched`
-                      : `${section.lessons.length} lessons`
-                  }
-                >
-                  {showProgress
-                    ? `${completedCount}/${section.lessons.length}`
-                    : section.lessons.length}
+                <ResourceListBadge>
+                  {showProgress ? (
+                    `${completedCount}/${section.lessons.length} watched`
+                  ) : (
+                    <>
+                      <span aria-hidden="true">{section.lessons.length}</span>
+                      <span className="sr-only">{`${section.lessons.length} lessons`}</span>
+                    </>
+                  )}
                 </ResourceListBadge>
                 {duration ? <ResourceListMeta>{duration}</ResourceListMeta> : null}
                 <ResourceListSectionChevron />

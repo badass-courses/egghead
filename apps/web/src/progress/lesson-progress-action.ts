@@ -1,5 +1,7 @@
 "use server";
 
+import { logger } from "@coursebuilder/core/utils/logger";
+
 import { getLessonById } from "../content/lesson";
 import { getCurrentUser } from "../coursebuilder/current-user";
 import { completeResourceForUser } from "./resource-progress";
@@ -19,31 +21,32 @@ export type CompleteLessonProgressResult =
 export async function completeLessonProgress(input: {
   resourceId: string;
 }): Promise<CompleteLessonProgressResult> {
+  const resourceId = typeof input?.resourceId === "string" ? input.resourceId : "";
   const user = await getCurrentUser();
 
   if (!user?.id) {
     return {
       status: "authentication_required",
-      resourceId: input.resourceId,
+      resourceId,
       completedAt: null,
     };
   }
 
-  if (!input.resourceId) {
+  if (resourceId.length === 0) {
     return {
       status: "invalid_resource",
-      resourceId: input.resourceId,
+      resourceId,
       completedAt: null,
     };
   }
 
   try {
-    const lesson = await getLessonById(input.resourceId);
+    const lesson = await getLessonById(resourceId);
 
-    if (!lesson || lesson.id !== input.resourceId) {
+    if (!lesson || lesson.id !== resourceId) {
       return {
         status: "invalid_resource",
-        resourceId: input.resourceId,
+        resourceId,
         completedAt: null,
       };
     }
@@ -67,10 +70,15 @@ export async function completeLessonProgress(input: {
       resourceId: lesson.id,
       completedAt: progress.state.completedAt,
     };
-  } catch {
+  } catch (error) {
+    logger.error(
+      error instanceof Error ? error : new Error("Unknown lesson progress write failure"),
+      { operation: "completeLessonProgress" },
+    );
+
     return {
       status: "failed",
-      resourceId: input.resourceId,
+      resourceId,
       completedAt: null,
     };
   }

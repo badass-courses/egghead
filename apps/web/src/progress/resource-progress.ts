@@ -1,6 +1,6 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 
-import { createLocalMysqlConnection } from "../db/local-docker";
+import { createLocalMysqlConnection, getEggheadMysqlPool } from "../db/local-docker";
 
 type ResourceProgressRow = RowDataPacket & {
   userId: string;
@@ -129,26 +129,20 @@ export async function readCompletedResourceIdsForUser(input: {
   const resourceIds = [...new Set(input.resourceIds.filter(Boolean))];
   if (resourceIds.length === 0) return [];
 
-  const connection = await createLocalMysqlConnection();
   const placeholders = resourceIds.map(() => "?").join(", ");
+  const [rows] = await getEggheadMysqlPool().execute<CompletedResourceProgressRow[]>(
+    `
+      SELECT resourceId
+      FROM egghead_ResourceProgress
+      WHERE userId = ?
+        AND completedAt IS NOT NULL
+        AND resourceId IN (${placeholders})
+      ORDER BY resourceId ASC
+    `,
+    [input.userId, ...resourceIds],
+  );
 
-  try {
-    const [rows] = await connection.execute<CompletedResourceProgressRow[]>(
-      `
-        SELECT resourceId
-        FROM egghead_ResourceProgress
-        WHERE userId = ?
-          AND completedAt IS NOT NULL
-          AND resourceId IN (${placeholders})
-        ORDER BY resourceId ASC
-      `,
-      [input.userId, ...resourceIds],
-    );
-
-    return rows.map((row) => row.resourceId);
-  } finally {
-    await connection.end();
-  }
+  return rows.map((row) => row.resourceId);
 }
 
 export async function seedResourceProgress(input: {

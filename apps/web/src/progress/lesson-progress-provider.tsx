@@ -47,7 +47,8 @@ export function LessonProgressProvider({
   const [feedbackByLesson, setFeedbackByLesson] = useState<
     ReadonlyMap<string, LessonProgressFeedback>
   >(() => new Map());
-  const completedLessonIdsRef = useRef(new Set(initialCompletedLessonIds));
+  // Initial progress is mount-only; callers must remount with a new key for a new snapshot.
+  const completedLessonIdsRef = useRef<ReadonlySet<string>>(completedLessonIds);
 
   const setFeedback = useCallback((resourceId: string, feedback: LessonProgressFeedback) => {
     setFeedbackByLesson((current) => {
@@ -111,6 +112,14 @@ export function LessonProgressProvider({
             });
             return;
           case "failed":
+            rollBackOptimisticCompletion(resourceId);
+            setFeedback(resourceId, {
+              status: "failed",
+              message: "Lesson progress could not be saved",
+            });
+            return;
+          default:
+            result satisfies never;
             rollBackOptimisticCompletion(resourceId);
             setFeedback(resourceId, {
               status: "failed",

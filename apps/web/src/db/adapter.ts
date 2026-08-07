@@ -1,12 +1,7 @@
 import { DrizzleAdapter } from "@coursebuilder/adapter-drizzle";
 import { drizzle } from "drizzle-orm/mysql2";
-import mysql from "mysql2/promise";
 
-import {
-  assertDatabaseUrlForRuntime,
-  getDatabaseUrl,
-  mysqlConnectionOptionsFromUrl,
-} from "./local-docker";
+import { getEggheadMysqlPool } from "./local-docker";
 import { mysqlTable } from "./mysql-table";
 
 type CourseBuilderAuthAdapter = ReturnType<typeof DrizzleAdapter>;
@@ -18,11 +13,7 @@ export function getCourseBuilderAdapter() {
     return adapter;
   }
 
-  const databaseUrl = getDatabaseUrl();
-  assertDatabaseUrlForRuntime(databaseUrl);
-
-  const pool = mysql.createPool(mysqlConnectionOptionsFromUrl(databaseUrl));
-  const db = drizzle(pool);
+  const db = drizzle(getEggheadMysqlPool());
   adapter = DrizzleAdapter(db, mysqlTable);
 
   return adapter;

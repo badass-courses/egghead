@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { Container } from "@egghead/ui/container";
 import { ResourceListLabel } from "@egghead/ui/resource-list";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
 import type { CourseForPage } from "./course";
+import { CourseCurriculum } from "./course-lesson-list";
 import { MarkdownContent } from "./markdown-content";
 
 export async function CoursePageStatic({
@@ -47,7 +48,9 @@ export async function CoursePageStatic({
             <ResourceListLabel as="h2" className="shrink-0" id="course-lessons">
               {course.lessonCount} {course.lessonCount === 1 ? "lesson" : "lessons"}
             </ResourceListLabel>
-            {curriculumComponent}
+            <Suspense fallback={<CourseCurriculum course={course} />}>
+              {curriculumComponent}
+            </Suspense>
           </section>
         </aside>
       </div>
