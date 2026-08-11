@@ -110,6 +110,14 @@ export function assertDatabaseUrlForRuntime(rawUrl = getDatabaseUrl()): Database
   };
 }
 
+export function commerceWritesAreAllowed(rawUrl = getDatabaseUrl()) {
+  try {
+    return assertDatabaseUrlForRuntime(rawUrl).commerceWritesAllowed;
+  } catch {
+    return false;
+  }
+}
+
 export function assertCommerceWritesAllowed(rawUrl = getDatabaseUrl()) {
   const safety = assertDatabaseUrlForRuntime(rawUrl);
 

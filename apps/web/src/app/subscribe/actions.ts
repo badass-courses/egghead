@@ -43,18 +43,25 @@ export async function startSubscriptionCheckout() {
   const requestHeaders = await headers();
   const country =
     requestHeaders.get("x-vercel-ip-country") ?? requestHeaders.get("cf-ipcountry") ?? "US";
-  const checkout = await stripeProvider.createCheckoutSession(
-    {
-      productId,
-      userId: user.id,
-      organizationId: organization.id,
-      quantity: 1,
-      bulk: false,
-      country,
-      cancelUrl: `${getSiteUrl()}/subscribe`,
-    },
-    adapter,
-  );
+  let checkoutRedirect: string;
 
-  redirect(checkout.redirect);
+  try {
+    const checkout = await stripeProvider.createCheckoutSession(
+      {
+        productId,
+        userId: user.id,
+        organizationId: organization.id,
+        quantity: 1,
+        bulk: false,
+        country,
+        cancelUrl: `${getSiteUrl()}/subscribe`,
+      },
+      adapter,
+    );
+    checkoutRedirect = checkout.redirect;
+  } catch {
+    redirect("/subscribe?error=checkout");
+  }
+
+  redirect(checkoutRedirect);
 }

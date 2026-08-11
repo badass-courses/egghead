@@ -5,12 +5,28 @@ type PersonalOrganizationUser = {
   email: string;
 };
 
-export async function ensurePersonalOrganization(
+function personalOrganizationName(userId: string) {
+  return `egghead-personal:${userId}`;
+}
+
+async function getPersonalOrganizationMembership(
   user: PersonalOrganizationUser,
   adapter: CourseBuilderAdapter,
 ) {
   const memberships = await adapter.getMembershipsForUser(user.id);
-  const existingMembership = memberships[0];
+  const organizationName = personalOrganizationName(user.id);
+
+  return memberships.find(
+    (membership) =>
+      membership.userId === user.id && membership.organization?.name === organizationName,
+  );
+}
+
+export async function ensurePersonalOrganization(
+  user: PersonalOrganizationUser,
+  adapter: CourseBuilderAdapter,
+) {
+  const existingMembership = await getPersonalOrganizationMembership(user, adapter);
 
   if (existingMembership?.organizationId) {
     return {
@@ -20,7 +36,7 @@ export async function ensurePersonalOrganization(
   }
 
   const organization = await adapter.createOrganization({
-    name: `Personal (${user.email})`,
+    name: personalOrganizationName(user.id),
   });
 
   if (!organization) {

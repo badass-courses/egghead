@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, inArray } from "drizzle-orm";
 
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
 import { subscription } from "../db/schema";
@@ -10,20 +10,18 @@ export async function getCurrentSubscriptionForUser(userId: string) {
   const db = getEggheadDatabase();
   const memberships = await adapter.getMembershipsForUser(userId);
 
-  const currentSubscriptions = await Promise.all(
-    memberships.map((membership) => {
-      if (!membership.organizationId) return Promise.resolve(null);
+  const organizationIds = memberships
+    .map((membership) => membership.organizationId)
+    .filter((organizationId): organizationId is string => Boolean(organizationId));
 
-      return Promise.resolve(
-        db.query.subscription.findFirst({
-          where: and(
-            eq(subscription.organizationId, membership.organizationId),
-            inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
-          ),
-        }),
-      );
-    }),
-  );
+  if (organizationIds.length === 0) return null;
 
-  return currentSubscriptions.find((currentSubscription) => currentSubscription) ?? null;
+  const currentSubscription = await db.query.subscription.findFirst({
+    where: and(
+      inArray(subscription.organizationId, organizationIds),
+      inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
+    ),
+  });
+
+  return currentSubscription ?? null;
 }

@@ -4,11 +4,12 @@ import { STRIPE_CUSTOMER_SUBSCRIPTION_UPDATED_EVENT } from "@coursebuilder/core/
 import { parseSubscriptionInfoFromCheckoutSession } from "@coursebuilder/core/pricing/stripe-subscription-utils";
 import { checkoutSessionCompletedEvent } from "@coursebuilder/core/schemas/stripe/checkout-session-completed";
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 
 import { getStripeProvider } from "../coursebuilder/stripe-provider";
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
 import { assertCommerceWritesAllowed } from "../db/local-docker";
-import { entitlements, merchantSubscription } from "../db/schema";
+import { entitlements, merchantSubscription, subscription } from "../db/schema";
 import { ensurePersonalOrganization } from "../subscriptions/personal-organization";
 import {
   stripeSubscriptionEntitlementId,
@@ -33,6 +34,7 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
     const stripeCheckoutSession = stripeEvent.data.object;
     const stripeProvider = getStripeProvider();
     const adapter = getCourseBuilderAdapter();
+    const db = getEggheadDatabase();
 
     if (!stripeProvider) {
       throw new Error("Stripe is not configured.");
@@ -121,29 +123,49 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
       throw new Error("Unable to persist the Stripe customer.");
     }
 
-    const localSubscription = await step.run("create subscription records", async () => {
-      const storedMerchantSubscription = await adapter.createMerchantSubscription({
-        merchantAccountId: merchantAccount.id,
-        merchantCustomerId: merchantCustomer.id,
-        merchantProductId: merchantProduct.id,
-        identifier: subscriptionInfo.subscriptionIdentifier,
-      });
-      if (!storedMerchantSubscription) {
-        throw new Error("Unable to persist the Stripe subscription.");
-      }
+    const storedMerchantSubscription = await step.run(
+      "load or create merchant subscription",
+      async () => {
+        const existingMerchantSubscription = await db.query.merchantSubscription.findFirst({
+          where: eq(merchantSubscription.identifier, subscriptionInfo.subscriptionIdentifier),
+        });
+        if (existingMerchantSubscription) return existingMerchantSubscription;
 
-      const storedSubscription = await adapter.createSubscription({
+        const createdMerchantSubscription = await adapter.createMerchantSubscription({
+          merchantAccountId: merchantAccount.id,
+          merchantCustomerId: merchantCustomer.id,
+          merchantProductId: merchantProduct.id,
+          identifier: subscriptionInfo.subscriptionIdentifier,
+        });
+        if (!createdMerchantSubscription) {
+          throw new Error("Unable to persist the Stripe subscription.");
+        }
+
+        return createdMerchantSubscription;
+      },
+    );
+
+    const localSubscription = await step.run("load or create subscription", async () => {
+      const existingSubscription = await db.query.subscription.findFirst({
+        where: eq(subscription.merchantSubscriptionId, storedMerchantSubscription.id),
+      });
+      if (existingSubscription) return existingSubscription;
+
+      const createdSubscription = await adapter.createSubscription({
         merchantSubscriptionId: storedMerchantSubscription.id,
         organizationId: organizationContext.organization.id,
         productId: merchantProduct.productId,
       });
-      if (!storedSubscription) {
+      if (!createdSubscription) {
         throw new Error("Unable to persist the CourseBuilder subscription.");
       }
 
-      await adapter.updateSubscriptionStatus(storedSubscription.id, subscriptionInfo.status);
-      return storedSubscription;
+      return createdSubscription;
     });
+
+    await step.run("set initial subscription status", () =>
+      adapter.updateSubscriptionStatus(localSubscription.id, subscriptionInfo.status),
+    );
 
     await step.run("grant subscription access", () =>
       syncStripeSubscriptionEntitlement({
@@ -153,6 +175,7 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
         organizationMembershipId: organizationContext.membership.id,
         productId: merchantProduct.productId,
         status: subscriptionInfo.status,
+        stripeEventCreatedAt: stripeEvent.created,
         stripeSubscriptionId: subscriptionInfo.subscriptionIdentifier,
         userId: user.id,
       }),
@@ -174,17 +197,44 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
   },
 );
 
+// CourseBuilder's update-event schema trails Stripe's event timestamp and item period fields.
+const stripeSubscriptionUpdateEnvelopeSchema = z.object({
+  created: z.number(),
+  data: z.object({
+    object: z.object({
+      items: z.object({
+        data: z.array(z.object({ current_period_end: z.number().optional() })),
+      }),
+    }),
+  }),
+});
+
+function getStripeEventCreatedAt(metadata: unknown) {
+  if (typeof metadata !== "object" || metadata === null || !("stripeEventCreatedAt" in metadata)) {
+    return null;
+  }
+
+  return typeof metadata.stripeEventCreatedAt === "number" ? metadata.stripeEventCreatedAt : null;
+}
+
 export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
   {
     id: "egghead-stripe-customer-subscription-updated",
     name: "Egghead Stripe Customer Subscription Updated",
     idempotency: "event.data.stripeEvent.id",
+    concurrency: {
+      limit: 1,
+      key: "event.data.stripeEvent.data.object.id",
+    },
   },
   { event: STRIPE_CUSTOMER_SUBSCRIPTION_UPDATED_EVENT },
-  async ({ event, step }) => {
+  async ({ event, step, logger }) => {
     assertCommerceWritesAllowed();
 
-    const stripeSubscription = event.data.stripeEvent.data.object;
+    const stripeEvent = event.data.stripeEvent;
+    const stripeEventEnvelope = stripeSubscriptionUpdateEnvelopeSchema.parse(stripeEvent);
+    const stripeEventCreatedAt = stripeEventEnvelope.created;
+    const stripeSubscription = stripeEvent.data.object;
     const adapter = getCourseBuilderAdapter();
     const db = getEggheadDatabase();
 
@@ -200,26 +250,60 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
     const productId = localSubscription?.productId;
 
     if (!localSubscription || !organizationId || !productId) {
+      logger.warn("Ignoring Stripe subscription update", {
+        reason: "local_subscription_not_found_or_incomplete",
+        stripeEventId: stripeEvent.id,
+        stripeSubscriptionId: stripeSubscription.id,
+        localSubscriptionId: localSubscription?.id ?? null,
+        organizationId: organizationId ?? null,
+        productId: productId ?? null,
+      });
       return { ignored: true };
     }
-
-    await step.run("update subscription status", () =>
-      adapter.updateSubscriptionStatus(localSubscription.id, stripeSubscription.status),
-    );
 
     const entitlement = await step.run("load subscription entitlement", () =>
       db.query.entitlements.findFirst({
         where: eq(entitlements.id, stripeSubscriptionEntitlementId(stripeSubscription.id)),
       }),
     );
+    const storedEventCreatedAt = getStripeEventCreatedAt(entitlement?.metadata);
 
-    const currentPeriodEnd = stripeSubscription.current_period_end;
+    if (storedEventCreatedAt && storedEventCreatedAt > stripeEventCreatedAt) {
+      logger.warn("Ignoring stale Stripe subscription update", {
+        reason: "older_than_stored_subscription_event",
+        stripeEventId: stripeEvent.id,
+        stripeEventCreatedAt,
+        stripeSubscriptionId: stripeSubscription.id,
+        storedEventCreatedAt,
+      });
+      return { ignored: true, subscriptionId: localSubscription.id };
+    }
+
+    const subscriptionItems = stripeEventEnvelope.data.object.items.data;
+    const singleSubscriptionItem =
+      subscriptionItems.length === 1 ? subscriptionItems[0] : undefined;
+    const currentPeriodEnd =
+      stripeSubscription.current_period_end ?? singleSubscriptionItem?.current_period_end;
     const organizationMembershipId = entitlement?.organizationMembershipId;
     const userId = entitlement?.userId;
 
     if (!currentPeriodEnd || !organizationMembershipId || !userId) {
+      logger.warn("Ignoring incomplete Stripe subscription update", {
+        reason: "entitlement_or_current_period_missing",
+        stripeEventId: stripeEvent.id,
+        stripeSubscriptionId: stripeSubscription.id,
+        subscriptionId: localSubscription.id,
+        entitlementId: entitlement?.id ?? null,
+        hasCurrentPeriodEnd: Boolean(currentPeriodEnd),
+        hasOrganizationMembership: Boolean(organizationMembershipId),
+        hasUser: Boolean(userId),
+      });
       return { ignored: true, subscriptionId: localSubscription.id };
     }
+
+    await step.run("update subscription status", () =>
+      adapter.updateSubscriptionStatus(localSubscription.id, stripeSubscription.status),
+    );
 
     await step.run("sync subscription access", () =>
       syncStripeSubscriptionEntitlement({
@@ -229,6 +313,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
         organizationMembershipId,
         productId,
         status: stripeSubscription.status,
+        stripeEventCreatedAt,
         stripeSubscriptionId: stripeSubscription.id,
         userId,
       }),

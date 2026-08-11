@@ -57,7 +57,7 @@ Run the app and the Inngest dev server in separate terminals:
 
 ```bash
 pnpm --filter @egghead/web dev
-pnpx inngest-cli@latest dev --no-discovery -u http://localhost:3008/api/inngest
+pnpm dlx inngest-cli@latest dev --no-discovery -u http://localhost:3008/api/inngest
 ```
 
 Forward Stripe test-mode webhooks to the CourseBuilder endpoint:

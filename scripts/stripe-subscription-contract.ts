@@ -25,8 +25,12 @@ function setEnv(name: "DATABASE_URL" | "EGGHEAD_RUNTIME", value: string | undefi
   process.env[name] = value;
 }
 
+let runningCheckName: string | null = null;
+
 function check(name: string, run: () => void): ContractCheck {
+  runningCheckName = name;
   run();
+  runningCheckName = null;
   return { name, pass: true };
 }
 
@@ -57,6 +61,15 @@ try {
   ];
 
   console.log(JSON.stringify({ ok: true, checks }));
+} catch (error) {
+  console.error(
+    JSON.stringify({
+      ok: false,
+      check: runningCheckName ?? "stripe subscription contract",
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  );
+  process.exitCode = 1;
 } finally {
   setEnv("DATABASE_URL", originalEnv.databaseUrl);
   setEnv("EGGHEAD_RUNTIME", originalEnv.runtime);

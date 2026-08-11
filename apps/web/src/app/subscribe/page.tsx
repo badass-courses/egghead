@@ -5,6 +5,7 @@ import { Container } from "@egghead/ui/container";
 
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { isStripeConfigured } from "../../coursebuilder/stripe-provider";
+import { commerceWritesAreAllowed } from "../../db/local-docker";
 import { getEnv } from "../../env";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { startSubscriptionCheckout } from "./actions";
@@ -43,6 +44,8 @@ async function ResolvedSubscriptionState({
   const [user, resolvedSearchParams] = await Promise.all([getCurrentUser(), searchParams]);
   const currentSubscription = user?.id ? await getCurrentSubscriptionForUser(user.id) : null;
   const configured = Boolean(isStripeConfigured() && getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_ID"));
+  const commerceWritesAllowed = commerceWritesAreAllowed();
+  const checkoutAvailable = configured && commerceWritesAllowed;
   const errorMessage = checkoutErrorMessage(firstParam(resolvedSearchParams.error));
 
   return (
@@ -85,11 +88,15 @@ async function ResolvedSubscriptionState({
         </div>
       ) : user ? (
         <form action={startSubscriptionCheckout} className="grid gap-3">
-          <Button className="w-full" disabled={!configured} size="lg" type="submit">
+          <Button className="w-full" disabled={!checkoutAvailable} size="lg" type="submit">
             Continue to Stripe
           </Button>
           <p className="text-center text-xs font-semibold text-muted-foreground">
-            You’ll review the price and billing interval before subscribing.
+            {!commerceWritesAllowed
+              ? "Checkout is limited to local Docker during Phase 0."
+              : configured
+                ? "You’ll review the price and billing interval before subscribing."
+                : "Subscription checkout is not configured yet."}
           </p>
         </form>
       ) : (
