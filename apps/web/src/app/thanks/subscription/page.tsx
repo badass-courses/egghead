@@ -4,6 +4,7 @@ import { Container } from "@egghead/ui/container";
 
 import { getCurrentUser } from "../../../coursebuilder/current-user";
 import { getCurrentSubscriptionForUser } from "../../../subscriptions/status";
+import { MembershipStatusRefresh } from "./membership-status-refresh";
 
 type SubscriptionThanksSearchParams = {
   provider?: string | string[];
@@ -77,6 +78,7 @@ async function ResolvedSubscriptionThanks({
 
   return (
     <section className={thanksPanelClassName}>
+      {subscription ? <MembershipStatusRefresh /> : null}
       <p className="eyebrow">{status.eyebrow}</p>
       <h1 className="text-balance text-4xl font-black tracking-tight">{status.heading}</h1>
       <p className="text-pretty font-semibold text-muted-foreground">{status.message}</p>
