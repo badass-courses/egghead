@@ -12,7 +12,10 @@ import {
 } from "@egghead/ui/resource-list";
 
 import { getCurrentUser, getCurrentUserFromRequest } from "../coursebuilder/current-user";
-import { anonymousLessonAccess } from "../progress/anonymous-lesson-progress";
+import {
+  ANONYMOUS_LESSON_LIMIT,
+  anonymousLessonAccess,
+} from "../progress/anonymous-lesson-progress";
 import { LessonProgressProvider } from "../progress/lesson-progress-provider";
 import type { CourseForPage } from "./course";
 import { CourseCurriculum, courseDurationLabel } from "./course-lesson-list";
@@ -178,7 +181,7 @@ export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage
               </p>
               <p>
                 {anonymousLimitReached
-                  ? "You've watched three lessons. Sign in to keep learning and save them to your account."
+                  ? `You've watched ${ANONYMOUS_LESSON_LIMIT} lessons. Sign in to keep learning and save them to your account.`
                   : "This lesson is available with an active egghead membership."}
               </p>
               <Link
@@ -237,6 +240,24 @@ export async function LessonAccessExperience({
       {showProgressStatus ? <LessonProgressStatus lessonResourceId={lesson.id} /> : null}
       <LessonFactsExperience lesson={lesson} />
     </LessonProgressProvider>
+  );
+}
+
+export function CourseLessonLayout({
+  header,
+  navigation,
+  player,
+}: {
+  header: ReactNode;
+  navigation: ReactNode;
+  player: ReactNode;
+}) {
+  return (
+    <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-x-0 min-[960px]:gap-y-flow">
+      <div className="egghead-lesson-player-cell min-w-0">{player}</div>
+      {navigation}
+      <div className="order-2 min-[960px]:order-3 min-[960px]:col-span-2">{header}</div>
+    </div>
   );
 }
 
@@ -343,19 +364,19 @@ export async function CourseLessonPageStatic({
         <Stack gap="loose">
           <Suspense
             fallback={
-              <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-x-0 min-[960px]:gap-y-flow">
-                <div className="egghead-lesson-player-cell min-w-0">
-                  <LessonVideoPlaceholder lesson={lesson} />
-                </div>
-                <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
-                <div className="order-2 min-[960px]:order-3 min-[960px]:col-span-2">
+              <CourseLessonLayout
+                header={
                   <SectionHeader
                     description={lesson.description}
                     eyebrow="Course lesson"
                     title={lesson.title}
                   />
-                </div>
-              </div>
+                }
+                navigation={
+                  <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
+                }
+                player={<LessonVideoPlaceholder lesson={lesson} />}
+              />
             }
           >
             {learningComponent}

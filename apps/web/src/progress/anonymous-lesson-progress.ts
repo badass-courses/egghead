@@ -37,6 +37,8 @@ export async function readAnonymousCompletedLessonIds(): Promise<string[]> {
   return parseAnonymousLessonIds(cookieStore.get(ANONYMOUS_LESSON_COOKIE)?.value);
 }
 
+// Anonymous progress is best-effort: response cookie writes cannot be merged atomically across
+// tabs, so simultaneous completions may race. Authenticated progress remains database-backed.
 export async function recordAnonymousLessonCompletion(
   resourceId: string,
 ): Promise<AnonymousCompletionWriteResult> {

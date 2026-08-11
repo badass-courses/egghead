@@ -40,7 +40,12 @@ export type SyncCourseCompletionResult =
 export type SubmitCourseReviewResult =
   | { status: "saved"; courseId: string }
   | {
-      status: "authentication_required" | "invalid_course" | "invalid_review" | "failed";
+      status:
+        | "authentication_required"
+        | "invalid_course"
+        | "invalid_review"
+        | "course_incomplete"
+        | "failed";
       courseId: string;
     };
 
@@ -144,9 +149,17 @@ export async function submitCourseReview(input: unknown): Promise<SubmitCourseRe
       comment: parsed.data.comment,
     });
 
-    return result.saved
-      ? { status: "saved", courseId: course.id }
-      : { status: "invalid_course", courseId: course.id };
+    switch (result.status) {
+      case "saved":
+        return { status: "saved", courseId: course.id };
+      case "course_incomplete":
+        return { status: "course_incomplete", courseId: course.id };
+      case "missing_progress":
+        return { status: "invalid_course", courseId: course.id };
+      default:
+        result satisfies never;
+        return { status: "failed", courseId: course.id };
+    }
   } catch (error) {
     logger.error(
       error instanceof Error ? error : new Error("Unknown course review write failure"),

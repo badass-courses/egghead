@@ -200,7 +200,7 @@ export async function completeResourceForUser(input: {
         VALUES (?, ?, ?, CAST(? AS JSON), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
         ON DUPLICATE KEY UPDATE
           completedAt = COALESCE(completedAt, VALUES(completedAt)),
-          fields = VALUES(fields),
+          fields = JSON_MERGE_PATCH(COALESCE(fields, JSON_OBJECT()), VALUES(fields)),
           updatedAt = CURRENT_TIMESTAMP(3)
       `,
       [
@@ -252,7 +252,7 @@ export async function completeResourcesForUser(input: {
         VALUES ${values}
         ON DUPLICATE KEY UPDATE
           completedAt = COALESCE(completedAt, VALUES(completedAt)),
-          fields = VALUES(fields),
+          fields = JSON_MERGE_PATCH(COALESCE(fields, JSON_OBJECT()), VALUES(fields)),
           updatedAt = CURRENT_TIMESTAMP(3)
       `,
       parameters,
@@ -276,7 +276,7 @@ export async function uncompleteResourceForUser(input: {
       `
         UPDATE egghead_ResourceProgress
         SET completedAt = NULL,
-            fields = CAST(? AS JSON),
+            fields = JSON_MERGE_PATCH(COALESCE(fields, JSON_OBJECT()), CAST(? AS JSON)),
             updatedAt = CURRENT_TIMESTAMP(3)
         WHERE userId = ?
           AND resourceId = ?
