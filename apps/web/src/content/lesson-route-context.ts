@@ -2,16 +2,23 @@ import type { RowDataPacket } from "mysql2";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { publishedResourceSql } from "./publication";
-import { collectionEntryPath, standaloneContentPath } from "./routes";
+import { collectionEntryPath, collectionPath, standaloneContentPath } from "./routes";
 
 type MysqlConnection = Awaited<ReturnType<typeof createLocalMysqlConnection>>;
 
-type ParentCourseSlugRow = RowDataPacket & {
+type ParentCourseRouteContextRow = RowDataPacket & {
   lessonId: string;
   courseId: string;
   courseSlug: string | null;
+  courseTitle: string | null;
   position: number | string | null;
   createdAt: Date | string | null;
+};
+
+export type ParentCourseRouteContext = {
+  title: string;
+  slug: string;
+  href: string;
 };
 
 function courseResourceCondition(alias: string) {
@@ -36,24 +43,31 @@ export function lessonCanonicalPathForRouteContext(slug: string, parentCourseSlu
     : standaloneContentPath(slug);
 }
 
-export async function parentCourseSlugsForLessonIds(
+export async function parentCourseRouteContextsForLessonIds(
   connection: MysqlConnection,
   lessonIds: readonly string[],
-): Promise<Map<string, string>> {
+): Promise<Map<string, ParentCourseRouteContext>> {
   const uniqueLessonIds = [...new Set(lessonIds.filter(Boolean))];
-  const result = new Map<string, string>();
+  const result = new Map<string, ParentCourseRouteContext>();
 
   if (uniqueLessonIds.length === 0) return result;
 
   const lessonPlaceholders = placeholders(uniqueLessonIds);
-  const [rows] = await connection.execute<ParentCourseSlugRow[]>(
+  const [rows] = await connection.execute<ParentCourseRouteContextRow[]>(
     `
-      SELECT route.lessonId, route.courseId, route.courseSlug, route.position, route.createdAt
+      SELECT
+        route.lessonId,
+        route.courseId,
+        route.courseSlug,
+        route.courseTitle,
+        route.position,
+        route.createdAt
       FROM (
         SELECT
           directLink.resourceId AS lessonId,
           parent.id AS courseId,
           JSON_UNQUOTE(JSON_EXTRACT(parent.fields, '$.slug')) AS courseSlug,
+          JSON_UNQUOTE(JSON_EXTRACT(parent.fields, '$.title')) AS courseTitle,
           directLink.position AS position,
           parent.createdAt AS createdAt
         FROM egghead_ContentResourceResource directLink
@@ -70,6 +84,7 @@ export async function parentCourseSlugsForLessonIds(
           lessonLink.resourceId AS lessonId,
           parent.id AS courseId,
           JSON_UNQUOTE(JSON_EXTRACT(parent.fields, '$.slug')) AS courseSlug,
+          JSON_UNQUOTE(JSON_EXTRACT(parent.fields, '$.title')) AS courseTitle,
           sectionLink.position AS position,
           parent.createdAt AS createdAt
         FROM egghead_ContentResourceResource lessonLink
@@ -95,10 +110,24 @@ export async function parentCourseSlugsForLessonIds(
   );
 
   for (const row of rows) {
-    if (!result.has(row.lessonId) && row.courseSlug) {
-      result.set(row.lessonId, row.courseSlug);
-    }
+    if (result.has(row.lessonId) || !row.courseSlug) continue;
+
+    const courseTitle = row.courseTitle?.trim();
+    result.set(row.lessonId, {
+      title: courseTitle && courseTitle.toLowerCase() !== "null" ? courseTitle : "Untitled course",
+      slug: row.courseSlug,
+      href: collectionPath(row.courseSlug),
+    });
   }
 
   return result;
+}
+
+export async function parentCourseSlugsForLessonIds(
+  connection: MysqlConnection,
+  lessonIds: readonly string[],
+): Promise<Map<string, string>> {
+  const contexts = await parentCourseRouteContextsForLessonIds(connection, lessonIds);
+
+  return new Map([...contexts].map(([lessonId, course]) => [lessonId, course.slug]));
 }

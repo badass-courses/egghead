@@ -109,7 +109,7 @@ importers:
         version: 3.12.2
       '@mdx-js/loader':
         specifier: ^3.1.0
-        version: 3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35))
+        version: 3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15))
       '@mdx-js/react':
         specifier: ^3.1.0
         version: 3.1.1(@types/react@19.2.7)(react@19.2.3)
@@ -118,7 +118,7 @@ importers:
         version: 3.13.0(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@next/mdx':
         specifier: 16.2.5
-        version: 16.2.5(@mdx-js/loader@3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35)))(@mdx-js/react@3.1.1(@types/react@19.2.7)(react@19.2.3))
+        version: 16.2.5(@mdx-js/loader@3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15)))(@mdx-js/react@3.1.1(@types/react@19.2.7)(react@19.2.3))
       '@planetscale/database':
         specifier: 1.19.0
         version: 1.19.0
@@ -435,6 +435,9 @@ importers:
       '@coursebuilder/core':
         specifier: 2.0.2
         version: 2.0.2(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.1))(@swc/core@1.3.101(@swc/helpers@0.5.18))(@swc/helpers@0.5.18)(drizzle-orm@0.36.0(@cloudflare/workers-types@4.20240320.1)(@opentelemetry/api@1.9.1)(@planetscale/database@1.19.0)(@types/pg@8.15.6)(@types/react@19.2.7)(mysql2@3.22.5(@types/node@20.19.42))(pg@8.21.0)(react@19.2.3))(eslint@10.4.1(jiti@2.7.0))(next@16.0.10(@opentelemetry/api@1.9.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(postcss@8.5.15)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(rollup@4.61.1)(typescript@5.9.3)(zod@4.4.3)
+      '@coursebuilder/email-templates':
+        specifier: 1.0.8
+        version: 1.0.8(@opentelemetry/api@1.9.1)(@swc/core@1.3.101(@swc/helpers@0.5.18))(@swc/helpers@0.5.18)(eslint@10.4.1(jiti@2.7.0))(postcss@8.5.15)(react-dom@19.2.3(react@19.2.3))(typescript@5.9.3)
       '@coursebuilder/next':
         specifier: 0.0.35
         version: 0.0.35(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.1))(@swc/core@1.3.101(@swc/helpers@0.5.18))(@swc/helpers@0.5.18)(drizzle-orm@0.36.0(@cloudflare/workers-types@4.20240320.1)(@opentelemetry/api@1.9.1)(@planetscale/database@1.19.0)(@types/pg@8.15.6)(@types/react@19.2.7)(mysql2@3.22.5(@types/node@20.19.42))(pg@8.21.0)(react@19.2.3))(eslint@10.4.1(jiti@2.7.0))(next-auth@5.0.0-beta.25(next@16.0.10(@opentelemetry/api@1.9.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(nodemailer@6.10.1)(react@19.2.3))(next@16.0.10(@opentelemetry/api@1.9.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(postcss@8.5.15)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(rollup@4.61.1)(typescript@5.9.3)(zod@4.4.3)
@@ -444,6 +447,9 @@ importers:
       '@mux/mux-player-react':
         specifier: 3.13.0
         version: 3.13.0(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@react-email/components':
+        specifier: 0.0.27
+        version: 0.0.27(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       drizzle-orm:
         specifier: 0.36.0
         version: 0.36.0(@cloudflare/workers-types@4.20240320.1)(@opentelemetry/api@1.9.1)(@planetscale/database@1.19.0)(@types/pg@8.15.6)(@types/react@19.2.7)(mysql2@3.22.5(@types/node@20.19.42))(pg@8.21.0)(react@19.2.3)
@@ -12974,7 +12980,7 @@ snapshots:
 
   '@marijn/find-cluster-break@1.0.2': {}
 
-  '@mdx-js/loader@3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35))':
+  '@mdx-js/loader@3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15))':
     dependencies:
       '@mdx-js/mdx': 3.1.1
       source-map: 0.7.6
@@ -13070,11 +13076,11 @@ snapshots:
     dependencies:
       fast-glob: 3.3.1
 
-  '@next/mdx@16.2.5(@mdx-js/loader@3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35)))(@mdx-js/react@3.1.1(@types/react@19.2.7)(react@19.2.3))':
+  '@next/mdx@16.2.5(@mdx-js/loader@3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15)))(@mdx-js/react@3.1.1(@types/react@19.2.7)(react@19.2.3))':
     dependencies:
       source-map: 0.7.6
     optionalDependencies:
-      '@mdx-js/loader': 3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35))
+      '@mdx-js/loader': 3.1.1(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15))
       '@mdx-js/react': 3.1.1(@types/react@19.2.7)(react@19.2.3)
 
   '@next/swc-darwin-arm64@14.1.0':
@@ -16179,7 +16185,7 @@ snapshots:
     dependencies:
       '@types/node': 24.13.1
       tapable: 2.3.3
-      webpack: 5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15)
+      webpack: 5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35)
     transitivePeerDependencies:
       - '@minify-html/node'
       - '@swc/core'
@@ -21787,7 +21793,7 @@ snapshots:
 
   temporal-spec@0.2.4: {}
 
-  terser-webpack-plugin@5.6.1(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35)(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35)):
+  terser-webpack-plugin@5.6.1(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35)(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15)):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       jest-worker: 27.5.1
@@ -21798,6 +21804,18 @@ snapshots:
       '@swc/core': 1.3.101(@swc/helpers@0.5.18)
       esbuild: 0.19.11
       postcss: 8.4.35
+
+  terser-webpack-plugin@5.6.1(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15)(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15)):
+    dependencies:
+      '@jridgewell/trace-mapping': 0.3.31
+      jest-worker: 27.5.1
+      schema-utils: 4.3.3
+      terser: 5.48.0
+      webpack: 5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15)
+    optionalDependencies:
+      '@swc/core': 1.3.101(@swc/helpers@0.5.18)
+      esbuild: 0.19.12
+      postcss: 8.5.15
 
   terser@5.48.0:
     dependencies:
@@ -22216,6 +22234,45 @@ snapshots:
 
   webpack-virtual-modules@0.6.2: {}
 
+  webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35):
+    dependencies:
+      '@types/estree': 1.0.9
+      '@types/json-schema': 7.0.15
+      '@webassemblyjs/ast': 1.14.1
+      '@webassemblyjs/wasm-edit': 1.14.1
+      '@webassemblyjs/wasm-parser': 1.14.1
+      acorn: 8.16.0
+      acorn-import-phases: 1.0.4(acorn@8.16.0)
+      browserslist: 4.28.2
+      chrome-trace-event: 1.0.4
+      enhanced-resolve: 5.23.0
+      es-module-lexer: 2.1.0
+      eslint-scope: 5.1.1
+      events: 3.3.0
+      glob-to-regexp: 0.4.1
+      graceful-fs: 4.2.11
+      loader-runner: 4.3.2
+      mime-db: 1.54.0
+      neo-async: 2.6.2
+      schema-utils: 4.3.3
+      tapable: 2.3.3
+      terser-webpack-plugin: 5.6.1(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35)(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15))
+      watchpack: 2.5.1
+      webpack-sources: 3.5.0
+    transitivePeerDependencies:
+      - '@minify-html/node'
+      - '@swc/core'
+      - '@swc/css'
+      - '@swc/html'
+      - clean-css
+      - cssnano
+      - csso
+      - esbuild
+      - html-minifier-terser
+      - lightningcss
+      - postcss
+      - uglify-js
+
   webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15):
     dependencies:
       '@types/estree': 1.0.9
@@ -22238,7 +22295,7 @@ snapshots:
       neo-async: 2.6.2
       schema-utils: 4.3.3
       tapable: 2.3.3
-      terser-webpack-plugin: 5.6.1(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35)(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.11)(postcss@8.4.35))
+      terser-webpack-plugin: 5.6.1(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15)(webpack@5.107.2(@swc/core@1.3.101(@swc/helpers@0.5.18))(esbuild@0.19.12)(postcss@8.5.15))
       watchpack: 2.5.1
       webpack-sources: 3.5.0
     transitivePeerDependencies:

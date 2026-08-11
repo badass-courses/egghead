@@ -6,12 +6,9 @@ import {
   getCourseLesson,
   getCourseLessonStaticParams,
 } from "../../../content/course";
+import { CourseLessonProgressExperience } from "../../../content/course-progress-experience";
 import { getLessonById, type LessonForPage } from "../../../content/lesson";
-import {
-  CourseLessonPageStatic,
-  LessonFactsExperience,
-  LessonPlayerExperience,
-} from "../../../content/lesson-page";
+import { CourseLessonPageStatic, LessonFactsExperience } from "../../../content/lesson-page";
 import {
   getPodcastEpisode,
   getPodcastEpisodeStaticParams,
@@ -128,8 +125,10 @@ export default async function CollectionEntryPage({ params }: CollectionEntryPag
       <CourseLessonPageStatic
         course={course}
         factsComponent={<LessonFactsExperience lesson={contextualLesson} />}
+        learningComponent={
+          <CourseLessonProgressExperience course={course} lesson={contextualLesson} />
+        }
         lesson={contextualLesson}
-        playerComponent={<LessonPlayerExperience lesson={contextualLesson} />}
       />
     );
   }

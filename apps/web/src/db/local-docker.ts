@@ -6,6 +6,8 @@ const LEADING_SLASH = /^\//;
 
 export type EggheadRuntime = "beta" | "local" | "production";
 
+let pool: mysql.Pool | null = null;
+
 export type DatabaseSafety = {
   runtime: EggheadRuntime;
   url: URL;
@@ -146,6 +148,16 @@ export function mysqlConnectionOptionsFromUrl(rawUrl: string) {
     database,
     ...(needsSsl ? { ssl: { rejectUnauthorized: true } } : {}),
   };
+}
+
+export function getEggheadMysqlPool() {
+  if (pool) return pool;
+
+  const rawUrl = getDatabaseUrl();
+  assertDatabaseUrlForRuntime(rawUrl);
+  pool = mysql.createPool(mysqlConnectionOptionsFromUrl(rawUrl));
+
+  return pool;
 }
 
 export function createEggheadMysqlConnection() {

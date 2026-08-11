@@ -1,12 +1,16 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 
-import { createLocalMysqlConnection } from "../db/local-docker";
+import { createLocalMysqlConnection, getEggheadMysqlPool } from "../db/local-docker";
 
 type ResourceProgressRow = RowDataPacket & {
   userId: string;
   resourceId: string;
   completedAt: Date | null;
   fields: unknown;
+};
+
+type CompletedResourceProgressRow = RowDataPacket & {
+  resourceId: string;
 };
 
 export type ResourceProgressState = {
@@ -118,6 +122,29 @@ export async function readResourceProgress(input: {
   }
 }
 
+export async function readCompletedResourceIdsForUser(input: {
+  userId: string;
+  resourceIds: readonly string[];
+}): Promise<string[]> {
+  const resourceIds = [...new Set(input.resourceIds.filter(Boolean))];
+  if (resourceIds.length === 0) return [];
+
+  const placeholders = resourceIds.map(() => "?").join(", ");
+  const [rows] = await getEggheadMysqlPool().execute<CompletedResourceProgressRow[]>(
+    `
+      SELECT resourceId
+      FROM egghead_ResourceProgress
+      WHERE userId = ?
+        AND completedAt IS NOT NULL
+        AND resourceId IN (${placeholders})
+      ORDER BY resourceId ASC
+    `,
+    [input.userId, ...resourceIds],
+  );
+
+  return rows.map((row) => row.resourceId);
+}
+
 export async function seedResourceProgress(input: {
   userId: string;
   resourceId: string;
@@ -184,6 +211,83 @@ export async function completeResourceForUser(input: {
           source: input.source,
           localOnly: true,
         }),
+      ],
+    );
+
+    return {
+      affectedRows: result.affectedRows,
+      state: await readResourceProgress(input),
+    };
+  } finally {
+    await connection.end();
+  }
+}
+
+export async function completeResourcesForUser(input: {
+  userId: string;
+  resourceIds: readonly string[];
+  source: string;
+}) {
+  const resourceIds = [...new Set(input.resourceIds.filter(Boolean))];
+  if (resourceIds.length === 0) return { affectedRows: 0 };
+
+  const connection = await createLocalMysqlConnection();
+  const fields = JSON.stringify({
+    source: input.source,
+    localOnly: true,
+  });
+  const values = resourceIds
+    .map(
+      () =>
+        "(?, ?, CURRENT_TIMESTAMP(3), CAST(? AS JSON), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))",
+    )
+    .join(", ");
+  const parameters = resourceIds.flatMap((resourceId) => [input.userId, resourceId, fields]);
+
+  try {
+    const [result] = await connection.execute<ResultSetHeader>(
+      `
+        INSERT INTO egghead_ResourceProgress
+          (userId, resourceId, completedAt, fields, createdAt, updatedAt)
+        VALUES ${values}
+        ON DUPLICATE KEY UPDATE
+          completedAt = COALESCE(completedAt, VALUES(completedAt)),
+          fields = VALUES(fields),
+          updatedAt = CURRENT_TIMESTAMP(3)
+      `,
+      parameters,
+    );
+
+    return { affectedRows: result.affectedRows };
+  } finally {
+    await connection.end();
+  }
+}
+
+export async function uncompleteResourceForUser(input: {
+  userId: string;
+  resourceId: string;
+  source: string;
+}) {
+  const connection = await createLocalMysqlConnection();
+
+  try {
+    const [result] = await connection.execute<ResultSetHeader>(
+      `
+        UPDATE egghead_ResourceProgress
+        SET completedAt = NULL,
+            fields = CAST(? AS JSON),
+            updatedAt = CURRENT_TIMESTAMP(3)
+        WHERE userId = ?
+          AND resourceId = ?
+      `,
+      [
+        JSON.stringify({
+          source: input.source,
+          localOnly: true,
+        }),
+        input.userId,
+        input.resourceId,
       ],
     );
 
