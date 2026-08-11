@@ -1,4 +1,5 @@
 import {
+  currentLearningStreakDays,
   ownerScopedNameUpdate,
   parsePublicProfileId,
   projectPublicLearnerProfile,
@@ -8,6 +9,8 @@ import {
 import {
   PRIVATE_PROFILE_ACCOUNTS_SQL,
   OWNER_SCOPED_NAME_UPDATE_SQL,
+  PUBLISHED_COMPLETION_STATS_SQL,
+  PUBLISHED_LEARNING_DAYS_SQL,
   PUBLIC_PROFILE_USER_SQL,
   ROUTABLE_PROFILE_COMPLETION_SQL,
 } from "../apps/web/src/profile/data";
@@ -86,14 +89,21 @@ const broadUserShape = {
 const completions = [
   {
     resourceId: "lesson-2",
+    family: "lesson" as const,
     title: "Second lesson",
-    href: "/lessons/second-lesson",
+    href: "/modern-react/second-lesson",
+    course: {
+      title: "Modern React",
+      href: "/modern-react",
+    },
     completedAt: new Date("2026-07-10T12:00:00.000Z"),
   },
   {
-    resourceId: "lesson-1",
-    title: "First lesson",
-    href: "/lessons/first-lesson",
+    resourceId: "course-1",
+    family: "course" as const,
+    title: "Modern React",
+    href: "/modern-react",
+    course: null,
     completedAt: new Date("2026-06-02T12:00:00.000Z"),
   },
 ];
@@ -104,7 +114,8 @@ const ownerUpdate = ownerScopedNameUpdate({
   name: "  Ada Lovelace  ",
 });
 const publicProjection = projectPublicLearnerProfile(broadUserShape, completions, {
-  completedCount: 10,
+  lessonCount: 8,
+  courseCount: 2,
   activeMonthCount: 7,
 });
 const emptyProjection = projectPublicLearnerProfile(
@@ -121,6 +132,9 @@ const publicQuery = PUBLIC_PROFILE_USER_SQL.toLowerCase();
 const updateQuery = OWNER_SCOPED_NAME_UPDATE_SQL.toLowerCase();
 const privateAccountsQuery = PRIVATE_PROFILE_ACCOUNTS_SQL.toLowerCase();
 const routableCompletionQuery = ROUTABLE_PROFILE_COMPLETION_SQL.toLowerCase();
+const completionStatsQuery = PUBLISHED_COMPLETION_STATS_SQL.toLowerCase();
+const learningDaysQuery = PUBLISHED_LEARNING_DAYS_SQL.toLowerCase();
+const streakToday = new Date("2026-08-07T12:00:00.000Z");
 const disconnectReadQuery = OWNER_AUTH_ACCOUNTS_FOR_UPDATE_SQL.toLowerCase();
 const disconnectQuery = OWNER_SCOPED_GITHUB_DISCONNECT_SQL.toLowerCase();
 const ownerWithTwoGithubAccounts = [
@@ -202,6 +216,58 @@ const checks = [
     "completion history filters unsupported content families before limiting rows",
     routableCompletionQuery,
     "end as binary",
+  ),
+  assertIncludes(
+    "completion stats track lessons separately",
+    completionStatsQuery,
+    "as lessoncount",
+  ),
+  assertIncludes(
+    "completion stats track courses separately",
+    completionStatsQuery,
+    "as coursecount",
+  ),
+  assertIncludes(
+    "learning streak days are distinct calendar days",
+    learningDaysQuery,
+    "select distinct date_format",
+  ),
+  assertIncludes("learning streak includes lessons", learningDaysQuery, "cast('lesson' as binary)"),
+  assertIncludes("learning streak includes courses", learningDaysQuery, "cast('course' as binary)"),
+  assertEqual(
+    "empty learning activity has no streak",
+    currentLearningStreakDays([], streakToday),
+    0,
+  ),
+  assertEqual(
+    "one completion day starts a streak",
+    currentLearningStreakDays(["2026-08-07"], streakToday),
+    1,
+  ),
+  assertEqual(
+    "multiple completions on one day increment the streak once",
+    currentLearningStreakDays(["2026-08-07", "2026-08-07"], streakToday),
+    1,
+  ),
+  assertEqual(
+    "consecutive completion days extend the streak",
+    currentLearningStreakDays(["2026-08-07", "2026-08-06", "2026-08-05"], streakToday),
+    3,
+  ),
+  assertEqual(
+    "a streak completed yesterday remains current",
+    currentLearningStreakDays(["2026-08-06", "2026-08-05"], streakToday),
+    2,
+  ),
+  assertEqual(
+    "a break before yesterday resets the streak",
+    currentLearningStreakDays(["2026-08-05", "2026-08-04"], streakToday),
+    0,
+  ),
+  assertEqual(
+    "a break within the chain stops the streak count",
+    currentLearningStreakDays(["2026-08-07", "2026-08-05"], streakToday),
+    1,
   ),
   expectThrow("GitHub disconnect rejects an anonymous actor", () =>
     planOwnerGithubDisconnect({
@@ -429,9 +495,22 @@ const checks = [
     null,
   ),
   assertEqual(
-    "public completion count can exceed displayed history",
-    publicProjection.learning.completedCount,
-    10,
+    "public lesson count can exceed displayed history",
+    publicProjection.learning.lessonCount,
+    8,
+  ),
+  assertEqual(
+    "public course completions are counted separately",
+    publicProjection.learning.courseCount,
+    2,
+  ),
+  assertDeepEqual(
+    "public lesson history includes its course context",
+    publicProjection.learning.history[0]?.completions[0]?.course,
+    {
+      title: "Modern React",
+      href: "/modern-react",
+    },
   ),
   assertEqual(
     "active month count can exceed the months in truncated public history",
@@ -453,6 +532,8 @@ const checks = [
     emptyProjection.learning.history.length,
     0,
   ),
+  assertEqual("empty profile has no lessons", emptyProjection.learning.lessonCount, 0),
+  assertEqual("empty profile has no completed courses", emptyProjection.learning.courseCount, 0),
   assertEqual("empty profile has no active months", emptyProjection.learning.activeMonthCount, 0),
 ];
 

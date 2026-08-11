@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import type { PublicContentFamily } from "../content/routes";
+
 const PUBLIC_PROFILE_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 const PUBLIC_AVATAR_HOSTS = new Set([
   "avatars.githubusercontent.com",
@@ -14,17 +16,29 @@ export const profileNameSchema = z
   .min(1, "Add a display name.")
   .max(80, "Keep your display name to 80 characters or fewer.");
 
-export type ProfileCompletion = {
-  resourceId: string;
+export type ProfileCompletionFamily = "course" | "lesson" | PublicContentFamily;
+export type ProfileCompletionFilter = "course" | "lesson";
+
+export type ProfileCompletionCourse = {
   title: string;
   href: string;
+};
+
+export type ProfileCompletion = {
+  resourceId: string;
+  family: ProfileCompletionFamily;
+  title: string;
+  href: string;
+  course: ProfileCompletionCourse | null;
   completedAt: Date;
 };
 
 export type PublicCompletion = {
   resourceId: string;
+  family: ProfileCompletionFamily;
   title: string;
   href: string;
+  course: ProfileCompletionCourse | null;
   completedAt: string;
 };
 
@@ -40,7 +54,8 @@ export type PublicLearnerProfile = {
   avatarUrl: string | null;
   memberSince: string | null;
   learning: {
-    completedCount: number;
+    lessonCount: number;
+    courseCount: number;
     activeMonthCount: number;
     history: CompletionHistoryMonth[];
   };
@@ -100,6 +115,50 @@ export function safePublicAvatarUrl(value: string | null): string | null {
   }
 }
 
+const UTC_DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function utcDayNumber(date: Date) {
+  return Math.floor(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) / MILLISECONDS_PER_DAY,
+  );
+}
+
+function utcDayNumberFromIsoDate(value: string) {
+  if (!UTC_DAY_PATTERN.test(value)) return null;
+
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== value) {
+    return null;
+  }
+
+  return Math.floor(timestamp / MILLISECONDS_PER_DAY);
+}
+
+export function currentLearningStreakDays(completionDays: readonly string[], today = new Date()) {
+  const todayNumber = utcDayNumber(today);
+  const completedDayNumbers = new Set<number>();
+
+  for (const completionDay of completionDays) {
+    const dayNumber = utcDayNumberFromIsoDate(completionDay);
+    if (dayNumber !== null && dayNumber <= todayNumber) completedDayNumbers.add(dayNumber);
+  }
+
+  let cursor = completedDayNumbers.has(todayNumber)
+    ? todayNumber
+    : completedDayNumbers.has(todayNumber - 1)
+      ? todayNumber - 1
+      : null;
+  let streak = 0;
+
+  while (cursor !== null && completedDayNumbers.has(cursor)) {
+    streak += 1;
+    cursor -= 1;
+  }
+
+  return streak;
+}
+
 function monthKey(date: Date) {
   return `${String(date.getUTCFullYear())}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
@@ -121,7 +180,8 @@ export function projectPublicLearnerProfile(
   },
   completions: readonly ProfileCompletion[],
   totals?: {
-    completedCount: number;
+    lessonCount: number;
+    courseCount: number;
     activeMonthCount: number;
   },
 ): PublicLearnerProfile {
@@ -131,8 +191,10 @@ export function projectPublicLearnerProfile(
     const key = monthKey(completion.completedAt);
     const publicCompletion = {
       resourceId: completion.resourceId,
+      family: completion.family,
       title: completion.title,
       href: completion.href,
+      course: completion.course,
       completedAt: completion.completedAt.toISOString(),
     };
     const existing = historyByMonth.get(key);
@@ -158,7 +220,12 @@ export function projectPublicLearnerProfile(
     avatarUrl: safePublicAvatarUrl(user.image),
     memberSince: user.createdAt ? monthLabel(user.createdAt) : null,
     learning: {
-      completedCount: totals?.completedCount ?? completions.length,
+      lessonCount:
+        totals?.lessonCount ??
+        completions.filter((completion) => completion.family === "lesson").length,
+      courseCount:
+        totals?.courseCount ??
+        completions.filter((completion) => completion.family === "course").length,
       activeMonthCount: totals?.activeMonthCount ?? history.length,
       history,
     },

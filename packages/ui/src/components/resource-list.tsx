@@ -149,7 +149,10 @@ export function ResourceListHeaderEyebrow({ className, ...props }: ComponentProp
   return (
     <p
       data-slot="resource-list-header-eyebrow"
-      className={cn("m-0 text-[10px] font-black uppercase tracking-wider text-rust", className)}
+      className={cn(
+        "m-0 text-xs font-black uppercase tracking-wider text-rust dark:text-sky",
+        className,
+      )}
       {...props}
     />
   );
@@ -323,9 +326,12 @@ export function ResourceListLink<T extends ElementType = "a">({
 
 /* ── Indicator: the knob at the start of every row ── */
 
-const indicatorStatus: Record<ResourceStatus, string> = {
+type ResourceIndicatorStatus = ResourceStatus | "active-completed";
+
+const indicatorStatus: Record<ResourceIndicatorStatus, string> = {
   upcoming: "border-border-strong bg-well text-muted-foreground shadow-well",
   completed: "border-sage-line bg-sage-wash text-sage-foreground",
+  "active-completed": "border-yolk-foreground/20 bg-yolk-foreground text-yolk",
   active: "border-border-strong bg-surface-grad text-foreground shadow-knob",
   locked: "border-border-strong bg-well text-muted-foreground shadow-well",
 };
@@ -337,7 +343,7 @@ export function ResourceListIndicator({
   ...props
 }: ComponentPropsWithoutRef<"span"> & {
   index?: number;
-  status?: ResourceStatus;
+  status?: ResourceIndicatorStatus;
 }) {
   return (
     <span
@@ -350,7 +356,7 @@ export function ResourceListIndicator({
       )}
       {...props}
     >
-      {status === "completed" ? (
+      {status === "completed" || status === "active-completed" ? (
         <CheckIcon />
       ) : status === "active" ? (
         <PlayIcon />

@@ -7,10 +7,14 @@ import {
   type AccessEntitlementRow,
 } from "../access/evaluate";
 import { fieldsFromJson, stringField } from "../content/fields";
+import {
+  lessonCanonicalPathForRouteContext,
+  parentCourseRouteContextsForLessonIds,
+  type ParentCourseRouteContext,
+} from "../content/lesson-route-context";
 import { publishedResourceSql } from "../content/publication";
 import {
   collectionPath,
-  legacyLessonPath,
   legacyPublicContentPath,
   STANDALONE_PUBLIC_CONTENT_FAMILIES,
   type PublicContentFamily,
@@ -18,11 +22,14 @@ import {
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { gravatarUrlForEmail } from "./gravatar";
 import {
+  currentLearningStreakDays,
   ownerScopedNameUpdate,
   parsePublicProfileId,
   projectPublicLearnerProfile,
   requireProfileOwner,
   type ProfileCompletion,
+  type ProfileCompletionFamily,
+  type ProfileCompletionFilter,
   type PublicLearnerProfile,
 } from "./contracts";
 import { summarizeGithubConnection, type GithubConnectionState } from "./github-disconnect";
@@ -57,8 +64,17 @@ type CompletionRow = RowDataPacket & {
 };
 
 type CompletionStatsRow = RowDataPacket & {
-  completedCount: number | string;
+  lessonCount: number | string;
+  courseCount: number | string;
   activeMonthCount: number | string;
+};
+
+type CompletionCountRow = RowDataPacket & {
+  totalCount: number | string;
+};
+
+type CompletionDayRow = RowDataPacket & {
+  completionDay: string;
 };
 
 type CourseAccessRow = RowDataPacket & {
@@ -85,9 +101,29 @@ export type PrivateAccountProfile = {
     legacyProQuarantined: boolean;
   };
   learning: {
-    completedCount: number;
+    lessonCount: number;
+    courseCount: number;
     recentlyCompleted: ProfileCompletion[];
   };
+};
+
+export type PrivateLearningProgress = {
+  completions: ProfileCompletion[];
+  lessonCount: number;
+  courseCount: number;
+  activeMonthCount: number;
+  currentStreakDays: number;
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+export type PrivateLearningProgressQuery = {
+  completionFamily?: ProfileCompletionFilter;
+  search?: string;
+  order: "newest" | "oldest";
+  page: number;
 };
 
 export const PRIVATE_PROFILE_USER_SQL = `
@@ -133,46 +169,103 @@ const PROFILE_COMPLETION_FAMILIES = [
 const PROFILE_COMPLETION_FAMILY_SQL = PROFILE_COMPLETION_FAMILIES.map(
   (family) => `'${family}'`,
 ).join(", ");
-
-export const ROUTABLE_PROFILE_COMPLETION_SQL = `
-  AND JSON_TYPE(JSON_EXTRACT(resource.fields, '$.slug')) = 'STRING'
-  AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')))) NOT IN ('', 'null')
-  AND CAST(
+const PROFILE_RESOURCE_FAMILY_SQL = `
+  CAST(
     CASE
       WHEN JSON_TYPE(JSON_EXTRACT(resource.fields, '$.postType')) = 'STRING'
         AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')))) NOT IN ('', 'null')
       THEN TRIM(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')))
       ELSE resource.type
     END AS BINARY
-  ) IN (${PROFILE_COMPLETION_FAMILY_SQL})
+  )
+`;
+
+export const ROUTABLE_PROFILE_COMPLETION_SQL = `
+  AND JSON_TYPE(JSON_EXTRACT(resource.fields, '$.slug')) = 'STRING'
+  AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.slug')))) NOT IN ('', 'null')
+  AND ${PROFILE_RESOURCE_FAMILY_SQL} IN (${PROFILE_COMPLETION_FAMILY_SQL})
+`;
+
+export const PUBLISHED_COMPLETION_STATS_SQL = `
+  SELECT
+    SUM(
+      CASE WHEN ${PROFILE_RESOURCE_FAMILY_SQL} = CAST('lesson' AS BINARY) THEN 1 ELSE 0 END
+    ) AS lessonCount,
+    SUM(
+      CASE WHEN ${PROFILE_RESOURCE_FAMILY_SQL} = CAST('course' AS BINARY) THEN 1 ELSE 0 END
+    ) AS courseCount,
+    COUNT(DISTINCT DATE_FORMAT(progress.completedAt, '%Y-%m')) AS activeMonthCount
+  FROM egghead_ResourceProgress progress
+  JOIN egghead_ContentResource resource
+    ON resource.id = progress.resourceId
+   AND resource.deletedAt IS NULL
+  WHERE progress.userId = ?
+    AND progress.completedAt IS NOT NULL
+    ${publishedResourceSql("resource")}
+`;
+
+export const PUBLISHED_LEARNING_DAYS_SQL = `
+  SELECT DISTINCT DATE_FORMAT(progress.completedAt, '%Y-%m-%d') AS completionDay
+  FROM egghead_ResourceProgress progress
+  JOIN egghead_ContentResource resource
+    ON resource.id = progress.resourceId
+   AND resource.deletedAt IS NULL
+  WHERE progress.userId = ?
+    AND progress.completedAt IS NOT NULL
+    AND ${PROFILE_RESOURCE_FAMILY_SQL} IN (CAST('lesson' AS BINARY), CAST('course' AS BINARY))
+    ${publishedResourceSql("resource")}
+  ORDER BY completionDay DESC
 `;
 
 function isPublicContentFamily(value: string): value is PublicContentFamily {
   return STANDALONE_PUBLIC_CONTENT_FAMILIES.some((family) => family === value);
 }
 
-function completionHref(type: string, fields: Record<string, unknown>, slug: string) {
+function completionFamily(
+  type: string,
+  fields: Record<string, unknown>,
+): ProfileCompletionFamily | null {
   const family = stringField(fields, "postType") ?? type;
 
-  if (family === "course") return collectionPath(slug);
-  if (family === "lesson") return legacyLessonPath(slug);
-  if (isPublicContentFamily(family)) return legacyPublicContentPath(family, slug);
+  if (family === "course" || family === "lesson" || isPublicContentFamily(family)) return family;
 
   return null;
 }
 
-function completionFromRow(row: CompletionRow): ProfileCompletion | null {
+function completionHref(
+  family: ProfileCompletionFamily,
+  slug: string,
+  parentCourse: ParentCourseRouteContext | null,
+) {
+  if (family === "course") return collectionPath(slug);
+  if (family === "lesson") {
+    return lessonCanonicalPathForRouteContext(slug, parentCourse?.slug);
+  }
+
+  return legacyPublicContentPath(family, slug);
+}
+
+function completionFromRow(
+  row: CompletionRow,
+  parentCourse: ParentCourseRouteContext | null,
+): ProfileCompletion | null {
   const fields = fieldsFromJson(row.fields);
   const slug = stringField(fields, "slug");
-  if (!slug) return null;
-
-  const href = completionHref(row.type, fields, slug);
-  if (!href) return null;
+  const family = completionFamily(row.type, fields);
+  if (!slug || !family) return null;
 
   return {
     resourceId: row.resourceId,
+    family,
     title: stringField(fields, "title") ?? "Untitled resource",
-    href,
+    href: completionHref(family, slug, parentCourse),
+    course:
+      family === "lesson" && parentCourse
+        ? {
+            title: parentCourse.title,
+            href: parentCourse.href,
+          }
+        : null,
     completedAt: row.completedAt,
   };
 }
@@ -197,9 +290,14 @@ async function readIdentityWithAccounts(userId: string) {
   }
 }
 
-async function readPublishedCompletions(userId: string, limit: number) {
+async function readPublishedCompletions(
+  userId: string,
+  limit: number,
+  family?: ProfileCompletionFilter,
+) {
   const connection = await createLocalMysqlConnection();
   const safeLimit = Math.max(1, Math.min(250, Math.floor(limit)));
+  const familyFilterSql = family ? `AND ${PROFILE_RESOURCE_FAMILY_SQL} = CAST(? AS BINARY)` : "";
 
   try {
     const [rows] = await connection.execute<CompletionRow[]>(
@@ -217,14 +315,20 @@ async function readPublishedCompletions(userId: string, limit: number) {
           AND progress.completedAt IS NOT NULL
           ${publishedResourceSql("resource")}
           ${ROUTABLE_PROFILE_COMPLETION_SQL}
+          ${familyFilterSql}
         ORDER BY progress.completedAt DESC, progress.resourceId ASC
         LIMIT ${safeLimit}
       `,
-      [userId],
+      family ? [userId, family] : [userId],
+    );
+
+    const parentCourses = await parentCourseRouteContextsForLessonIds(
+      connection,
+      rows.map((row) => row.resourceId),
     );
 
     return rows
-      .map(completionFromRow)
+      .map((row) => completionFromRow(row, parentCourses.get(row.resourceId) ?? null))
       .filter((completion): completion is ProfileCompletion => completion !== null);
   } finally {
     await connection.end();
@@ -235,11 +339,58 @@ async function readPublishedCompletionStats(userId: string) {
   const connection = await createLocalMysqlConnection();
 
   try {
-    const [rows] = await connection.execute<CompletionStatsRow[]>(
+    const [rows] = await connection.execute<CompletionStatsRow[]>(PUBLISHED_COMPLETION_STATS_SQL, [
+      userId,
+    ]);
+
+    return {
+      lessonCount: Number(rows[0]?.lessonCount ?? 0),
+      courseCount: Number(rows[0]?.courseCount ?? 0),
+      activeMonthCount: Number(rows[0]?.activeMonthCount ?? 0),
+    };
+  } finally {
+    await connection.end();
+  }
+}
+
+async function readPublishedLearningDays(userId: string) {
+  const connection = await createLocalMysqlConnection();
+
+  try {
+    const [rows] = await connection.execute<CompletionDayRow[]>(PUBLISHED_LEARNING_DAYS_SQL, [
+      userId,
+    ]);
+    return rows.map((row) => row.completionDay);
+  } finally {
+    await connection.end();
+  }
+}
+
+async function readPublishedCompletionPage(userId: string, input: PrivateLearningProgressQuery) {
+  const connection = await createLocalMysqlConnection();
+  const pageSize = 24;
+  const requestedPage = Math.max(1, Math.floor(input.page));
+  const search = input.search?.trim().slice(0, 100) ?? "";
+  const conditions: string[] = [];
+  const parameters: string[] = [userId];
+
+  if (input.completionFamily) {
+    conditions.push(`${PROFILE_RESOURCE_FAMILY_SQL} = CAST(? AS BINARY)`);
+    parameters.push(input.completionFamily);
+  }
+
+  if (search) {
+    conditions.push(`JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.title')) LIKE ?`);
+    parameters.push(`%${search}%`);
+  }
+
+  const filterSql = conditions.map((condition) => `AND ${condition}`).join("\n");
+  const orderSql = input.order === "oldest" ? "ASC" : "DESC";
+
+  try {
+    const [countRows] = await connection.execute<CompletionCountRow[]>(
       `
-        SELECT
-          COUNT(*) AS completedCount,
-          COUNT(DISTINCT DATE_FORMAT(progress.completedAt, '%Y-%m')) AS activeMonthCount
+        SELECT COUNT(*) AS totalCount
         FROM egghead_ResourceProgress progress
         JOIN egghead_ContentResource resource
           ON resource.id = progress.resourceId
@@ -247,14 +398,47 @@ async function readPublishedCompletionStats(userId: string) {
         WHERE progress.userId = ?
           AND progress.completedAt IS NOT NULL
           ${publishedResourceSql("resource")}
+          ${ROUTABLE_PROFILE_COMPLETION_SQL}
+          ${filterSql}
       `,
-      [userId],
+      parameters,
     );
+    const totalCount = Number(countRows[0]?.totalCount ?? 0);
+    const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * pageSize;
 
-    return {
-      completedCount: Number(rows[0]?.completedCount ?? 0),
-      activeMonthCount: Number(rows[0]?.activeMonthCount ?? 0),
-    };
+    const [rows] = await connection.execute<CompletionRow[]>(
+      `
+        SELECT
+          progress.resourceId,
+          progress.completedAt,
+          resource.type,
+          resource.fields
+        FROM egghead_ResourceProgress progress
+        JOIN egghead_ContentResource resource
+          ON resource.id = progress.resourceId
+         AND resource.deletedAt IS NULL
+        WHERE progress.userId = ?
+          AND progress.completedAt IS NOT NULL
+          ${publishedResourceSql("resource")}
+          ${ROUTABLE_PROFILE_COMPLETION_SQL}
+          ${filterSql}
+        ORDER BY progress.completedAt ${orderSql}, progress.resourceId ASC
+        LIMIT ${pageSize}
+        OFFSET ${offset}
+      `,
+      parameters,
+    );
+    const parentCourses = await parentCourseRouteContextsForLessonIds(
+      connection,
+      rows.map((row) => row.resourceId),
+    );
+    const completions = rows
+      .map((row) => completionFromRow(row, parentCourses.get(row.resourceId) ?? null))
+      .filter((completion): completion is ProfileCompletion => completion !== null);
+
+    return { completions, page, pageSize, totalCount, totalPages };
   } finally {
     await connection.end();
   }
@@ -331,12 +515,13 @@ export async function getPrivateAccountProfile(input: {
   profileUserId: string;
   requestCountry: string | null;
   emailAuthConfigured: boolean;
+  recentCompletionFamily?: ProfileCompletionFilter;
 }): Promise<PrivateAccountProfile | null> {
   const userId = requireProfileOwner(input.actorUserId, input.profileUserId);
   const [identity, entitlementRows, recentlyCompleted, completionStats] = await Promise.all([
     readIdentityWithAccounts(userId),
     readAccessEntitlementsForUser(userId),
-    readPublishedCompletions(userId, 6),
+    readPublishedCompletions(userId, 6, input.recentCompletionFamily),
     readPublishedCompletionStats(userId),
   ]);
 
@@ -365,9 +550,31 @@ export async function getPrivateAccountProfile(input: {
       legacyProQuarantined: access.ignored.quarantineEntitlements > 0,
     },
     learning: {
-      completedCount: completionStats.completedCount,
+      lessonCount: completionStats.lessonCount,
+      courseCount: completionStats.courseCount,
       recentlyCompleted,
     },
+  };
+}
+
+export async function getPrivateLearningProgress(input: {
+  actorUserId: string | null;
+  profileUserId: string;
+  query: PrivateLearningProgressQuery;
+}): Promise<PrivateLearningProgress> {
+  const userId = requireProfileOwner(input.actorUserId, input.profileUserId);
+  const [progress, stats, learningDays] = await Promise.all([
+    readPublishedCompletionPage(userId, input.query),
+    readPublishedCompletionStats(userId),
+    readPublishedLearningDays(userId),
+  ]);
+
+  return {
+    ...progress,
+    lessonCount: stats.lessonCount,
+    courseCount: stats.courseCount,
+    activeMonthCount: stats.activeMonthCount,
+    currentStreakDays: currentLearningStreakDays(learningDays),
   };
 }
 

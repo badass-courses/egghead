@@ -1,9 +1,11 @@
 import { redirect } from 'next/navigation'
 import { Layout } from '@/components/app/layout'
 import { db } from '@/db'
+import { getCurrentLearningStreakDays } from '@/lib/current-learning-streak'
 import { getServerAuthSession } from '@/server/auth'
 
 import EditProfileForm from '../_components/edit-profile-form'
+import { LearningStreakBadge } from '../_components/learning-streak-badge'
 
 type Props = {
 	params: Promise<{ id: string }>
@@ -24,9 +26,14 @@ export default async function ProfilePage(props: Props) {
 		ability.can('manage', 'all') ||
 		ability.can('read', 'User', session.user?.id)
 	) {
+		const currentStreakDays = await getCurrentLearningStreakDays(params.id)
+
 		return (
 			<Layout>
 				<main className="max-w-(--breakpoint-sm) mx-auto w-full">
+					<div className="mb-6">
+						<LearningStreakBadge days={currentStreakDays} />
+					</div>
 					<EditProfileForm user={fullUser} />
 				</main>
 			</Layout>
