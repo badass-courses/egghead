@@ -5,6 +5,10 @@ import {
   stripeSubscriptionGrantsAccess,
 } from "../apps/web/src/subscriptions/access";
 import { assertCommerceWritesAllowed } from "../apps/web/src/db/local-docker";
+import {
+  formatMembershipCost,
+  membershipIntervalLabel,
+} from "../apps/web/src/subscriptions/billing";
 
 type ContractCheck = {
   name: string;
@@ -48,6 +52,15 @@ try {
         stripeSubscriptionEntitlementId("sub_contract_fixture"),
         "stripe_ent_sub_contract_fixture",
       );
+    }),
+    check("membership billing details are customer-readable", () => {
+      assert.equal(membershipIntervalLabel("month", 1), "Monthly");
+      assert.equal(membershipIntervalLabel("year", 1), "Annual");
+      assert.equal(membershipIntervalLabel("month", 3), "Every 3 months");
+      assert.equal(membershipIntervalLabel(null, null), "Recurring");
+      assert.equal(formatMembershipCost(2_000, "usd", 1), "$20.00");
+      assert.equal(formatMembershipCost(2_000, "usd", 3), "$60.00");
+      assert.equal(formatMembershipCost(2_000, "jpy", 1), "¥2,000");
     }),
     check("commerce writes are allowed for local Docker only", () => {
       setEnv("DATABASE_URL", "mysql://root:root@127.0.0.1:3307/coursebuilder_test");
