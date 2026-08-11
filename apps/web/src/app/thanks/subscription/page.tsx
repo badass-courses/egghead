@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 
 import { getCurrentUser } from "../../../coursebuilder/current-user";
@@ -9,11 +10,22 @@ type SubscriptionThanksSearchParams = {
   session_id?: string | string[];
 };
 
+const thanksPanelClassName =
+  "mx-auto grid w-full max-w-[34rem] gap-6 rounded-[1.75rem] border border-border-strong bg-surface-grad p-6 text-center shadow-card-deep sm:p-9";
+
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export default async function SubscriptionThanksPage({
+function SubscriptionLoadingState() {
+  return (
+    <section aria-busy="true" className={thanksPanelClassName}>
+      <p className="font-bold text-muted-foreground">Checking your membership…</p>
+    </section>
+  );
+}
+
+async function ResolvedSubscriptionThanks({
   searchParams,
 }: {
   searchParams: Promise<SubscriptionThanksSearchParams>;
@@ -64,29 +76,41 @@ export default async function SubscriptionThanksPage({
         : "/login?callbackUrl=/thanks/subscription";
 
   return (
+    <section className={thanksPanelClassName}>
+      <p className="eyebrow">{status.eyebrow}</p>
+      <h1 className="text-balance text-4xl font-black tracking-tight">{status.heading}</h1>
+      <p className="text-pretty font-semibold text-muted-foreground">{status.message}</p>
+      <Link
+        className="press inline-flex items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
+        href={destination}
+        prefetch={false}
+      >
+        {subscription
+          ? "Browse courses"
+          : pendingActivation
+            ? "Check again"
+            : user
+              ? "View membership options"
+              : "Sign in"}
+      </Link>
+    </section>
+  );
+}
+
+export default function SubscriptionThanksPage({
+  searchParams,
+}: {
+  searchParams: Promise<SubscriptionThanksSearchParams>;
+}) {
+  return (
     <Container
       as="main"
       className="content-center gap-y-0 py-[clamp(2.5rem,8vh,6rem)]"
       size="narrow"
     >
-      <section className="mx-auto grid w-full max-w-[34rem] gap-6 rounded-[1.75rem] border border-border-strong bg-surface-grad p-6 text-center shadow-card-deep sm:p-9">
-        <p className="eyebrow">{status.eyebrow}</p>
-        <h1 className="text-balance text-4xl font-black tracking-tight">{status.heading}</h1>
-        <p className="text-pretty font-semibold text-muted-foreground">{status.message}</p>
-        <Link
-          className="press inline-flex items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
-          href={destination}
-          prefetch={false}
-        >
-          {subscription
-            ? "Browse courses"
-            : pendingActivation
-              ? "Check again"
-              : user
-                ? "View membership options"
-                : "Sign in"}
-        </Link>
-      </section>
+      <Suspense fallback={<SubscriptionLoadingState />}>
+        <ResolvedSubscriptionThanks searchParams={searchParams} />
+      </Suspense>
     </Container>
   );
 }
