@@ -236,12 +236,6 @@ function Hero({
               <path d="M1 6h12M9 1.5L13.5 6 9 10.5" />
             </svg>
           </Link>
-          <Link
-            className="press inline-flex items-center gap-2 rounded-xl border border-rust-deep bg-rust-grad px-7 pt-[15px] pb-[13px] font-extrabold text-cream shadow-btn-rust"
-            href="/subscribe"
-          >
-            Go Pro
-          </Link>
         </div>
 
         <p className="rotate-[-1deg] font-hand text-2xl text-rust">

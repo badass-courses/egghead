@@ -13,7 +13,7 @@ import { getPrivateAccountProfile } from "../../profile/data";
 import { gravatarUrlForEmail } from "../../profile/gravatar";
 import { getEnv } from "../../env";
 import { getMembershipBillingSummary } from "../../subscriptions/billing";
-import { manageMembership, updateProfileName } from "./actions";
+import { manageMembership, signOutOfEgghead, updateProfileName } from "./actions";
 import {
   CompletionFilterControls,
   completionFilterFromSearchParam,
@@ -22,6 +22,7 @@ import { GithubAccountControl } from "./github-account-control";
 import { ManageMembershipButton } from "./manage-membership-button";
 import { ProfileAvatar } from "./profile-avatar";
 import { ShareProfileButton } from "./share-profile-button";
+import { SignOutButton } from "./sign-out-button";
 
 export const metadata: Metadata = {
   title: "Your profile | egghead",
@@ -244,12 +245,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                   <div className="min-w-0">
                     <dt className="text-xs font-extrabold text-muted-foreground">Active plan</dt>
                     <dd className="mt-1 break-words font-extrabold">
-                      {membershipBilling?.productName ?? "Full library membership"}
-                      {membershipBilling ? (
-                        <span className="font-bold text-muted-foreground">
-                          {` · ${membershipBilling.billingInterval}`}
-                        </span>
-                      ) : null}
+                      {membershipBilling?.billingInterval ?? "Billing details unavailable"}
                     </dd>
                   </div>
                   <div>
@@ -509,6 +505,18 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                 <p className="mt-3 text-xs text-muted-foreground">
                   Connection details are private and never appear on your public profile.
                 </p>
+
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-5">
+                  <div>
+                    <h3 className="font-extrabold">Current session</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Sign out of egghead on this device.
+                    </p>
+                  </div>
+                  <form action={signOutOfEgghead}>
+                    <SignOutButton />
+                  </form>
+                </div>
               </div>
             </section>
           </div>

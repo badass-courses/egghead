@@ -1,11 +1,11 @@
-import { DrizzleAdapter } from "@coursebuilder/adapter-drizzle";
+import { mySqlDrizzleAdapter } from "@coursebuilder/adapter-drizzle/mysql";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 
 import { getEggheadMysqlPool } from "./local-docker";
 import { mysqlTable } from "./mysql-table";
 import * as schema from "./schema";
 
-type CourseBuilderAuthAdapter = ReturnType<typeof DrizzleAdapter>;
+type CourseBuilderAuthAdapter = ReturnType<typeof mySqlDrizzleAdapter>;
 type EggheadDatabase = MySql2Database<typeof schema>;
 
 let adapter: CourseBuilderAuthAdapter | null = null;
@@ -26,10 +26,7 @@ export function getCourseBuilderAdapter() {
     return adapter;
   }
 
-  // The published adapter currently expects Drizzle's schema-less MySQL type.
-  // App queries use the typed database instance above over the same connection pool.
-  const db = drizzle(getEggheadMysqlPool());
-  adapter = DrizzleAdapter(db, mysqlTable);
+  adapter = mySqlDrizzleAdapter(getEggheadDatabase(), mysqlTable);
 
   return adapter;
 }

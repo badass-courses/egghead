@@ -1,3 +1,4 @@
+import { courseAccessFromFields } from "../apps/web/src/content/course-access";
 import { COURSE_LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/course";
 import {
   ACCESS_ENTITLEMENT_ROWS_SQL,
@@ -139,6 +140,27 @@ const checks = [
     legacyPublicContentPath("talk", "conf-talk"),
     "/talks/conf-talk",
   ),
+  assertEqual(
+    "Rails free course is labeled free",
+    courseAccessFromFields({ accessState: "free" }),
+    "free",
+  ),
+  assertEqual(
+    "Rails pro course is labeled pro",
+    courseAccessFromFields({ accessState: "pro" }),
+    "pro",
+  ),
+  assertEqual(
+    "CourseBuilder-native free course is labeled free",
+    courseAccessFromFields({ access: "free" }),
+    "free",
+  ),
+  assertEqual(
+    "migrated free course is labeled free",
+    courseAccessFromFields({ freeForever: true, visibility: "public" }),
+    "free",
+  ),
+  assertEqual("course with no access marker defaults to pro", courseAccessFromFields({}), "pro"),
   assertEqual(
     "course-linked paid lessons require access",
     lessonRequiresAccess({ courseLinked: true, freeForever: false }),

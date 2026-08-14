@@ -1,16 +1,17 @@
+import { StripePaymentAdapter } from "@coursebuilder/core/providers/stripe";
 import { and, eq } from "drizzle-orm";
 
 import { getStripeProvider, getSiteUrl } from "../coursebuilder/stripe-provider";
 import { getEggheadDatabase } from "../db/adapter";
-import { merchantCustomer, merchantSubscription, products } from "../db/schema";
+import { merchantCustomer, merchantSubscription } from "../db/schema";
 import { getCurrentSubscriptionForUser } from "./status";
 
 export type MembershipBillingSummary = {
-  productName: string;
   billingInterval: string;
   cost: string | null;
   renewsAt: Date;
   cancelAtPeriodEnd: boolean;
+  invoicePdfUrl: string | null;
 };
 
 export function formatMembershipCost(
@@ -34,6 +35,17 @@ export function formatMembershipCost(
   }
 }
 
+export function stripeInvoiceDownloadUrl(invoicePdf: string | null | undefined) {
+  if (!invoicePdf) return null;
+
+  try {
+    const url = new URL(invoicePdf);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function membershipIntervalLabel(interval: string | null, intervalCount: number | null) {
   const count = intervalCount && intervalCount > 0 ? intervalCount : 1;
 
@@ -41,7 +53,7 @@ export function membershipIntervalLabel(interval: string | null, intervalCount: 
     if (interval === "day") return "Daily";
     if (interval === "week") return "Weekly";
     if (interval === "month") return "Monthly";
-    if (interval === "year") return "Annual";
+    if (interval === "year") return "Yearly";
     return "Recurring";
   }
 
@@ -54,17 +66,18 @@ async function getStripeMembershipForUser(userId: string) {
   if (!currentSubscription) return null;
 
   const db = getEggheadDatabase();
-  const [storedMerchantSubscription, product] = await Promise.all([
-    db.query.merchantSubscription.findFirst({
-      where: eq(merchantSubscription.id, currentSubscription.merchantSubscriptionId),
-    }),
-    db.query.products.findFirst({
-      where: eq(products.id, currentSubscription.productId),
-    }),
-  ]);
+  const storedMerchantSubscription = await db.query.merchantSubscription.findFirst({
+    where: eq(merchantSubscription.id, currentSubscription.merchantSubscriptionId),
+  });
   const stripeProvider = getStripeProvider();
+  const paymentsAdapter = stripeProvider?.options.paymentsAdapter;
 
-  if (!storedMerchantSubscription?.identifier || !stripeProvider) return null;
+  if (
+    !storedMerchantSubscription?.identifier ||
+    !(paymentsAdapter instanceof StripePaymentAdapter)
+  ) {
+    return null;
+  }
 
   const ownedMerchantCustomer = await db.query.merchantCustomer.findFirst({
     where: and(
@@ -74,11 +87,29 @@ async function getStripeMembershipForUser(userId: string) {
   });
   if (!ownedMerchantCustomer) return null;
 
-  const stripeSubscription = await stripeProvider.getSubscription(
+  const stripeSubscription = await paymentsAdapter.getSubscription(
     storedMerchantSubscription.identifier,
   );
 
-  return { product, stripeProvider, stripeSubscription };
+  return { paymentsAdapter, stripeSubscription };
+}
+
+async function getLatestInvoicePdfUrl(
+  paymentsAdapter: StripePaymentAdapter,
+  latestInvoice: Awaited<ReturnType<StripePaymentAdapter["getSubscription"]>>["latest_invoice"],
+) {
+  if (!latestInvoice) return null;
+
+  try {
+    const invoice =
+      typeof latestInvoice === "string"
+        ? await paymentsAdapter.stripe.invoices.retrieve(latestInvoice)
+        : latestInvoice;
+
+    return stripeInvoiceDownloadUrl(invoice.invoice_pdf);
+  } catch {
+    return null;
+  }
 }
 
 export async function getMembershipBillingSummary(
@@ -92,9 +123,12 @@ export async function getMembershipBillingSummary(
     const price = subscriptionItem?.price;
     const periodEnd = membership.stripeSubscription.current_period_end;
     if (!periodEnd || !Number.isFinite(periodEnd)) return null;
+    const invoicePdfUrl = await getLatestInvoicePdfUrl(
+      membership.paymentsAdapter,
+      membership.stripeSubscription.latest_invoice,
+    );
 
     return {
-      productName: membership.product?.name.trim() || "egghead membership",
       billingInterval: membershipIntervalLabel(
         price?.recurring?.interval ?? null,
         price?.recurring?.interval_count ?? null,
@@ -106,6 +140,7 @@ export async function getMembershipBillingSummary(
       ),
       renewsAt: new Date(periodEnd * 1000),
       cancelAtPeriodEnd: membership.stripeSubscription.cancel_at_period_end,
+      invoicePdfUrl,
     };
   } catch {
     return null;
@@ -120,7 +155,7 @@ export async function getMembershipBillingPortalUrl(userId: string) {
     const customer = membership.stripeSubscription.customer;
     const customerId = typeof customer === "string" ? customer : customer.id;
 
-    return membership.stripeProvider.getBillingPortalUrl(customerId, `${getSiteUrl()}/profile`);
+    return membership.paymentsAdapter.getBillingPortalUrl(customerId, `${getSiteUrl()}/profile`);
   } catch {
     return null;
   }

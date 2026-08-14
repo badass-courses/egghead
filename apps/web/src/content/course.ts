@@ -16,6 +16,7 @@ import {
   publishedResourceSql,
   routeableLessonResourceSql,
 } from "./publication";
+import { courseAccessFromFields, type CourseAccess } from "./course-access";
 import { lessonFreeForeverFromFields } from "./lesson-access";
 import { contentResourceSlugSql } from "./resource-slug";
 import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
@@ -27,6 +28,11 @@ type ContentResourceRow = RowDataPacket & {
   fields: unknown;
   createdAt: Date;
   updatedAt: Date;
+};
+
+type CourseResourceRow = ContentResourceRow & {
+  creatorName: string | null;
+  creatorImage: string | null;
 };
 
 type LinkedResourceRow = ContentResourceRow & {
@@ -63,8 +69,9 @@ export type CourseForPage = {
   body: string | null;
   state: string | null;
   visibilityState: string | null;
-  accessState: string | null;
+  access: CourseAccess;
   instructorName: string | null;
+  instructorImage: string | null;
   legacyRailsPlaylistId: number | null;
   lessonCount: number;
   canonicalPath: string;
@@ -98,6 +105,17 @@ function hotLessonStaticParamSql() {
 function instructorName(fields: Record<string, unknown>): string | null {
   const instructor = objectField(fields, "instructor");
   return instructor ? stringField(instructor, "name") : null;
+}
+
+function instructorImage(fields: Record<string, unknown>): string | null {
+  const instructor = objectField(fields, "instructor");
+  if (!instructor) return null;
+
+  return (
+    stringField(instructor, "image") ??
+    stringField(instructor, "avatarUrl") ??
+    stringField(instructor, "avatar_url")
+  );
 }
 
 function lessonResourceCondition(alias: string) {
@@ -207,10 +225,18 @@ export async function getCourseBySlug(slug: string): Promise<CourseForPage | nul
 
   try {
     const courseSlugSql = await contentResourceSlugSql(connection, "course");
-    const [courseRows] = await connection.execute<ContentResourceRow[]>(
+    const [courseRows] = await connection.execute<CourseResourceRow[]>(
       `
-        SELECT course.id, course.type, course.fields, course.createdAt, course.updatedAt
+        SELECT
+          course.id,
+          course.type,
+          course.fields,
+          course.createdAt,
+          course.updatedAt,
+          creator.name AS creatorName,
+          creator.image AS creatorImage
         FROM egghead_ContentResource course
+        LEFT JOIN egghead_User creator ON creator.id = course.createdById
         WHERE course.deletedAt IS NULL
           ${publishedResourceSql("course")}
           AND ${courseSlugSql} = ?
@@ -283,8 +309,9 @@ export async function getCourseBySlug(slug: string): Promise<CourseForPage | nul
       body: markdownField(fields),
       state: stringField(fields, "state"),
       visibilityState: stringField(fields, "visibilityState"),
-      accessState: stringField(fields, "accessState"),
-      instructorName: instructorName(fields),
+      access: courseAccessFromFields(fields),
+      instructorName: instructorName(fields) ?? course.creatorName,
+      instructorImage: instructorImage(fields) ?? course.creatorImage,
       legacyRailsPlaylistId: numberField(fields, "legacyRailsPlaylistId"),
       lessonCount: numberField(fields, "lessonCount") ?? lessons.length,
       canonicalPath: collectionPath(courseSlug),

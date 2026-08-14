@@ -4,7 +4,6 @@ import { STRIPE_CUSTOMER_SUBSCRIPTION_UPDATED_EVENT } from "@coursebuilder/core/
 import { parseSubscriptionInfoFromCheckoutSession } from "@coursebuilder/core/pricing/stripe-subscription-utils";
 import { checkoutSessionCompletedEvent } from "@coursebuilder/core/schemas/stripe/checkout-session-completed";
 import { eq } from "drizzle-orm";
-import { z } from "zod";
 
 import { getStripeProvider } from "../coursebuilder/stripe-provider";
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
@@ -197,17 +196,13 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
   },
 );
 
-// CourseBuilder's update-event schema trails Stripe's event timestamp and item period fields.
-const stripeSubscriptionUpdateEnvelopeSchema = z.object({
-  created: z.number(),
-  data: z.object({
-    object: z.object({
-      items: z.object({
-        data: z.array(z.object({ current_period_end: z.number().optional() })),
-      }),
-    }),
-  }),
-});
+function getInngestEventCreatedAt(timestamp: number | undefined) {
+  if (timestamp === undefined) {
+    throw new Error("Stripe subscription update is missing its Inngest timestamp.");
+  }
+
+  return Math.floor(timestamp / 1000);
+}
 
 function getStripeEventCreatedAt(metadata: unknown) {
   if (typeof metadata !== "object" || metadata === null || !("stripeEventCreatedAt" in metadata)) {
@@ -232,15 +227,25 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
     assertCommerceWritesAllowed();
 
     const stripeEvent = event.data.stripeEvent;
-    const stripeEventEnvelope = stripeSubscriptionUpdateEnvelopeSchema.parse(stripeEvent);
-    const stripeEventCreatedAt = stripeEventEnvelope.created;
-    const stripeSubscription = stripeEvent.data.object;
+    const stripeSubscriptionId = stripeEvent.data.object.id;
+    const stripeEventCreatedAt = getInngestEventCreatedAt(event.ts);
+    const stripeProvider = getStripeProvider();
     const adapter = getCourseBuilderAdapter();
     const db = getEggheadDatabase();
 
+    if (!stripeProvider) {
+      throw new Error("Stripe is not configured.");
+    }
+
+    // The published CourseBuilder event schema strips fields needed for lifecycle updates.
+    // Reloading Stripe's current state also makes delayed webhook delivery converge safely.
+    const stripeSubscription = await step.run("load current Stripe subscription", () =>
+      stripeProvider.options.paymentsAdapter.getSubscription(stripeSubscriptionId),
+    );
+
     const stored = await step.run("load stored subscription", () =>
       db.query.merchantSubscription.findFirst({
-        where: eq(merchantSubscription.identifier, stripeSubscription.id),
+        where: eq(merchantSubscription.identifier, stripeSubscriptionId),
         with: { subscription: true },
       }),
     );
@@ -253,7 +258,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
       logger.warn("Ignoring Stripe subscription update", {
         reason: "local_subscription_not_found_or_incomplete",
         stripeEventId: stripeEvent.id,
-        stripeSubscriptionId: stripeSubscription.id,
+        stripeSubscriptionId,
         localSubscriptionId: localSubscription?.id ?? null,
         organizationId: organizationId ?? null,
         productId: productId ?? null,
@@ -263,7 +268,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
 
     const entitlement = await step.run("load subscription entitlement", () =>
       db.query.entitlements.findFirst({
-        where: eq(entitlements.id, stripeSubscriptionEntitlementId(stripeSubscription.id)),
+        where: eq(entitlements.id, stripeSubscriptionEntitlementId(stripeSubscriptionId)),
       }),
     );
     const storedEventCreatedAt = getStripeEventCreatedAt(entitlement?.metadata);
@@ -273,17 +278,13 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
         reason: "older_than_stored_subscription_event",
         stripeEventId: stripeEvent.id,
         stripeEventCreatedAt,
-        stripeSubscriptionId: stripeSubscription.id,
+        stripeSubscriptionId,
         storedEventCreatedAt,
       });
       return { ignored: true, subscriptionId: localSubscription.id };
     }
 
-    const subscriptionItems = stripeEventEnvelope.data.object.items.data;
-    const singleSubscriptionItem =
-      subscriptionItems.length === 1 ? subscriptionItems[0] : undefined;
-    const currentPeriodEnd =
-      stripeSubscription.current_period_end ?? singleSubscriptionItem?.current_period_end;
+    const currentPeriodEnd = stripeSubscription.current_period_end;
     const organizationMembershipId = entitlement?.organizationMembershipId;
     const userId = entitlement?.userId;
 
@@ -291,7 +292,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
       logger.warn("Ignoring incomplete Stripe subscription update", {
         reason: "entitlement_or_current_period_missing",
         stripeEventId: stripeEvent.id,
-        stripeSubscriptionId: stripeSubscription.id,
+        stripeSubscriptionId,
         subscriptionId: localSubscription.id,
         entitlementId: entitlement?.id ?? null,
         hasCurrentPeriodEnd: Boolean(currentPeriodEnd),
@@ -314,7 +315,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
         productId,
         status: stripeSubscription.status,
         stripeEventCreatedAt,
-        stripeSubscriptionId: stripeSubscription.id,
+        stripeSubscriptionId,
         userId,
       }),
     );

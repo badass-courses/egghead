@@ -41,17 +41,19 @@ creates the local subscription records and grants the all-access entitlement.
 Configure these values in `.env`:
 
 ```bash
-EGGHEAD_SUBSCRIPTION_PRODUCT_ID=your_coursebuilder_product_id
+EGGHEAD_SUBSCRIPTION_PRODUCT_IDS=monthly_coursebuilder_product_id,yearly_coursebuilder_product_id
 STRIPE_SECRET_TOKEN=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 INNGEST_EVENT_KEY=
 INNGEST_SIGNING_KEY=
 ```
 
-`EGGHEAD_SUBSCRIPTION_PRODUCT_ID` is the local CourseBuilder `Product.id`, not the Stripe
-product ID. That product must have a recurring Stripe price connected through CourseBuilder's
-`MerchantProduct` and `MerchantPrice` rows, and the database must contain the Stripe
-`MerchantAccount` row.
+`EGGHEAD_SUBSCRIPTION_PRODUCT_IDS` is a comma-separated list of local CourseBuilder `Product.id`
+values, not Stripe product IDs. The app still accepts `EGGHEAD_SUBSCRIPTION_PRODUCT_ID` as a
+single-product fallback. Each product must have a recurring Stripe price connected through
+CourseBuilder's `MerchantProduct` and `MerchantPrice` rows, a supported `billingInterval` field
+(`day`, `week`, `month`, or `year`), and the database must contain the Stripe `MerchantAccount`
+row.
 
 Run the app and the Inngest dev server in separate terminals:
 

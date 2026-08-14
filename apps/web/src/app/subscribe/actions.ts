@@ -8,10 +8,15 @@ import { getSiteUrl, getStripeProvider } from "../../coursebuilder/stripe-provid
 import { getCourseBuilderAdapter } from "../../db/adapter";
 import { assertCommerceWritesAllowed } from "../../db/local-docker";
 import { getEnv } from "../../env";
+import {
+  isConfiguredSubscriptionProductId,
+  subscriptionProductFields,
+  subscriptionProductIds,
+} from "../../subscriptions/options";
 import { ensurePersonalOrganization } from "../../subscriptions/personal-organization";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 
-export async function startSubscriptionCheckout() {
+export async function startSubscriptionCheckout(formData: FormData) {
   assertCommerceWritesAllowed();
 
   const user = await getCurrentUser();
@@ -28,14 +33,36 @@ export async function startSubscriptionCheckout() {
     redirect("/thanks/subscription?existing=true");
   }
 
-  const productId = getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_ID");
-  const stripeProvider = getStripeProvider();
+  const configuredProductIds = subscriptionProductIds(
+    getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_IDS"),
+    getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_ID"),
+  );
+  const requestedProductId = formData.get("productId");
 
-  if (!productId || !stripeProvider) {
+  if (
+    typeof requestedProductId !== "string" ||
+    !isConfiguredSubscriptionProductId(requestedProductId, configuredProductIds)
+  ) {
+    redirect("/subscribe?error=invalid-product");
+  }
+
+  const productId = requestedProductId;
+  const stripeProvider = getStripeProvider();
+  const adapter = getCourseBuilderAdapter();
+  const product = await adapter.getProduct(productId, false);
+  const productFields = subscriptionProductFields(product?.fields);
+
+  if (
+    !stripeProvider ||
+    !product ||
+    product.type !== "membership" ||
+    !product.price ||
+    product.price.status !== 1 ||
+    !productFields.billingInterval
+  ) {
     redirect("/subscribe?error=not-configured");
   }
 
-  const adapter = getCourseBuilderAdapter();
   const { organization } = await ensurePersonalOrganization(
     { id: user.id, email: user.email },
     adapter,
