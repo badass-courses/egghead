@@ -101,6 +101,7 @@ export async function syncCourseProgressForUser(input: {
           WHERE userId = ?
             AND completedAt IS NOT NULL
             AND resourceId IN (${placeholders})
+          FOR SHARE
         `,
         [input.userId, ...lessonIds],
       );
@@ -112,7 +113,7 @@ export async function syncCourseProgressForUser(input: {
       localOnly: true,
     });
 
-    if (completed) {
+    if (lessonIds.length > 0 && completed) {
       await connection.execute<ResultSetHeader>(
         `
           INSERT INTO egghead_ResourceProgress
@@ -125,7 +126,7 @@ export async function syncCourseProgressForUser(input: {
         `,
         [input.userId, input.courseId, progressFields],
       );
-    } else {
+    } else if (lessonIds.length > 0) {
       await connection.execute<ResultSetHeader>(
         `
           UPDATE egghead_ResourceProgress
@@ -148,7 +149,7 @@ export async function syncCourseProgressForUser(input: {
       reviewSubmitted: courseReviewFromFields(row?.fields) !== null,
     };
   } catch (error) {
-    await connection.rollback();
+    await connection.rollback().catch(() => undefined);
     throw error;
   } finally {
     await connection.end();
@@ -186,10 +187,14 @@ export async function saveCourseReviewForUser(input: {
       [fields, input.userId, input.courseId],
     );
 
-    return {
-      saved: result.affectedRows > 0,
-      review,
-    };
+    if (result.affectedRows > 0) {
+      return { status: "saved" as const, review };
+    }
+
+    const progress = await readCourseProgressRow(connection, input);
+    return progress
+      ? { status: "course_incomplete" as const, review: null }
+      : { status: "missing_progress" as const, review: null };
   } finally {
     await connection.end();
   }

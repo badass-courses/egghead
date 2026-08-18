@@ -34,6 +34,8 @@ import {
 } from "./contracts";
 import { summarizeGithubConnection, type GithubConnectionState } from "./github-disconnect";
 
+type MysqlConnection = Awaited<ReturnType<typeof createLocalMysqlConnection>>;
+
 type PrivateUserRow = RowDataPacket & {
   id: string;
   name: string | null;
@@ -125,6 +127,10 @@ export type PrivateLearningProgressQuery = {
   order: "newest" | "oldest";
   page: number;
 };
+
+export function escapeMysqlLikePattern(value: string) {
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
 
 export const PRIVATE_PROFILE_USER_SQL = `
   SELECT user.id, user.name, user.email, user.createdAt
@@ -335,8 +341,8 @@ async function readPublishedCompletions(
   }
 }
 
-async function readPublishedCompletionStats(userId: string) {
-  const connection = await createLocalMysqlConnection();
+async function readPublishedCompletionStats(userId: string, sharedConnection?: MysqlConnection) {
+  const connection = sharedConnection ?? (await createLocalMysqlConnection());
 
   try {
     const [rows] = await connection.execute<CompletionStatsRow[]>(PUBLISHED_COMPLETION_STATS_SQL, [
@@ -349,12 +355,12 @@ async function readPublishedCompletionStats(userId: string) {
       activeMonthCount: Number(rows[0]?.activeMonthCount ?? 0),
     };
   } finally {
-    await connection.end();
+    if (!sharedConnection) await connection.end();
   }
 }
 
-async function readPublishedLearningDays(userId: string) {
-  const connection = await createLocalMysqlConnection();
+async function readPublishedLearningDays(userId: string, sharedConnection?: MysqlConnection) {
+  const connection = sharedConnection ?? (await createLocalMysqlConnection());
 
   try {
     const [rows] = await connection.execute<CompletionDayRow[]>(PUBLISHED_LEARNING_DAYS_SQL, [
@@ -362,12 +368,16 @@ async function readPublishedLearningDays(userId: string) {
     ]);
     return rows.map((row) => row.completionDay);
   } finally {
-    await connection.end();
+    if (!sharedConnection) await connection.end();
   }
 }
 
-async function readPublishedCompletionPage(userId: string, input: PrivateLearningProgressQuery) {
-  const connection = await createLocalMysqlConnection();
+async function readPublishedCompletionPage(
+  userId: string,
+  input: PrivateLearningProgressQuery,
+  sharedConnection?: MysqlConnection,
+) {
+  const connection = sharedConnection ?? (await createLocalMysqlConnection());
   const pageSize = 24;
   const requestedPage = Math.max(1, Math.floor(input.page));
   const search = input.search?.trim().slice(0, 100) ?? "";
@@ -380,8 +390,9 @@ async function readPublishedCompletionPage(userId: string, input: PrivateLearnin
   }
 
   if (search) {
-    conditions.push(`JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.title')) LIKE ?`);
-    parameters.push(`%${search}%`);
+    const escapedSearch = escapeMysqlLikePattern(search);
+    conditions.push(`JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.title')) LIKE ? ESCAPE '\\\\'`);
+    parameters.push(`%${escapedSearch}%`);
   }
 
   const filterSql = conditions.map((condition) => `AND ${condition}`).join("\n");
@@ -440,7 +451,7 @@ async function readPublishedCompletionPage(userId: string, input: PrivateLearnin
 
     return { completions, page, pageSize, totalCount, totalPages };
   } finally {
-    await connection.end();
+    if (!sharedConnection) await connection.end();
   }
 }
 
@@ -563,19 +574,30 @@ export async function getPrivateLearningProgress(input: {
   query: PrivateLearningProgressQuery;
 }): Promise<PrivateLearningProgress> {
   const userId = requireProfileOwner(input.actorUserId, input.profileUserId);
-  const [progress, stats, learningDays] = await Promise.all([
-    readPublishedCompletionPage(userId, input.query),
-    readPublishedCompletionStats(userId),
-    readPublishedLearningDays(userId),
-  ]);
+  const connection = await createLocalMysqlConnection();
 
-  return {
-    ...progress,
-    lessonCount: stats.lessonCount,
-    courseCount: stats.courseCount,
-    activeMonthCount: stats.activeMonthCount,
-    currentStreakDays: currentLearningStreakDays(learningDays),
-  };
+  try {
+    await connection.beginTransaction();
+    const [progress, stats, learningDays] = await Promise.all([
+      readPublishedCompletionPage(userId, input.query, connection),
+      readPublishedCompletionStats(userId, connection),
+      readPublishedLearningDays(userId, connection),
+    ]);
+    await connection.commit();
+
+    return {
+      ...progress,
+      lessonCount: stats.lessonCount,
+      courseCount: stats.courseCount,
+      activeMonthCount: stats.activeMonthCount,
+      currentStreakDays: currentLearningStreakDays(learningDays),
+    };
+  } catch (error) {
+    await connection.rollback().catch(() => undefined);
+    throw error;
+  } finally {
+    await connection.end();
+  }
 }
 
 export async function getPublicLearnerProfile(

@@ -1,4 +1,4 @@
-import { redirect } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { Layout } from '@/components/app/layout'
 import { db } from '@/db'
 import { getCurrentLearningStreakDays } from '@/lib/current-learning-streak'
@@ -15,30 +15,28 @@ export default async function ProfilePage(props: Props) {
 	const { session, ability } = await getServerAuthSession()
 	const params = await props.params
 
+	if (!ability.can('manage', 'all') && session.user?.id !== params.id) {
+		redirect('/')
+	}
+
 	const fullUser = await db.query.users.findFirst({
 		where: (users, { eq }) => eq(users.id, params.id),
 		with: {
 			profiles: true,
 		},
 	})
+	if (!fullUser) notFound()
 
-	if (
-		ability.can('manage', 'all') ||
-		ability.can('read', 'User', session.user?.id)
-	) {
-		const currentStreakDays = await getCurrentLearningStreakDays(params.id)
+	const currentStreakDays = await getCurrentLearningStreakDays(params.id)
 
-		return (
-			<Layout>
-				<main className="max-w-(--breakpoint-sm) mx-auto w-full">
-					<div className="mb-6">
-						<LearningStreakBadge days={currentStreakDays} />
-					</div>
-					<EditProfileForm user={fullUser} />
-				</main>
-			</Layout>
-		)
-	}
-
-	redirect('/')
+	return (
+		<Layout>
+			<main className="max-w-(--breakpoint-sm) mx-auto w-full">
+				<div className="mb-6">
+					<LearningStreakBadge days={currentStreakDays} />
+				</div>
+				<EditProfileForm user={fullUser} />
+			</main>
+		</Layout>
+	)
 }
