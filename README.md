@@ -38,7 +38,7 @@ The subscription flow uses hosted Stripe Checkout. CourseBuilder verifies Stripe
 signatures and publishes the events to the app's Inngest endpoint; the Egghead handler then
 creates the local subscription records and grants the all-access entitlement.
 
-Configure these values in `.env`:
+Configure these values in `apps/web/.env.local`:
 
 ```bash
 EGGHEAD_SUBSCRIPTION_PRODUCT_IDS=monthly_coursebuilder_product_id,yearly_coursebuilder_product_id

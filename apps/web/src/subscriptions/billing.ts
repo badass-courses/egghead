@@ -14,6 +14,11 @@ export type MembershipBillingSummary = {
   invoicePdfUrl: string | null;
 };
 
+const STRIPE_TWO_DECIMAL_ZERO_DECIMAL_CURRENCIES: Record<string, true> = {
+  ISK: true,
+  UGX: true,
+};
+
 export function formatMembershipCost(
   unitAmount: number | null,
   currency: string | null,
@@ -22,11 +27,15 @@ export function formatMembershipCost(
   if (unitAmount === null || !Number.isFinite(unitAmount) || !currency) return null;
 
   try {
+    const currencyCode = currency.toUpperCase();
     const formatter = new Intl.NumberFormat("en-US", {
       style: "currency",
-      currency: currency.toUpperCase(),
+      currency: currencyCode,
     });
-    const fractionDigits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
+    const fractionDigits =
+      currencyCode in STRIPE_TWO_DECIMAL_ZERO_DECIMAL_CURRENCIES
+        ? 2
+        : (formatter.resolvedOptions().maximumFractionDigits ?? 2);
     const itemQuantity = quantity && quantity > 0 ? quantity : 1;
 
     return formatter.format((unitAmount * itemQuantity) / 10 ** fractionDigits);

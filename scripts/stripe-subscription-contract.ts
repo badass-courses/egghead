@@ -68,6 +68,8 @@ try {
       assert.equal(formatMembershipCost(2_000, "usd", 1), "$20.00");
       assert.equal(formatMembershipCost(2_000, "usd", 3), "$60.00");
       assert.equal(formatMembershipCost(2_000, "jpy", 1), "¥2,000");
+      assert.equal(formatMembershipCost(500, "isk", 1), "ISK 5");
+      assert.equal(formatMembershipCost(500, "ugx", 1), "UGX 5");
     }),
     check("subscription options preserve product and interval boundaries", () => {
       const configuredIds = subscriptionProductIds(" monthly-product, yearly-product ", undefined);

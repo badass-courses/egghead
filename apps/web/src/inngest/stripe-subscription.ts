@@ -4,6 +4,7 @@ import { STRIPE_CUSTOMER_SUBSCRIPTION_UPDATED_EVENT } from "@coursebuilder/core/
 import { parseSubscriptionInfoFromCheckoutSession } from "@coursebuilder/core/pricing/stripe-subscription-utils";
 import { checkoutSessionCompletedEvent } from "@coursebuilder/core/schemas/stripe/checkout-session-completed";
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 
 import { getStripeProvider } from "../coursebuilder/stripe-provider";
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
@@ -88,7 +89,7 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
         return { organization, membership };
       }
 
-      return ensurePersonalOrganization(user, adapter);
+      return ensurePersonalOrganization(user);
     });
 
     await step.run("store merchant checkout session", () =>
@@ -162,19 +163,28 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
       return createdSubscription;
     });
 
-    await step.run("set initial subscription status", () =>
-      adapter.updateSubscriptionStatus(localSubscription.id, subscriptionInfo.status),
+    const currentStripeSubscription = await step.run(
+      "load current Stripe subscription for checkout",
+      () =>
+        stripeProvider.options.paymentsAdapter.getSubscription(
+          subscriptionInfo.subscriptionIdentifier,
+        ),
     );
+    const currentPeriodEnd = getStripeSubscriptionCurrentPeriodEnd(currentStripeSubscription);
+    if (!currentPeriodEnd) {
+      throw new Error("Stripe subscription is missing its current period end.");
+    }
 
-    await step.run("grant subscription access", () =>
+    await step.run("sync initial subscription state", () =>
       syncStripeSubscriptionEntitlement({
-        currentPeriodEnd: new Date(subscriptionInfo.currentPeriodEnd),
+        currentPeriodEnd: new Date(currentPeriodEnd * 1000),
         localSubscriptionId: localSubscription.id,
         organizationId: organizationContext.organization.id,
         organizationMembershipId: organizationContext.membership.id,
         productId: merchantProduct.productId,
-        status: subscriptionInfo.status,
+        status: currentStripeSubscription.status,
         stripeEventCreatedAt: stripeEvent.created,
+        stripeEventKind: "checkout",
         stripeSubscriptionId: subscriptionInfo.subscriptionIdentifier,
         userId: user.id,
       }),
@@ -191,7 +201,7 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
 
     return {
       subscriptionId: localSubscription.id,
-      status: subscriptionInfo.status,
+      status: currentStripeSubscription.status,
     };
   },
 );
@@ -212,6 +222,34 @@ function getStripeEventCreatedAt(metadata: unknown) {
   return typeof metadata.stripeEventCreatedAt === "number" ? metadata.stripeEventCreatedAt : null;
 }
 
+const stripeSubscriptionPeriodSchema = z
+  .object({
+    current_period_end: z.number().optional(),
+    items: z.object({
+      data: z.array(
+        z
+          .object({
+            current_period_end: z.number().optional(),
+          })
+          .passthrough(),
+      ),
+    }),
+  })
+  .passthrough();
+
+function getStripeSubscriptionCurrentPeriodEnd(stripeSubscription: unknown) {
+  // CourseBuilder currently publishes pre-item-period Stripe types. Parse the runtime
+  // response so both the legacy subscription field and current item field are supported.
+  const parsedSubscription = stripeSubscriptionPeriodSchema.safeParse(stripeSubscription);
+  if (!parsedSubscription.success) return null;
+
+  return (
+    parsedSubscription.data.current_period_end ??
+    parsedSubscription.data.items.data[0]?.current_period_end ??
+    null
+  );
+}
+
 export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
   {
     id: "egghead-stripe-customer-subscription-updated",
@@ -230,7 +268,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
     const stripeSubscriptionId = stripeEvent.data.object.id;
     const stripeEventCreatedAt = getInngestEventCreatedAt(event.ts);
     const stripeProvider = getStripeProvider();
-    const adapter = getCourseBuilderAdapter();
+
     const db = getEggheadDatabase();
 
     if (!stripeProvider) {
@@ -263,7 +301,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
         organizationId: organizationId ?? null,
         productId: productId ?? null,
       });
-      return { ignored: true };
+      throw new Error(`Local subscription ${stripeSubscriptionId} is not ready for update.`);
     }
 
     const entitlement = await step.run("load subscription entitlement", () =>
@@ -284,7 +322,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
       return { ignored: true, subscriptionId: localSubscription.id };
     }
 
-    const currentPeriodEnd = stripeSubscription.current_period_end;
+    const currentPeriodEnd = getStripeSubscriptionCurrentPeriodEnd(stripeSubscription);
     const organizationMembershipId = entitlement?.organizationMembershipId;
     const userId = entitlement?.userId;
 
@@ -302,11 +340,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
       return { ignored: true, subscriptionId: localSubscription.id };
     }
 
-    await step.run("update subscription status", () =>
-      adapter.updateSubscriptionStatus(localSubscription.id, stripeSubscription.status),
-    );
-
-    await step.run("sync subscription access", () =>
+    await step.run("sync subscription state", () =>
       syncStripeSubscriptionEntitlement({
         currentPeriodEnd: new Date(currentPeriodEnd * 1000),
         localSubscriptionId: localSubscription.id,
@@ -315,6 +349,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
         productId,
         status: stripeSubscription.status,
         stripeEventCreatedAt,
+        stripeEventKind: "subscription_update",
         stripeSubscriptionId,
         userId,
       }),

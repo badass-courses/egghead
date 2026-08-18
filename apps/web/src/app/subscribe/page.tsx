@@ -7,6 +7,7 @@ import { isStripeConfigured } from "../../coursebuilder/stripe-provider";
 import { getCourseBuilderAdapter } from "../../db/adapter";
 import { commerceWritesAreAllowed } from "../../db/local-docker";
 import { getEnv } from "../../env";
+import { formatMembershipCost } from "../../subscriptions/billing";
 import {
   compareSubscriptionIntervals,
   subscriptionProductFields,
@@ -28,15 +29,11 @@ function checkoutErrorMessage(error: string | undefined) {
   if (error === "invalid-product") return "That membership option is no longer available.";
   if (error === "not-configured") return "Subscription checkout is not configured yet.";
   if (error === "checkout") return "Stripe could not start checkout. Please try again.";
+  if (error === "checkout-pending") {
+    return "Another membership checkout is already in progress.";
+  }
   return null;
 }
-
-const usdPriceFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2,
-});
 
 async function getSubscriptionOption(productId: string): Promise<SubscriptionOption | null> {
   const product = await getCourseBuilderAdapter().getProduct(productId, false);
@@ -52,11 +49,14 @@ async function getSubscriptionOption(productId: string): Promise<SubscriptionOpt
     return null;
   }
 
+  const price = formatMembershipCost(product.price.unitAmount, "USD", 1);
+  if (!price) return null;
+
   return {
     productId: product.id,
     name: product.name,
     description: fields.description,
-    price: usdPriceFormatter.format(product.price.unitAmount),
+    price,
     billingInterval: fields.billingInterval,
   };
 }

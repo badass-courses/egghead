@@ -1,63 +1,117 @@
-import type { CourseBuilderAdapter } from "@coursebuilder/core/adapters";
+import { createHash } from "node:crypto";
+
+import { and, eq } from "drizzle-orm";
+
+import { getEggheadDatabase } from "../db/adapter";
+import {
+  organization,
+  organizationMembershipRoles,
+  organizationMemberships,
+  roles,
+} from "../db/schema";
 
 type PersonalOrganizationUser = {
   id: string;
   email: string;
 };
 
-function personalOrganizationName(userId: string) {
-  return `egghead-personal:${userId}`;
-}
+export async function ensurePersonalOrganization(user: PersonalOrganizationUser) {
+  const db = getEggheadDatabase();
+  const organizationName = `egghead-personal:${user.id}`;
+  const key = createHash("sha256").update(user.id).digest("hex");
 
-async function getPersonalOrganizationMembership(
-  user: PersonalOrganizationUser,
-  adapter: CourseBuilderAdapter,
-) {
-  const memberships = await adapter.getMembershipsForUser(user.id);
-  const organizationName = personalOrganizationName(user.id);
+  return db.transaction(async (transaction) => {
+    const existingOrganization = await transaction.query.organization.findFirst({
+      where: eq(organization.name, organizationName),
+    });
+    const organizationId = existingOrganization?.id ?? `egghead-personal-org:${key}`;
+    const existingMembership = await transaction.query.organizationMemberships.findFirst({
+      where: and(
+        eq(organizationMemberships.organizationId, organizationId),
+        eq(organizationMemberships.userId, user.id),
+      ),
+      with: { organization: true },
+    });
+    const membershipId = existingMembership?.id ?? `egghead-personal-membership:${key}`;
 
-  return memberships.find(
-    (membership) =>
-      membership.userId === user.id && membership.organization?.name === organizationName,
-  );
-}
+    if (!existingOrganization) {
+      await transaction
+        .insert(organization)
+        .values({
+          id: organizationId,
+          name: organizationName,
+        })
+        .onDuplicateKeyUpdate({
+          set: { name: organizationName },
+        });
+    }
 
-export async function ensurePersonalOrganization(
-  user: PersonalOrganizationUser,
-  adapter: CourseBuilderAdapter,
-) {
-  const existingMembership = await getPersonalOrganizationMembership(user, adapter);
+    if (!existingMembership) {
+      await transaction
+        .insert(organizationMemberships)
+        .values({
+          id: membershipId,
+          invitedById: user.id,
+          organizationId,
+          userId: user.id,
+        })
+        .onDuplicateKeyUpdate({
+          set: {
+            invitedById: user.id,
+            organizationId,
+            userId: user.id,
+          },
+        });
+    }
 
-  if (existingMembership?.organizationId) {
+    const ownerRoleId = `egghead-personal-owner:${key}`;
+    await transaction
+      .insert(roles)
+      .values({
+        id: ownerRoleId,
+        name: "owner",
+        organizationId,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          active: true,
+          deletedAt: null,
+        },
+      });
+
+    const ownerRole = await transaction.query.roles.findFirst({
+      where: and(eq(roles.organizationId, organizationId), eq(roles.name, "owner")),
+    });
+    if (!ownerRole) {
+      throw new Error("Unable to ensure the personal organization owner role.");
+    }
+
+    await transaction
+      .insert(organizationMembershipRoles)
+      .values({
+        organizationId,
+        organizationMembershipId: membershipId,
+        roleId: ownerRole.id,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          active: true,
+          deletedAt: null,
+          organizationId,
+        },
+      });
+
+    const membership = await transaction.query.organizationMemberships.findFirst({
+      where: eq(organizationMemberships.id, membershipId),
+      with: { organization: true },
+    });
+    if (!membership?.organization) {
+      throw new Error("Unable to ensure a personal organization for checkout.");
+    }
+
     return {
-      organization: existingMembership.organization,
-      membership: existingMembership,
+      organization: membership.organization,
+      membership,
     };
-  }
-
-  const organization = await adapter.createOrganization({
-    name: personalOrganizationName(user.id),
   });
-
-  if (!organization) {
-    throw new Error("Unable to create a personal organization for checkout.");
-  }
-
-  const membership = await adapter.addMemberToOrganization({
-    organizationId: organization.id,
-    userId: user.id,
-    invitedById: user.id,
-  });
-
-  if (!membership) {
-    throw new Error("Unable to create an organization membership for checkout.");
-  }
-
-  await adapter.addRoleForMember({
-    organizationId: organization.id,
-    memberId: membership.id,
-    role: "owner",
-  });
-
-  return { organization, membership };
 }

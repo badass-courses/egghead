@@ -27,15 +27,24 @@ export function MembershipStatusRefresh() {
 
   if (pollingExpired) {
     return (
-      <output className="text-sm font-semibold text-muted-foreground">
-        Activation is taking longer than usual. You can leave this page open or contact{" "}
-        <a
-          className="font-extrabold text-foreground underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
-          href="mailto:support@egghead.io"
+      <output className="grid justify-items-center gap-3 text-sm font-semibold text-muted-foreground">
+        <span>
+          Activation is taking longer than usual. Reload the page or contact{" "}
+          <a
+            className="font-extrabold text-foreground underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
+            href="mailto:support@egghead.io"
+          >
+            support@egghead.io
+          </a>
+          .
+        </span>
+        <button
+          className="press rounded-xl border border-border-strong bg-surface-grad px-4 py-2 font-extrabold text-foreground shadow-btn-ghost"
+          onClick={() => window.location.reload()}
+          type="button"
         >
-          support@egghead.io
-        </a>
-        .
+          Reload status
+        </button>
       </output>
     );
   }

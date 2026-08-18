@@ -45,6 +45,7 @@ async function ResolvedSubscriptionThanks({
   const billingSummary =
     subscription && user?.id ? await getMembershipBillingSummary(user.id) : null;
   const checkoutSessionId = firstParam(resolvedSearchParams.session_id);
+  const checkoutProvider = firstParam(resolvedSearchParams.provider);
   const pendingActivation = Boolean(user && checkoutSessionId && !subscription);
 
   if (subscription) {
@@ -143,7 +144,12 @@ async function ResolvedSubscriptionThanks({
     );
   }
 
-  const destination = user ? "/subscribe" : "/login?callbackUrl=/thanks/subscription";
+  const callbackSearchParams = new URLSearchParams();
+  if (checkoutSessionId) callbackSearchParams.set("session_id", checkoutSessionId);
+  if (checkoutProvider) callbackSearchParams.set("provider", checkoutProvider);
+  const callbackQuery = callbackSearchParams.toString();
+  const callbackUrl = `/thanks/subscription${callbackQuery ? `?${callbackQuery}` : ""}`;
+  const destination = user ? "/subscribe" : `/login?callbackUrl=${encodeURIComponent(callbackUrl)}`;
 
   return (
     <section
