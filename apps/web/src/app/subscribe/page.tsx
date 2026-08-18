@@ -7,12 +7,8 @@ import { isStripeConfigured } from "../../coursebuilder/stripe-provider";
 import { getCourseBuilderAdapter } from "../../db/adapter";
 import { commerceWritesAreAllowed } from "../../db/local-docker";
 import { getEnv } from "../../env";
-import { formatMembershipCost } from "../../subscriptions/billing";
-import {
-  compareSubscriptionIntervals,
-  subscriptionProductFields,
-  subscriptionProductIds,
-} from "../../subscriptions/options";
+import { formatProductPrice } from "../../subscriptions/billing";
+import { compareSubscriptionIntervals, subscriptionProductIds } from "../../subscriptions/options";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { SubscriptionOptions, type SubscriptionOption } from "./subscription-options";
 
@@ -37,27 +33,26 @@ function checkoutErrorMessage(error: string | undefined) {
 
 async function getSubscriptionOption(productId: string): Promise<SubscriptionOption | null> {
   const product = await getCourseBuilderAdapter().getProduct(productId, false);
-  const fields = subscriptionProductFields(product?.fields);
 
   if (
     !product ||
     product.type !== "membership" ||
     !product.price ||
     product.price.status !== 1 ||
-    !fields.billingInterval
+    !product.fields.billingInterval
   ) {
     return null;
   }
 
-  const price = formatMembershipCost(product.price.unitAmount, "USD", 1);
+  const price = formatProductPrice(product.price.unitAmount, "USD");
   if (!price) return null;
 
   return {
     productId: product.id,
     name: product.name,
-    description: fields.description,
+    description: product.fields.description ?? null,
     price,
-    billingInterval: fields.billingInterval,
+    billingInterval: product.fields.billingInterval,
   };
 }
 

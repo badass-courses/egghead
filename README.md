@@ -51,8 +51,8 @@ INNGEST_SIGNING_KEY=
 `EGGHEAD_SUBSCRIPTION_PRODUCT_IDS` is a comma-separated list of local CourseBuilder `Product.id`
 values, not Stripe product IDs. The app still accepts `EGGHEAD_SUBSCRIPTION_PRODUCT_ID` as a
 single-product fallback. Each product must have a recurring Stripe price connected through
-CourseBuilder's `MerchantProduct` and `MerchantPrice` rows, a supported `billingInterval` field
-(`day`, `week`, `month`, or `year`), and the database must contain the Stripe `MerchantAccount`
+CourseBuilder's `MerchantProduct` and `MerchantPrice` rows, a `month` or `year`
+`billingInterval`, and the database must contain the Stripe `MerchantAccount`
 row.
 
 Run the app and the Inngest dev server in separate terminals:

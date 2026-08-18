@@ -1,10 +1,8 @@
-export type SubscriptionBillingInterval = "day" | "week" | "month" | "year";
+import type { BillingInterval } from "@coursebuilder/core/schemas";
 
-const billingIntervalOrder: Record<SubscriptionBillingInterval, number> = {
-  day: 0,
-  week: 1,
-  month: 2,
-  year: 3,
+const billingIntervalOrder: Record<NonNullable<BillingInterval>, number> = {
+  month: 0,
+  year: 1,
 };
 
 export function subscriptionProductIds(
@@ -25,45 +23,14 @@ export function isConfiguredSubscriptionProductId(productId: string, configuredI
   return configuredIds.includes(productId);
 }
 
-export function subscriptionProductFields(fields: unknown) {
-  const description =
-    typeof fields === "object" &&
-    fields !== null &&
-    "description" in fields &&
-    typeof fields.description === "string"
-      ? fields.description
-      : null;
-  const intervalValue =
-    typeof fields === "object" &&
-    fields !== null &&
-    "billingInterval" in fields &&
-    typeof fields.billingInterval === "string"
-      ? fields.billingInterval
-      : null;
-  let billingInterval: SubscriptionBillingInterval | null = null;
-
-  if (
-    intervalValue === "day" ||
-    intervalValue === "week" ||
-    intervalValue === "month" ||
-    intervalValue === "year"
-  ) {
-    billingInterval = intervalValue;
-  }
-
-  return { billingInterval, description };
-}
-
-export function subscriptionIntervalLabel(interval: SubscriptionBillingInterval) {
-  if (interval === "day") return "Daily";
-  if (interval === "week") return "Weekly";
+export function subscriptionIntervalLabel(interval: NonNullable<BillingInterval>) {
   if (interval === "month") return "Monthly";
   return "Yearly";
 }
 
 export function compareSubscriptionIntervals(
-  first: SubscriptionBillingInterval,
-  second: SubscriptionBillingInterval,
+  first: NonNullable<BillingInterval>,
+  second: NonNullable<BillingInterval>,
 ) {
   return billingIntervalOrder[first] - billingIntervalOrder[second];
 }

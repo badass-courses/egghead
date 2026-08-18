@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@egghead/ui/button";
 
-import type { SubscriptionBillingInterval } from "../../subscriptions/options";
+import type { BillingInterval } from "@coursebuilder/core/schemas";
+
 import { subscriptionIntervalLabel } from "../../subscriptions/options";
 import { startSubscriptionCheckout } from "./actions";
 
@@ -13,7 +14,7 @@ export type SubscriptionOption = {
   name: string;
   description: string | null;
   price: string;
-  billingInterval: SubscriptionBillingInterval;
+  billingInterval: NonNullable<BillingInterval>;
 };
 
 type SubscriptionOptionsProps = {

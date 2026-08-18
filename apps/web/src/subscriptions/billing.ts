@@ -18,6 +18,21 @@ const STRIPE_TWO_DECIMAL_ZERO_DECIMAL_CURRENCIES: Record<string, true> = {
   ISK: true,
   UGX: true,
 };
+export function formatProductPrice(unitAmount: number, currency: string) {
+  if (!Number.isFinite(unitAmount) || !currency) return null;
+
+  try {
+    const wholeAmount = Number.isInteger(unitAmount);
+
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency.toUpperCase(),
+      ...(wholeAmount ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}),
+    }).format(unitAmount);
+  } catch {
+    return null;
+  }
+}
 
 export function formatMembershipCost(
   unitAmount: number | null,

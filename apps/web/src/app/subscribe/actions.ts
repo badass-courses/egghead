@@ -20,7 +20,6 @@ import { assertCommerceWritesAllowed } from "../../db/local-docker";
 import { getEnv } from "../../env";
 import {
   isConfiguredSubscriptionProductId,
-  subscriptionProductFields,
   subscriptionProductIds,
 } from "../../subscriptions/options";
 import { ensurePersonalOrganization } from "../../subscriptions/personal-organization";
@@ -158,7 +157,6 @@ export async function startSubscriptionCheckout(formData: FormData) {
   const productId = requestedProductId;
   const adapter = getCourseBuilderAdapter();
   const product = await adapter.getProduct(productId, false);
-  const productFields = subscriptionProductFields(product?.fields);
 
   if (
     !isStripeConfigured() ||
@@ -166,7 +164,7 @@ export async function startSubscriptionCheckout(formData: FormData) {
     product.type !== "membership" ||
     !product.price ||
     product.price.status !== 1 ||
-    !productFields.billingInterval
+    !product.fields.billingInterval
   ) {
     redirect("/subscribe?error=not-configured");
   }

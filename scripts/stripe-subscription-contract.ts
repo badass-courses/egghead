@@ -7,13 +7,13 @@ import {
 import { assertCommerceWritesAllowed } from "../apps/web/src/db/local-docker";
 import {
   formatMembershipCost,
+  formatProductPrice,
   membershipIntervalLabel,
   stripeInvoiceDownloadUrl,
 } from "../apps/web/src/subscriptions/billing";
 import {
   isConfiguredSubscriptionProductId,
   subscriptionIntervalLabel,
-  subscriptionProductFields,
   subscriptionProductIds,
 } from "../apps/web/src/subscriptions/options";
 
@@ -71,22 +71,18 @@ try {
       assert.equal(formatMembershipCost(500, "isk", 1), "ISK 5");
       assert.equal(formatMembershipCost(500, "ugx", 1), "UGX 5");
     }),
-    check("subscription options preserve product and interval boundaries", () => {
+    check("CourseBuilder product prices use major currency units", () => {
+      assert.equal(formatProductPrice(20, "usd"), "$20");
+      assert.equal(formatProductPrice(150, "usd"), "$150");
+      assert.equal(formatProductPrice(20.5, "usd"), "$20.50");
+    }),
+    check("subscription options preserve product allowlisting", () => {
       const configuredIds = subscriptionProductIds(" monthly-product, yearly-product ", undefined);
 
       assert.deepEqual(configuredIds, ["monthly-product", "yearly-product"]);
       assert.deepEqual(subscriptionProductIds(undefined, "single-product"), ["single-product"]);
       assert.equal(isConfiguredSubscriptionProductId("yearly-product", configuredIds), true);
       assert.equal(isConfiguredSubscriptionProductId("unlisted-product", configuredIds), false);
-      assert.deepEqual(subscriptionProductFields({ billingInterval: "month" }), {
-        billingInterval: "month",
-        description: null,
-      });
-      assert.deepEqual(subscriptionProductFields({ billingInterval: "year" }), {
-        billingInterval: "year",
-        description: null,
-      });
-      assert.equal(subscriptionProductFields({ billingInterval: "quarter" }).billingInterval, null);
       assert.equal(subscriptionIntervalLabel("month"), "Monthly");
       assert.equal(subscriptionIntervalLabel("year"), "Yearly");
     }),
