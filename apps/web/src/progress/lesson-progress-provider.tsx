@@ -60,6 +60,10 @@ function isCourseCompletionFailure(status: SyncCourseCompletionResult["status"])
   return status === "authentication_required" || status === "invalid_course" || status === "failed";
 }
 
+function shouldRetryCourseCompletion(status: SyncCourseCompletionResult["status"]) {
+  return status === "incomplete" || isCourseCompletionFailure(status);
+}
+
 const LessonProgressContext = createContext<LessonProgressContextValue | null>(null);
 
 export function LessonProgressProvider({
@@ -127,7 +131,7 @@ export function LessonProgressProvider({
             courseSlug: course.slug,
           });
 
-          if (isCourseCompletionFailure(courseResult.status)) {
+          if (shouldRetryCourseCompletion(courseResult.status)) {
             setFeedback(resourceId, {
               status: "course_completion_failed",
               message: "Lesson progress saved, but course completion could not be saved",
@@ -163,11 +167,7 @@ export function LessonProgressProvider({
       }
 
       inFlightLessonIdsRef.current.add(resourceId);
-      const nextCompletedLessonIds = addOptimisticCompletion(resourceId);
-      const completesCourse =
-        course !== undefined &&
-        course.lessonIds.length > 0 &&
-        course.lessonIds.every((lessonId) => nextCompletedLessonIds.has(lessonId));
+      addOptimisticCompletion(resourceId);
       setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
 
       try {
@@ -175,13 +175,17 @@ export function LessonProgressProvider({
 
         switch (result.status) {
           case "completed": {
+            const completesCourse =
+              course !== undefined &&
+              course.lessonIds.length > 0 &&
+              course.lessonIds.every((lessonId) => completedLessonIdsRef.current.has(lessonId));
             if (completesCourse && course) {
               const courseResult = await syncCourseCompletion({
                 courseId: course.id,
                 courseSlug: course.slug,
               });
 
-              if (isCourseCompletionFailure(courseResult.status)) {
+              if (shouldRetryCourseCompletion(courseResult.status)) {
                 courseSyncRetryLessonIdsRef.current.add(resourceId);
                 setFeedback(resourceId, {
                   status: "course_completion_failed",
