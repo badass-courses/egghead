@@ -3,17 +3,19 @@ import { render } from "@react-email/components";
 import PostmarkProvider from "next-auth/providers/postmark";
 
 import { getCourseBuilderAdapter } from "../db/adapter";
+import { formatMagicSignInLink, sendEmail } from "./email-delivery";
 
 const EGGHEAD_SIGN_IN_SUBJECT = "Log in to egghead";
+const SUPPRESSED_EMAIL_API_KEY = "email-delivery-suppressed";
 
 type PostmarkEmailProviderOptions = {
-  apiKey: string;
+  apiKey: string | undefined;
   from: string;
 };
 
 export function createPostmarkEmailProvider({ apiKey, from }: PostmarkEmailProviderOptions) {
   return PostmarkProvider({
-    apiKey,
+    apiKey: apiKey ?? SUPPRESSED_EMAIL_API_KEY,
     from,
     sendVerificationRequest: async ({ identifier, url }) => {
       const adapter = getCourseBuilderAdapter();
@@ -36,25 +38,21 @@ export function createPostmarkEmailProvider({ apiKey, from }: PostmarkEmailProvi
         render(email),
         render(email, { plainText: true }),
       ]);
-      const response = await fetch("https://api.postmarkapp.com/email", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "X-Postmark-Server-Token": apiKey,
+      const result = await sendEmail(
+        {
+          from,
+          to: identifier,
+          subject: EGGHEAD_SIGN_IN_SUBJECT,
+          text: textBody,
+          html: htmlBody,
         },
-        body: JSON.stringify({
-          From: from,
-          To: identifier,
-          Subject: EGGHEAD_SIGN_IN_SUBJECT,
-          TextBody: textBody,
-          HtmlBody: htmlBody,
-          MessageStream: "outbound",
-        }),
-      });
+        {
+          apiKey,
+        },
+      );
 
-      if (!response.ok) {
-        throw new Error(`Postmark request failed with status ${response.status}`);
+      if (result.status === "suppressed") {
+        console.info(formatMagicSignInLink(url));
       }
     },
   });

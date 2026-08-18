@@ -10,6 +10,7 @@ type EnvKey =
   | "NEXT_PUBLIC_APP_URL"
   | "POSTMARK_API_KEY"
   | "POSTMARK_FROM_EMAIL"
+  | "SEND_EMAILS"
   | "URL";
 
 export function getEnv(name: EnvKey) {
