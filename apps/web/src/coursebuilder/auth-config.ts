@@ -24,7 +24,7 @@ export function isEmailAuthConfigured() {
 
   return Boolean(
     getEggheadRuntime() === "local" &&
-    (!isEmailDeliveryEnabled() || (postmarkApiKey && postmarkFromEmail)),
+    (!isEmailDeliveryEnabled(getEnv("SEND_EMAILS")) || (postmarkApiKey && postmarkFromEmail)),
   );
 }
 

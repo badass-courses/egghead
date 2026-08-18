@@ -17,7 +17,7 @@ type SendEmailOptions = {
   log?: (message: string) => void;
 };
 
-export function isEmailDeliveryEnabled(rawValue = getEnv("SEND_EMAILS")) {
+export function isEmailDeliveryEnabled(rawValue?: string) {
   return rawValue?.trim().toLowerCase() === "true";
 }
 
@@ -53,7 +53,7 @@ export async function sendEmail(
   email: OutboundEmail,
   {
     apiKey,
-    deliveryEnabled = isEmailDeliveryEnabled(),
+    deliveryEnabled = isEmailDeliveryEnabled(getEnv("SEND_EMAILS")),
     fetchEmail = fetch,
     log = console.info,
   }: SendEmailOptions,
