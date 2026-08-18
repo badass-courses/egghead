@@ -340,6 +340,176 @@
 
 /* ── Home: search well + browse chips ────────────────────────── */
 
+.egghead-search-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+.egghead-search-form .egghead-home-search {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+
+.egghead-search-filter {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.egghead-search-filter > button {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+  align-self: stretch;
+  min-width: 9rem;
+  padding: 0.125rem 1.125rem 0 1.25rem;
+  color: var(--color-foreground);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--color-well);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 9999px;
+  box-shadow: var(--shadow-well);
+  transition: border-color 120ms var(--ease-out-quad);
+}
+
+.egghead-search-filter > button span {
+  flex: 1;
+  max-width: 11rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.egghead-search-filter > button svg {
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.egghead-search-filter > button:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) {
+  .egghead-search-filter > button:hover {
+    border-color: color-mix(in srgb, var(--color-foreground) 35%, var(--color-border-strong));
+  }
+}
+
+.egghead-search-filter > button[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--color-foreground) 35%, var(--color-border-strong));
+  outline: 2px solid var(--color-ring);
+  outline-offset: 3px;
+}
+
+.egghead-search-filter > button[aria-expanded="true"] svg {
+  opacity: 1;
+}
+
+@keyframes egghead-search-filter-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
+}
+
+.egghead-search-filter > ul,
+.egghead-search-filter-panel {
+  animation: egghead-search-filter-in 140ms var(--ease-out-quad);
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 20;
+  min-width: 12rem;
+  margin: 0;
+  padding: 0.375rem;
+  list-style: none;
+  background-image: var(--gradient-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-btn-ghost);
+}
+
+.egghead-search-filter-panel {
+  min-width: 14rem;
+}
+
+.egghead-search-filter-panel input {
+  width: 100%;
+  margin-bottom: 0.375rem;
+  padding: 0.5rem 0.75rem 0.4375rem;
+  color: var(--color-foreground);
+  font: inherit;
+  font-weight: 600;
+  background: var(--color-well);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.5rem;
+}
+
+.egghead-search-filter-panel input::placeholder {
+  color: color-mix(in srgb, var(--color-foreground) 40%, transparent);
+}
+
+.egghead-search-filter-panel input:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 1px;
+}
+
+.egghead-search-filter-panel ul {
+  max-height: 16rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.egghead-search-filter-empty {
+  padding: 0.5rem 0.75rem 0.4375rem;
+  color: color-mix(in srgb, var(--color-foreground) 60%, transparent);
+  font-weight: 600;
+}
+
+.egghead-search-filter ul button {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.5rem 0.75rem 0.4375rem;
+  color: var(--color-foreground);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 0.5rem;
+}
+
+@media (hover: hover) {
+  .egghead-search-filter ul button:hover {
+    background: var(--color-well);
+  }
+}
+
+.egghead-search-filter ul button:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: -2px;
+}
+
+.egghead-search-filter [data-option-check] {
+  display: inline-flex;
+  margin-left: auto;
+}
+
+.egghead-search-filter [data-option-check="hidden"] {
+  opacity: 0;
+}
+
 .egghead-home-search {
   display: flex;
   gap: 0.5rem;
