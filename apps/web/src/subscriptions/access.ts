@@ -97,10 +97,10 @@ export async function syncStripeSubscriptionEntitlement(input: {
           organizationId: sql`IF(${incomingEventIsCurrent}, VALUES(${entitlements.organizationId}), ${entitlements.organizationId})`,
           organizationMembershipId: sql`IF(${incomingEventIsCurrent}, VALUES(${entitlements.organizationMembershipId}), ${entitlements.organizationMembershipId})`,
           sourceId: sql`IF(${incomingEventIsCurrent}, VALUES(${entitlements.sourceId}), ${entitlements.sourceId})`,
-          metadata: sql`IF(${incomingEventIsCurrent}, VALUES(${entitlements.metadata}), ${entitlements.metadata})`,
           expiresAt: sql`IF(${incomingEventIsCurrent}, VALUES(${entitlements.expiresAt}), ${entitlements.expiresAt})`,
           deletedAt: sql`IF(${incomingEventIsCurrent}, VALUES(${entitlements.deletedAt}), ${entitlements.deletedAt})`,
           updatedAt: sql`IF(${incomingEventIsCurrent}, VALUES(${entitlements.updatedAt}), ${entitlements.updatedAt})`,
+          metadata: sql`IF(${incomingEventIsCurrent}, VALUES(${entitlements.metadata}), ${entitlements.metadata})`,
         },
       });
 

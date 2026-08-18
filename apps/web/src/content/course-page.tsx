@@ -4,6 +4,7 @@ import { Container } from "@egghead/ui/container";
 import { ResourceListLabel } from "@egghead/ui/resource-list";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
+import { safePublicAvatarUrl } from "../profile/contracts";
 import type { CourseForPage } from "./course";
 import { CourseCurriculum } from "./course-lesson-list";
 import { MarkdownContent } from "./markdown-content";
@@ -24,6 +25,7 @@ function CourseInstructor({
   instructorName: string | null;
 }) {
   if (!instructorName) return null;
+  const safeInstructorImage = safePublicAvatarUrl(instructorImage);
 
   return (
     <div
@@ -35,8 +37,8 @@ function CourseInstructor({
         className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-full border border-border-strong bg-surface text-xs font-black tracking-tight"
       >
         {instructorInitials(instructorName)}
-        {instructorImage ? (
-          <Image alt="" className="object-cover" fill sizes="32px" src={instructorImage} />
+        {safeInstructorImage ? (
+          <Image alt="" className="object-cover" fill sizes="32px" src={safeInstructorImage} />
         ) : null}
       </span>
       <span className="truncate">{instructorName}</span>

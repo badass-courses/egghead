@@ -1,6 +1,6 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import {
+  expireStripeSubscriptionCheckoutSession,
   getSiteUrl,
   getStripeProvider,
   isStripeConfigured,
@@ -26,9 +27,10 @@ import { ensurePersonalOrganization } from "../../subscriptions/personal-organiz
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 
 const CHECKOUT_RESERVATION_FIELD = "stripeSubscriptionCheckout";
-const CHECKOUT_RESERVATION_TTL_SECONDS = 24 * 60 * 60;
+const CHECKOUT_RESERVATION_PENDING_TTL_SECONDS = 2 * 60;
 const organizationFieldsSchema = z.record(z.string(), z.unknown());
 const checkoutReservationSchema = z.object({
+  country: z.string(),
   pendingUntil: z.number().int(),
   productId: z.string(),
   sessionExpiresAt: z.number().int().optional(),
@@ -36,10 +38,13 @@ const checkoutReservationSchema = z.object({
   token: z.string(),
 });
 
-async function reserveSubscriptionCheckout(organizationId: string, productId: string) {
+async function reserveSubscriptionCheckout(
+  organizationId: string,
+  productId: string,
+  country: string,
+) {
   const db = getEggheadDatabase();
-
-  return db.transaction(async (transaction) => {
+  const { reservation, staleSessionId } = await db.transaction(async (transaction) => {
     const [storedOrganization] = await transaction
       .select({ fields: organizationTable.fields })
       .from(organizationTable)
@@ -58,13 +63,22 @@ async function reserveSubscriptionCheckout(organizationId: string, productId: st
     const now = Math.floor(Date.now() / 1000);
     const currentReservationExpiresAt =
       currentReservation?.sessionExpiresAt ?? currentReservation?.pendingUntil ?? 0;
+    const currentReservationIsActive = currentReservationExpiresAt > now;
 
-    if (currentReservation && currentReservationExpiresAt > now) {
-      return currentReservation;
+    if (
+      currentReservation &&
+      currentReservationIsActive &&
+      currentReservation.productId === productId
+    ) {
+      return { reservation: currentReservation, staleSessionId: null };
+    }
+    if (currentReservation && currentReservationIsActive && !currentReservation.sessionId) {
+      return { reservation: currentReservation, staleSessionId: null };
     }
 
-    const reservation = {
-      pendingUntil: now + CHECKOUT_RESERVATION_TTL_SECONDS,
+    const newReservation = {
+      country,
+      pendingUntil: now + CHECKOUT_RESERVATION_PENDING_TTL_SECONDS,
       productId,
       token: randomUUID(),
     };
@@ -73,13 +87,32 @@ async function reserveSubscriptionCheckout(organizationId: string, productId: st
       .set({
         fields: {
           ...fields,
-          [CHECKOUT_RESERVATION_FIELD]: reservation,
+          [CHECKOUT_RESERVATION_FIELD]: newReservation,
         },
       })
       .where(eq(organizationTable.id, organizationId));
 
-    return reservation;
+    return {
+      reservation: newReservation,
+      staleSessionId:
+        currentReservation && currentReservationIsActive ? currentReservation.sessionId : null,
+    };
   });
+
+  if (staleSessionId) {
+    try {
+      await expireStripeSubscriptionCheckoutSession(staleSessionId);
+    } catch (error) {
+      console.warn("Unable to expire replaced Stripe checkout session", {
+        error,
+        organizationId,
+        productId,
+        sessionFingerprint: createHash("sha256").update(staleSessionId).digest("hex").slice(0, 12),
+      });
+    }
+  }
+
+  return reservation;
 }
 
 async function storeSubscriptionCheckoutSession(
@@ -169,11 +202,19 @@ export async function startSubscriptionCheckout(formData: FormData) {
     redirect("/subscribe?error=not-configured");
   }
 
+  const requestHeaders = await headers();
+  const country =
+    requestHeaders.get("x-vercel-ip-country") ?? requestHeaders.get("cf-ipcountry") ?? "US";
+
   const { organization } = await ensurePersonalOrganization({
     id: user.id,
     email: user.email,
   });
-  const checkoutReservation = await reserveSubscriptionCheckout(organization.id, productId);
+  const checkoutReservation = await reserveSubscriptionCheckout(
+    organization.id,
+    productId,
+    country,
+  );
   if (checkoutReservation.productId !== productId) {
     redirect("/subscribe?error=checkout-pending");
   }
@@ -181,9 +222,6 @@ export async function startSubscriptionCheckout(formData: FormData) {
   if (!stripeProvider) {
     redirect("/subscribe?error=not-configured");
   }
-  const requestHeaders = await headers();
-  const country =
-    requestHeaders.get("x-vercel-ip-country") ?? requestHeaders.get("cf-ipcountry") ?? "US";
   let checkoutRedirect: string;
 
   try {
@@ -194,7 +232,7 @@ export async function startSubscriptionCheckout(formData: FormData) {
         organizationId: organization.id,
         quantity: 1,
         bulk: false,
-        country,
+        country: checkoutReservation.country,
         cancelUrl: `${getSiteUrl()}/subscribe`,
       },
       adapter,
@@ -209,7 +247,16 @@ export async function startSubscriptionCheckout(formData: FormData) {
       createdCheckout,
     );
     checkoutRedirect = checkout.redirect;
-  } catch {
+  } catch (error) {
+    console.error("Subscription checkout failed", {
+      error,
+      organizationId: organization.id,
+      productId,
+      reservationFingerprint: createHash("sha256")
+        .update(checkoutReservation.token)
+        .digest("hex")
+        .slice(0, 12),
+    });
     redirect("/subscribe?error=checkout");
   }
 

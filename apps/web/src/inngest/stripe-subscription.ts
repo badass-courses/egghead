@@ -6,7 +6,7 @@ import { checkoutSessionCompletedEvent } from "@coursebuilder/core/schemas/strip
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
-import { getStripeProvider } from "../coursebuilder/stripe-provider";
+import { getStripeProvider, retrieveStripeEventCreatedAt } from "../coursebuilder/stripe-provider";
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
 import { assertCommerceWritesAllowed } from "../db/local-docker";
 import { entitlements, merchantSubscription, subscription } from "../db/schema";
@@ -206,15 +206,7 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
   },
 );
 
-function getInngestEventCreatedAt(timestamp: number | undefined) {
-  if (timestamp === undefined) {
-    throw new Error("Stripe subscription update is missing its Inngest timestamp.");
-  }
-
-  return Math.floor(timestamp / 1000);
-}
-
-function getStripeEventCreatedAt(metadata: unknown) {
+function getStoredStripeEventCreatedAt(metadata: unknown) {
   if (typeof metadata !== "object" || metadata === null || !("stripeEventCreatedAt" in metadata)) {
     return null;
   }
@@ -225,29 +217,38 @@ function getStripeEventCreatedAt(metadata: unknown) {
 const stripeSubscriptionPeriodSchema = z
   .object({
     current_period_end: z.number().optional(),
-    items: z.object({
-      data: z.array(
-        z
-          .object({
-            current_period_end: z.number().optional(),
-          })
-          .passthrough(),
-      ),
-    }),
+    items: z
+      .object({
+        data: z.array(
+          z
+            .object({
+              current_period_end: z.number().optional(),
+            })
+            .passthrough(),
+        ),
+      })
+      .optional(),
   })
   .passthrough();
 
-function getStripeSubscriptionCurrentPeriodEnd(stripeSubscription: unknown) {
+export function getStripeSubscriptionCurrentPeriodEnd(stripeSubscription: unknown) {
   // CourseBuilder currently publishes pre-item-period Stripe types. Parse the runtime
-  // response so both the legacy subscription field and current item field are supported.
+  // response so both the legacy subscription field and current item fields are supported.
   const parsedSubscription = stripeSubscriptionPeriodSchema.safeParse(stripeSubscription);
   if (!parsedSubscription.success) return null;
+  if (parsedSubscription.data.current_period_end !== undefined) {
+    return parsedSubscription.data.current_period_end;
+  }
 
-  return (
-    parsedSubscription.data.current_period_end ??
-    parsedSubscription.data.items.data[0]?.current_period_end ??
-    null
-  );
+  let latestPeriodEnd: number | null = null;
+  for (const item of parsedSubscription.data.items?.data ?? []) {
+    const periodEnd = item.current_period_end;
+    if (periodEnd !== undefined && (latestPeriodEnd === null || periodEnd > latestPeriodEnd)) {
+      latestPeriodEnd = periodEnd;
+    }
+  }
+
+  return latestPeriodEnd;
 }
 
 export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
@@ -266,7 +267,6 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
 
     const stripeEvent = event.data.stripeEvent;
     const stripeSubscriptionId = stripeEvent.data.object.id;
-    const stripeEventCreatedAt = getInngestEventCreatedAt(event.ts);
     const stripeProvider = getStripeProvider();
 
     const db = getEggheadDatabase();
@@ -274,6 +274,11 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
     if (!stripeProvider) {
       throw new Error("Stripe is not configured.");
     }
+    // CourseBuilder's published update-event schema strips Stripe's creation timestamp.
+    // Reload the source event so entitlement ordering remains based on Stripe event time.
+    const stripeEventCreatedAt = await step.run("load Stripe event timestamp", () =>
+      retrieveStripeEventCreatedAt(stripeProvider, stripeEvent.id),
+    );
 
     // The published CourseBuilder event schema strips fields needed for lifecycle updates.
     // Reloading Stripe's current state also makes delayed webhook delivery converge safely.
@@ -309,7 +314,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
         where: eq(entitlements.id, stripeSubscriptionEntitlementId(stripeSubscriptionId)),
       }),
     );
-    const storedEventCreatedAt = getStripeEventCreatedAt(entitlement?.metadata);
+    const storedEventCreatedAt = getStoredStripeEventCreatedAt(entitlement?.metadata);
 
     if (storedEventCreatedAt && storedEventCreatedAt > stripeEventCreatedAt) {
       logger.warn("Ignoring stale Stripe subscription update", {

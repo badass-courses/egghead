@@ -480,6 +480,16 @@ const checks = [
     "https://gravatar.com/avatar/public-example",
   ),
   assertEqual(
+    "public avatar projection accepts the configured www Gravatar host",
+    safePublicAvatarUrl("https://www.gravatar.com/avatar/public-example"),
+    "https://www.gravatar.com/avatar/public-example",
+  ),
+  assertEqual(
+    "public avatar projection rejects unsupported Gravatar paths",
+    safePublicAvatarUrl("https://gravatar.com/public-example"),
+    null,
+  ),
+  assertEqual(
     "public avatar projection rejects an insecure URL",
     safePublicAvatarUrl("http://avatars.githubusercontent.com/u/12345"),
     null,

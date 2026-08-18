@@ -1,9 +1,23 @@
+import { createHash } from "node:crypto";
+
 import StripeProvider, { StripePaymentAdapter } from "@coursebuilder/core/providers/stripe";
 import type { PaymentsProviderConfig } from "@coursebuilder/core/types";
 
 import { getEnv } from "../env";
 
 const TRAILING_SLASH = /\/$/;
+export function subscriptionCheckoutIdempotencyKey(
+  subscriptionCheckoutAttempt: string,
+  params: object,
+) {
+  const serializedParams = JSON.stringify(params);
+  if (serializedParams === undefined) {
+    throw new Error("Unable to serialize Stripe subscription checkout parameters.");
+  }
+
+  const parameterFingerprint = createHash("sha256").update(serializedParams).digest("hex");
+  return `egghead-subscription-checkout:${subscriptionCheckoutAttempt}:${parameterFingerprint}`;
+}
 
 type CreatedSubscriptionCheckout = {
   expiresAt: number;
@@ -25,6 +39,14 @@ class EggheadStripePaymentAdapter extends StripePaymentAdapter {
     this.createdSubscriptionCheckout = null;
     return createdCheckout;
   }
+  async retrieveStripeEventCreatedAt(eventId: string) {
+    const event = await this.stripe.events.retrieve(eventId);
+    return event.created;
+  }
+
+  async expireSubscriptionCheckout(sessionId: string) {
+    await this.stripe.checkout.sessions.expire(sessionId);
+  }
 
   override async createCheckoutSession(
     params: Parameters<StripePaymentAdapter["createCheckoutSession"]>[0],
@@ -36,7 +58,10 @@ class EggheadStripePaymentAdapter extends StripePaymentAdapter {
     const stableParams = { ...params };
     delete stableParams.expires_at;
     const session = await this.stripe.checkout.sessions.create(stableParams, {
-      idempotencyKey: `egghead-subscription-checkout:${this.subscriptionCheckoutAttempt}`,
+      idempotencyKey: subscriptionCheckoutIdempotencyKey(
+        this.subscriptionCheckoutAttempt,
+        stableParams,
+      ),
     });
     this.createdSubscriptionCheckout = {
       expiresAt: session.expires_at,
@@ -54,6 +79,25 @@ export function takeCreatedStripeSubscriptionCheckout(provider: PaymentsProvider
   }
 
   return paymentsAdapter.takeCreatedSubscriptionCheckout();
+}
+export async function expireStripeSubscriptionCheckoutSession(sessionId: string) {
+  const paymentsAdapter = getStripeProvider()?.options.paymentsAdapter;
+  if (!(paymentsAdapter instanceof EggheadStripePaymentAdapter)) {
+    throw new Error("Stripe is not configured.");
+  }
+
+  await paymentsAdapter.expireSubscriptionCheckout(sessionId);
+}
+export async function retrieveStripeEventCreatedAt(
+  provider: PaymentsProviderConfig,
+  eventId: string,
+) {
+  const paymentsAdapter = provider.options.paymentsAdapter;
+  if (!(paymentsAdapter instanceof EggheadStripePaymentAdapter)) {
+    throw new Error("Stripe is not configured.");
+  }
+
+  return paymentsAdapter.retrieveStripeEventCreatedAt(eventId);
 }
 
 export function getSiteUrl() {

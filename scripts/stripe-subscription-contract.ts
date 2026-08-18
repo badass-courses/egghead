@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 
+import { subscriptionCheckoutIdempotencyKey } from "../apps/web/src/coursebuilder/stripe-provider";
+import { getStripeSubscriptionCurrentPeriodEnd } from "../apps/web/src/inngest/stripe-subscription";
 import {
   stripeSubscriptionEntitlementId,
   stripeSubscriptionGrantsAccess,
@@ -59,6 +61,49 @@ try {
         stripeSubscriptionEntitlementId("sub_contract_fixture"),
         "stripe_ent_sub_contract_fixture",
       );
+    }),
+    check("Stripe checkout idempotency includes request parameters", () => {
+      const checkoutParams = {
+        country: "US",
+        line_items: [{ price: "price_monthly", quantity: 1 }],
+        mode: "subscription",
+      };
+      const checkoutKey = subscriptionCheckoutIdempotencyKey(
+        "reservation-contract-fixture",
+        checkoutParams,
+      );
+
+      assert.equal(
+        checkoutKey,
+        subscriptionCheckoutIdempotencyKey("reservation-contract-fixture", {
+          ...checkoutParams,
+        }),
+      );
+      assert.notEqual(
+        checkoutKey,
+        subscriptionCheckoutIdempotencyKey("reservation-contract-fixture", {
+          ...checkoutParams,
+          country: "CA",
+        }),
+      );
+    }),
+    check("Stripe subscription period parsing uses the latest item period", () => {
+      assert.equal(
+        getStripeSubscriptionCurrentPeriodEnd({
+          current_period_end: 300,
+          items: { data: [{ current_period_end: 400 }] },
+        }),
+        300,
+      );
+      assert.equal(
+        getStripeSubscriptionCurrentPeriodEnd({
+          items: {
+            data: [{ current_period_end: 200 }, {}, { current_period_end: 400 }],
+          },
+        }),
+        400,
+      );
+      assert.equal(getStripeSubscriptionCurrentPeriodEnd({}), null);
     }),
     check("membership billing details are customer-readable", () => {
       assert.equal(membershipIntervalLabel("month", 1), "Monthly");
