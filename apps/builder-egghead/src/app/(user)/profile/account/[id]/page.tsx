@@ -1,4 +1,4 @@
-import { redirect } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { Layout } from '@/components/app/layout'
 import { db } from '@/db'
 import { getServerAuthSession } from '@/server/auth'
@@ -23,6 +23,7 @@ export default async function ProfilePage(props: Props) {
 			profiles: true,
 		},
 	})
+	if (!fullUser) notFound()
 
 	return (
 		<Layout>

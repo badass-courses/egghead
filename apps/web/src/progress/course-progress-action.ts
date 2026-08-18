@@ -155,7 +155,7 @@ export async function submitCourseReview(input: unknown): Promise<SubmitCourseRe
       case "course_incomplete":
         return { status: "course_incomplete", courseId: course.id };
       case "missing_progress":
-        return { status: "invalid_course", courseId: course.id };
+        return { status: "course_incomplete", courseId: course.id };
       default:
         result satisfies never;
         return { status: "failed", courseId: course.id };

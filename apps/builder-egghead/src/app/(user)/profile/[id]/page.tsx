@@ -1,4 +1,4 @@
-import { redirect } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { Layout } from '@/components/app/layout'
 import { db } from '@/db'
 import { getCurrentLearningStreakDays } from '@/lib/current-learning-streak'
@@ -25,6 +25,8 @@ export default async function ProfilePage(props: Props) {
 			profiles: true,
 		},
 	})
+	if (!fullUser) notFound()
+
 	const currentStreakDays = await getCurrentLearningStreakDays(params.id)
 
 	return (

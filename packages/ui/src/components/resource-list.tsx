@@ -332,7 +332,7 @@ const indicatorStatus: Record<ResourceIndicatorStatus, string> = {
   upcoming: "border-border-strong bg-well text-muted-foreground shadow-well",
   completed: "border-sage-line bg-sage-wash text-sage-foreground",
   "active-completed":
-    "border-sage-line bg-sage-wash text-sage-foreground ring-2 ring-inset ring-foreground/40",
+    "border-foreground bg-foreground text-background ring-2 ring-inset ring-background/40",
   active: "border-border-strong bg-surface-grad text-foreground shadow-knob",
   locked: "border-border-strong bg-well text-muted-foreground shadow-well",
 };

@@ -83,6 +83,7 @@ export function LessonProgressProvider({
   // Initial progress is mount-only; callers must remount with a new key for a new snapshot.
   const completedLessonIdsRef = useRef<ReadonlySet<string>>(completedLessonIds);
   const inFlightLessonIdsRef = useRef<Set<string>>(new Set());
+  const courseSyncRetryLessonIdsRef = useRef<Set<string>>(new Set());
 
   const setFeedback = useCallback((resourceId: string, feedback: LessonProgressFeedback) => {
     setFeedbackByLesson((current) => {
@@ -110,10 +111,46 @@ export function LessonProgressProvider({
 
   const completeLesson = useCallback(
     async (resourceId: string, source: LessonProgressSource = "lesson_progress_control") => {
-      if (
-        completedLessonIdsRef.current.has(resourceId) ||
-        inFlightLessonIdsRef.current.has(resourceId)
-      ) {
+      if (inFlightLessonIdsRef.current.has(resourceId)) {
+        return;
+      }
+
+      if (completedLessonIdsRef.current.has(resourceId)) {
+        if (!course || !courseSyncRetryLessonIdsRef.current.has(resourceId)) return;
+
+        inFlightLessonIdsRef.current.add(resourceId);
+        setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
+
+        try {
+          const courseResult = await syncCourseCompletion({
+            courseId: course.id,
+            courseSlug: course.slug,
+          });
+
+          if (isCourseCompletionFailure(courseResult.status)) {
+            setFeedback(resourceId, {
+              status: "course_completion_failed",
+              message: "Lesson progress saved, but course completion could not be saved",
+            });
+            return;
+          }
+
+          courseSyncRetryLessonIdsRef.current.delete(resourceId);
+          if (courseResult.status === "completed" && courseResult.shouldPromptForReview) {
+            setIsCourseReviewOpen(true);
+          }
+          setFeedback(resourceId, {
+            status: "completed",
+            message: "Lesson marked as watched",
+          });
+        } catch {
+          setFeedback(resourceId, {
+            status: "course_completion_failed",
+            message: "Lesson progress saved, but course completion could not be saved",
+          });
+        } finally {
+          inFlightLessonIdsRef.current.delete(resourceId);
+        }
         return;
       }
 
@@ -145,6 +182,7 @@ export function LessonProgressProvider({
               });
 
               if (isCourseCompletionFailure(courseResult.status)) {
+                courseSyncRetryLessonIdsRef.current.add(resourceId);
                 setFeedback(resourceId, {
                   status: "course_completion_failed",
                   message: "Lesson progress saved, but course completion could not be saved",
@@ -152,6 +190,7 @@ export function LessonProgressProvider({
                 return;
               }
 
+              courseSyncRetryLessonIdsRef.current.delete(resourceId);
               if (courseResult.status === "completed" && courseResult.shouldPromptForReview) {
                 setIsCourseReviewOpen(true);
               }
@@ -249,6 +288,7 @@ export function LessonProgressProvider({
 
         switch (result.status) {
           case "uncompleted": {
+            courseSyncRetryLessonIdsRef.current.delete(resourceId);
             if (courseWasCompleted && course) {
               const courseResult = await syncCourseCompletion({
                 courseId: course.id,
