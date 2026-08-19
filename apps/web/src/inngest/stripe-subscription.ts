@@ -3,18 +3,31 @@ import { STRIPE_CHECKOUT_SESSION_COMPLETED_EVENT } from "@coursebuilder/core/inn
 import { STRIPE_CUSTOMER_SUBSCRIPTION_UPDATED_EVENT } from "@coursebuilder/core/inngest/stripe/event-customer-subscription-updated";
 import { parseSubscriptionInfoFromCheckoutSession } from "@coursebuilder/core/pricing/stripe-subscription-utils";
 import { checkoutSessionCompletedEvent } from "@coursebuilder/core/schemas/stripe/checkout-session-completed";
-import { eq } from "drizzle-orm";
-import { z } from "zod";
+import { and, eq, isNull } from "drizzle-orm";
 
 import { getStripeProvider, retrieveStripeEventCreatedAt } from "../coursebuilder/stripe-provider";
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
 import { assertCommerceWritesAllowed } from "../db/local-docker";
-import { entitlements, merchantSubscription, subscription } from "../db/schema";
-import { ensurePersonalOrganization } from "../subscriptions/personal-organization";
 import {
-  stripeSubscriptionEntitlementId,
+  entitlements,
+  merchantCustomer as merchantCustomerTable,
+  merchantSubscription,
+  subscription,
+} from "../db/schema";
+import {
+  STRIPE_SUBSCRIPTION_SOURCE,
   syncStripeSubscriptionEntitlement,
 } from "../subscriptions/access";
+import { ensurePersonalOrganization } from "../subscriptions/personal-organization";
+import {
+  getStripeSubscriptionCurrentPeriodEnd,
+  getStripeSubscriptionQuantity,
+} from "../subscriptions/stripe";
+import {
+  mergeTeamSubscriptionFields,
+  subscriptionCheckoutQuantitySchema,
+  teamSubscriptionFieldsSchema,
+} from "../subscriptions/team-contracts";
 import { inngest } from "./client";
 
 export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
@@ -174,21 +187,47 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
     if (!currentPeriodEnd) {
       throw new Error("Stripe subscription is missing its current period end.");
     }
-
-    await step.run("sync initial subscription state", () =>
-      syncStripeSubscriptionEntitlement({
-        currentPeriodEnd: new Date(currentPeriodEnd * 1000),
-        localSubscriptionId: localSubscription.id,
-        organizationId: organizationContext.organization.id,
-        organizationMembershipId: organizationContext.membership.id,
-        productId: merchantProduct.productId,
-        status: currentStripeSubscription.status,
-        stripeEventCreatedAt: stripeEvent.created,
-        stripeEventKind: "checkout",
-        stripeSubscriptionId: subscriptionInfo.subscriptionIdentifier,
-        userId: user.id,
-      }),
+    const seatCount = subscriptionCheckoutQuantitySchema.parse(
+      getStripeSubscriptionQuantity(currentStripeSubscription) ?? subscriptionInfo.quantity,
     );
+
+    await step.run("store subscription seats", () =>
+      db
+        .update(subscription)
+        .set({
+          fields: mergeTeamSubscriptionFields(localSubscription.fields, {
+            ownerId: user.id,
+            seats: seatCount,
+          }),
+        })
+        .where(eq(subscription.id, localSubscription.id)),
+    );
+
+    if (seatCount === 1) {
+      await step.run("sync initial subscription state", () =>
+        syncStripeSubscriptionEntitlement({
+          currentPeriodEnd: new Date(currentPeriodEnd * 1000),
+          localSubscriptionId: localSubscription.id,
+          organizationId: organizationContext.organization.id,
+          organizationMembershipId: organizationContext.membership.id,
+          productId: merchantProduct.productId,
+          status: currentStripeSubscription.status,
+          stripeEventCreatedAt: stripeEvent.created,
+          stripeEventKind: "checkout",
+          stripeSubscriptionId: subscriptionInfo.subscriptionIdentifier,
+          userId: user.id,
+        }),
+      );
+    } else {
+      // Team subscriptions expose a pool of seats. The owner deliberately claims one
+      // from /team instead of checkout assigning a seat implicitly.
+      await step.run("sync initial team subscription state", () =>
+        db
+          .update(subscription)
+          .set({ status: currentStripeSubscription.status })
+          .where(eq(subscription.id, localSubscription.id)),
+      );
+    }
 
     await step.sendEvent("announce new subscription", {
       name: NEW_SUBSCRIPTION_CREATED_EVENT,
@@ -200,56 +239,12 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
     });
 
     return {
+      seatCount,
       subscriptionId: localSubscription.id,
       status: currentStripeSubscription.status,
     };
   },
 );
-
-function getStoredStripeEventCreatedAt(metadata: unknown) {
-  if (typeof metadata !== "object" || metadata === null || !("stripeEventCreatedAt" in metadata)) {
-    return null;
-  }
-
-  return typeof metadata.stripeEventCreatedAt === "number" ? metadata.stripeEventCreatedAt : null;
-}
-
-const stripeSubscriptionPeriodSchema = z
-  .object({
-    current_period_end: z.number().optional(),
-    items: z
-      .object({
-        data: z.array(
-          z
-            .object({
-              current_period_end: z.number().optional(),
-            })
-            .passthrough(),
-        ),
-      })
-      .optional(),
-  })
-  .passthrough();
-
-export function getStripeSubscriptionCurrentPeriodEnd(stripeSubscription: unknown) {
-  // CourseBuilder currently publishes pre-item-period Stripe types. Parse the runtime
-  // response so both the legacy subscription field and current item fields are supported.
-  const parsedSubscription = stripeSubscriptionPeriodSchema.safeParse(stripeSubscription);
-  if (!parsedSubscription.success) return null;
-  if (parsedSubscription.data.current_period_end !== undefined) {
-    return parsedSubscription.data.current_period_end;
-  }
-
-  let latestPeriodEnd: number | null = null;
-  for (const item of parsedSubscription.data.items?.data ?? []) {
-    const periodEnd = item.current_period_end;
-    if (periodEnd !== undefined && (latestPeriodEnd === null || periodEnd > latestPeriodEnd)) {
-      latestPeriodEnd = periodEnd;
-    }
-  }
-
-  return latestPeriodEnd;
-}
 
 export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
   {
@@ -297,7 +292,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
     const organizationId = localSubscription?.organizationId;
     const productId = localSubscription?.productId;
 
-    if (!localSubscription || !organizationId || !productId) {
+    if (!stored || !localSubscription || !organizationId || !productId) {
       logger.warn("Ignoring Stripe subscription update", {
         reason: "local_subscription_not_found_or_incomplete",
         stripeEventId: stripeEvent.id,
@@ -309,57 +304,98 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
       throw new Error(`Local subscription ${stripeSubscriptionId} is not ready for update.`);
     }
 
-    const entitlement = await step.run("load subscription entitlement", () =>
-      db.query.entitlements.findFirst({
-        where: eq(entitlements.id, stripeSubscriptionEntitlementId(stripeSubscriptionId)),
-      }),
-    );
-    const storedEventCreatedAt = getStoredStripeEventCreatedAt(entitlement?.metadata);
-
-    if (storedEventCreatedAt && storedEventCreatedAt > stripeEventCreatedAt) {
-      logger.warn("Ignoring stale Stripe subscription update", {
-        reason: "older_than_stored_subscription_event",
-        stripeEventId: stripeEvent.id,
-        stripeEventCreatedAt,
-        stripeSubscriptionId,
-        storedEventCreatedAt,
-      });
-      return { ignored: true, subscriptionId: localSubscription.id };
-    }
-
     const currentPeriodEnd = getStripeSubscriptionCurrentPeriodEnd(stripeSubscription);
-    const organizationMembershipId = entitlement?.organizationMembershipId;
-    const userId = entitlement?.userId;
+    const seatCount = subscriptionCheckoutQuantitySchema.safeParse(
+      getStripeSubscriptionQuantity(stripeSubscription),
+    );
+    const storedTeamFields = teamSubscriptionFieldsSchema.safeParse(localSubscription.fields);
+    const subscriptionOwnerCustomer = storedTeamFields.success
+      ? null
+      : await step.run("load subscription owner", () =>
+          db.query.merchantCustomer.findFirst({
+            where: eq(merchantCustomerTable.id, stored.merchantCustomerId),
+          }),
+        );
+    const ownerId = storedTeamFields.success
+      ? storedTeamFields.data.ownerId
+      : subscriptionOwnerCustomer?.userId;
 
-    if (!currentPeriodEnd || !organizationMembershipId || !userId) {
+    if (!currentPeriodEnd || !seatCount.success || !ownerId) {
       logger.warn("Ignoring incomplete Stripe subscription update", {
-        reason: "entitlement_or_current_period_missing",
+        reason: "subscription_period_seats_or_owner_missing",
         stripeEventId: stripeEvent.id,
         stripeSubscriptionId,
         subscriptionId: localSubscription.id,
-        entitlementId: entitlement?.id ?? null,
         hasCurrentPeriodEnd: Boolean(currentPeriodEnd),
-        hasOrganizationMembership: Boolean(organizationMembershipId),
-        hasUser: Boolean(userId),
+        hasOwner: Boolean(ownerId),
+        hasSeatCount: seatCount.success,
       });
       return { ignored: true, subscriptionId: localSubscription.id };
     }
 
-    await step.run("sync subscription state", () =>
-      syncStripeSubscriptionEntitlement({
-        currentPeriodEnd: new Date(currentPeriodEnd * 1000),
-        localSubscriptionId: localSubscription.id,
-        organizationId,
-        organizationMembershipId,
-        productId,
-        status: stripeSubscription.status,
-        stripeEventCreatedAt,
-        stripeEventKind: "subscription_update",
-        stripeSubscriptionId,
-        userId,
-      }),
+    await step.run("sync subscription seat count", () =>
+      db
+        .update(subscription)
+        .set({
+          fields: mergeTeamSubscriptionFields(localSubscription.fields, {
+            ownerId,
+            seats: seatCount.data,
+          }),
+        })
+        .where(eq(subscription.id, localSubscription.id)),
     );
 
-    return { subscriptionId: localSubscription.id, status: stripeSubscription.status };
+    const subscriptionEntitlements = await step.run("load subscription entitlements", () =>
+      db.query.entitlements.findMany({
+        where: and(
+          eq(entitlements.sourceId, localSubscription.id),
+          eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
+          isNull(entitlements.deletedAt),
+        ),
+      }),
+    );
+    const completeEntitlements = subscriptionEntitlements.filter(
+      (
+        entitlement,
+      ): entitlement is typeof entitlement & {
+        organizationMembershipId: string;
+        userId: string;
+      } => Boolean(entitlement.organizationMembershipId && entitlement.userId),
+    );
+
+    if (completeEntitlements.length === 0) {
+      await step.run("sync unclaimed team subscription state", () =>
+        db
+          .update(subscription)
+          .set({ status: stripeSubscription.status })
+          .where(eq(subscription.id, localSubscription.id)),
+      );
+    } else {
+      await step.run("sync assigned subscription seats", () =>
+        Promise.all(
+          completeEntitlements.map((entitlement) =>
+            syncStripeSubscriptionEntitlement({
+              currentPeriodEnd: new Date(currentPeriodEnd * 1000),
+              localSubscriptionId: localSubscription.id,
+              organizationId,
+              organizationMembershipId: entitlement.organizationMembershipId,
+              productId,
+              status: stripeSubscription.status,
+              stripeEventCreatedAt,
+              stripeEventKind: "subscription_update",
+              stripeSubscriptionId,
+              userId: entitlement.userId,
+            }),
+          ),
+        ),
+      );
+    }
+
+    return {
+      assignedSeats: completeEntitlements.length,
+      seatCount: seatCount.data,
+      subscriptionId: localSubscription.id,
+      status: stripeSubscription.status,
+    };
   },
 );

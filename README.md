@@ -20,7 +20,7 @@ Phase 0 is local/dev only:
 - no `workspace:*` CourseBuilder runtime reach-through
 - local Docker MySQL only
 - Stripe Checkout and subscription webhook writes are local-only
-- subscription management is intentionally deferred to the profile work
+- subscription and team-seat management remain local-only
 - no dev/prod PlanetScale writes
 - no read flip
 
@@ -36,7 +36,9 @@ pnpm --filter @egghead/web dev
 
 The subscription flow uses hosted Stripe Checkout. CourseBuilder verifies Stripe webhook
 signatures and publishes the events to the app's Inngest endpoint; the Egghead handler then
-creates the local subscription records and grants the all-access entitlement.
+creates the local subscription records and grants the all-access entitlement. A checkout quantity
+of two or more creates a team subscription: the seat count and owner are stored on the local
+subscription, and access is assigned from `/team` rather than granted to the purchaser implicitly.
 
 Configure these values in `apps/web/.env.local`:
 
@@ -70,8 +72,13 @@ stripe listen --events checkout.session.completed,customer.subscription.updated 
 ```
 
 Copy the `whsec_...` value printed by Stripe CLI into `STRIPE_WEBHOOK_SECRET`, restart the
-web app, sign in, and open `/subscribe`. The checkout success page waits for the durable
-webhook handler to create the subscription before showing course access.
+web app, sign in, and open `/subscribe`. Choose **My team** to send a multi-seat quantity to
+Stripe Checkout. The checkout success page waits for the durable webhook handler to create the
+subscription, then links to `/team`, where the owner can claim, invite, remove, and add seats.
+
+Team subscription renewal and cancellation events fan out to every assigned seat entitlement.
+Adding seats updates Stripe first and relies on the same webhook to converge the local seat count;
+the local row is also updated immediately for responsive local development.
 
 Then from `migrate-egghead`:
 

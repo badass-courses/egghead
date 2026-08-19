@@ -35,7 +35,7 @@ console.log(
       betaRuntime: runtime === "beta",
       betaDatabaseApproved: isBetaDatabaseApproved(),
       commerceWritesLocalOnly: true,
-      subscriptionManagementExcluded: true,
+      subscriptionManagementLocalOnly: true,
       readFlipBlocked: true,
       planetScaleWritesApproved: false,
     },

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { eq, sql } from "drizzle-orm";
 
 import { getEggheadDatabase } from "../db/adapter";
@@ -14,6 +16,13 @@ export function stripeSubscriptionGrantsAccess(status: string) {
 
 export function stripeSubscriptionEntitlementId(stripeSubscriptionId: string) {
   return `stripe_ent_${stripeSubscriptionId}`;
+}
+
+export function stripeSubscriptionSeatEntitlementId(stripeSubscriptionId: string, userId: string) {
+  const seatFingerprint = createHash("sha256")
+    .update(`${stripeSubscriptionId}:${userId}`)
+    .digest("hex");
+  return `stripe_seat_${seatFingerprint}`;
 }
 
 type StripeSubscriptionEventKind = "checkout" | "subscription_update";

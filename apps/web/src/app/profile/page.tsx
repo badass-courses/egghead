@@ -13,6 +13,7 @@ import { getPrivateAccountProfile } from "../../profile/data";
 import { gravatarUrlForEmail } from "../../profile/gravatar";
 import { getEnv } from "../../env";
 import { getMembershipBillingSummary } from "../../subscriptions/billing";
+import { getOwnedTeamSubscription } from "../../subscriptions/team";
 import { manageMembership, signOutOfEgghead, updateProfileName } from "./actions";
 import {
   CompletionFilterControls,
@@ -124,7 +125,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
       requestHeaders.get("cf-ipcountry") ??
       requestHeaders.get("x-country"),
   );
-  const [profile, membershipBilling] = await Promise.all([
+  const [profile, membershipBilling, teamSubscription] = await Promise.all([
     getPrivateAccountProfile({
       actorUserId: currentUser.id,
       profileUserId: currentUser.id,
@@ -133,6 +134,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
       ...(completionFilter === "all" ? {} : { recentCompletionFamily: completionFilter }),
     }),
     getMembershipBillingSummary(currentUser.id),
+    getOwnedTeamSubscription(currentUser.id),
   ]);
 
   if (!profile) notFound();
@@ -276,6 +278,14 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
 
             {hasLibraryMembership ? (
               <div className="grid w-full justify-items-stretch gap-3 md:w-auto md:min-w-48">
+                {teamSubscription ? (
+                  <Link
+                    className="press inline-flex min-h-11 items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-5 py-3 text-sm font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
+                    href="/team"
+                  >
+                    Manage {teamSubscription.totalSeats} team seats
+                  </Link>
+                ) : null}
                 {membershipBilling ? (
                   <form action={manageMembership}>
                     <ManageMembershipButton />

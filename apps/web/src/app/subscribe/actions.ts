@@ -25,6 +25,7 @@ import {
 } from "../../subscriptions/options";
 import { ensurePersonalOrganization } from "../../subscriptions/personal-organization";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
+import { subscriptionCheckoutQuantitySchema } from "../../subscriptions/team-contracts";
 
 const CHECKOUT_RESERVATION_FIELD = "stripeSubscriptionCheckout";
 const CHECKOUT_RESERVATION_PENDING_TTL_SECONDS = 2 * 60;
@@ -33,6 +34,7 @@ const checkoutReservationSchema = z.object({
   country: z.string(),
   pendingUntil: z.number().int(),
   productId: z.string(),
+  quantity: subscriptionCheckoutQuantitySchema,
   sessionExpiresAt: z.number().int().optional(),
   sessionId: z.string().optional(),
   token: z.string(),
@@ -41,6 +43,7 @@ const checkoutReservationSchema = z.object({
 async function reserveSubscriptionCheckout(
   organizationId: string,
   productId: string,
+  quantity: number,
   country: string,
 ) {
   const db = getEggheadDatabase();
@@ -68,7 +71,8 @@ async function reserveSubscriptionCheckout(
     if (
       currentReservation &&
       currentReservationIsActive &&
-      currentReservation.productId === productId
+      currentReservation.productId === productId &&
+      currentReservation.quantity === quantity
     ) {
       return { reservation: currentReservation, staleSessionId: null };
     }
@@ -80,6 +84,7 @@ async function reserveSubscriptionCheckout(
       country,
       pendingUntil: now + CHECKOUT_RESERVATION_PENDING_TTL_SECONDS,
       productId,
+      quantity,
       token: randomUUID(),
     };
     await transaction
@@ -179,6 +184,7 @@ export async function startSubscriptionCheckout(formData: FormData) {
     getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_ID"),
   );
   const requestedProductId = formData.get("productId");
+  const requestedQuantity = subscriptionCheckoutQuantitySchema.safeParse(formData.get("quantity"));
 
   if (
     typeof requestedProductId !== "string" ||
@@ -186,8 +192,12 @@ export async function startSubscriptionCheckout(formData: FormData) {
   ) {
     redirect("/subscribe?error=invalid-product");
   }
+  if (!requestedQuantity.success) {
+    redirect("/subscribe?error=invalid-seats");
+  }
 
   const productId = requestedProductId;
+  const quantity = requestedQuantity.data;
   const adapter = getCourseBuilderAdapter();
   const product = await adapter.getProduct(productId, false);
 
@@ -213,9 +223,10 @@ export async function startSubscriptionCheckout(formData: FormData) {
   const checkoutReservation = await reserveSubscriptionCheckout(
     organization.id,
     productId,
+    quantity,
     country,
   );
-  if (checkoutReservation.productId !== productId) {
+  if (checkoutReservation.productId !== productId || checkoutReservation.quantity !== quantity) {
     redirect("/subscribe?error=checkout-pending");
   }
   const stripeProvider = getStripeProvider(checkoutReservation.token);
@@ -230,8 +241,8 @@ export async function startSubscriptionCheckout(formData: FormData) {
         productId,
         userId: user.id,
         organizationId: organization.id,
-        quantity: 1,
-        bulk: false,
+        quantity,
+        bulk: quantity > 1,
         country: checkoutReservation.country,
         cancelUrl: `${getSiteUrl()}/subscribe`,
       },
@@ -252,6 +263,7 @@ export async function startSubscriptionCheckout(formData: FormData) {
       error,
       organizationId: organization.id,
       productId,
+      quantity,
       reservationFingerprint: createHash("sha256")
         .update(checkoutReservation.token)
         .digest("hex")
