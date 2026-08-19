@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 
 import { getWorkshopBySlug } from "../../../content/workshop";
 import { WorkshopPage } from "../../../content/workshop-page";
@@ -27,10 +28,18 @@ export async function generateMetadata({ params }: WorkshopRouteProps): Promise<
   };
 }
 
-export default async function WorkshopRoute({ params }: WorkshopRouteProps) {
+async function WorkshopRouteContent({ params }: WorkshopRouteProps) {
   const { slug } = await params;
   const workshop = await getWorkshopBySlug(decodeURIComponent(slug));
   if (!workshop) notFound();
 
   return <WorkshopPage workshop={workshop} />;
+}
+
+export default function WorkshopRoute(props: WorkshopRouteProps) {
+  return (
+    <Suspense fallback={null}>
+      <WorkshopRouteContent {...props} />
+    </Suspense>
+  );
 }

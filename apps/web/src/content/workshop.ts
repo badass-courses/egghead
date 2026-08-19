@@ -15,6 +15,7 @@ import { contentResourceSlugSql } from "./resource-slug";
 type WorkshopRow = RowDataPacket & {
   id: string;
   fields: unknown;
+  slug: string;
   updatedAt: Date | string;
 };
 
@@ -75,6 +76,11 @@ function numberValue(value: number | string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+export function workshopFullPrice(value: number | string | null | undefined) {
+  const price = numberValue(value);
+  return price === null ? null : Math.max(0, price);
+}
+
 function isoDate(value: string | null) {
   if (!value) return null;
   const parsed = new Date(value);
@@ -110,7 +116,8 @@ export function workshopStatus(
   const ends = endsAt ? new Date(endsAt) : null;
 
   if (!starts || Number.isNaN(starts.getTime())) return "schedule-pending";
-  if (ends && !Number.isNaN(ends.getTime()) && ends <= now) return "past";
+  const effectiveEnd = ends && !Number.isNaN(ends.getTime()) ? ends : starts;
+  if (effectiveEnd <= now) return "past";
   if (starts <= now) return "in-progress";
   return "upcoming";
 }
@@ -130,8 +137,10 @@ function isMemberCoupon(row: WorkshopCouponRow) {
   return objectField(fields, "eligibilityCondition") !== null;
 }
 
-function offerForRows(row: WorkshopOfferRow, coupons: WorkshopCouponRow[]): WorkshopOffer {
-  const fullPrice = Math.max(0, numberValue(row.unitAmount) ?? 0);
+function offerForRows(row: WorkshopOfferRow, coupons: WorkshopCouponRow[]): WorkshopOffer | null {
+  const fullPrice = workshopFullPrice(row.unitAmount);
+  if (fullPrice === null) return null;
+
   const publicCoupon = coupons.find((coupon) => Boolean(coupon.default) && !isMemberCoupon(coupon));
   const memberCoupon = coupons.find(isMemberCoupon);
   const publicDiscount = publicCoupon ? discountAmount(publicCoupon, fullPrice) : 0;
@@ -231,10 +240,8 @@ async function loadOffers(
 
   for (const offerRow of offerRows) {
     if (offers.has(offerRow.resourceId)) continue;
-    offers.set(
-      offerRow.resourceId,
-      offerForRows(offerRow, couponsByProduct.get(offerRow.productId) ?? []),
-    );
+    const offer = offerForRows(offerRow, couponsByProduct.get(offerRow.productId) ?? []);
+    if (offer) offers.set(offerRow.resourceId, offer);
   }
 
   return offers;
@@ -254,7 +261,7 @@ function workshopFromRow(row: WorkshopRow, offer: WorkshopOffer | null): Worksho
     imageUrl: imageFromFields(fields),
     offer,
     registrationUrl: safePublicUrl(stringField(fields, "registrationUrl")),
-    slug: stringField(fields, "slug") ?? row.id,
+    slug: row.slug,
     startsAt,
     status: workshopStatus(startsAt, endsAt),
     timezone: stringField(fields, "timezone") ?? "America/Los_Angeles",
@@ -270,7 +277,7 @@ async function workshopRows(slug?: string) {
     const slugSql = await contentResourceSlugSql(connection, "event");
     const [rows] = await connection.execute<WorkshopRow[]>(
       `
-        SELECT event.id, event.fields, event.updatedAt
+        SELECT event.id, event.fields, ${slugSql} AS slug, event.updatedAt
         FROM egghead_ContentResource event
         WHERE event.deletedAt IS NULL
           AND event.type = 'event'
@@ -279,7 +286,7 @@ async function workshopRows(slug?: string) {
           AND ${slugSql} != ''
           ${slug ? `AND ${slugSql} = ?` : ""}
         ORDER BY event.updatedAt DESC, event.createdAt DESC
-        ${slug ? "LIMIT 1" : "LIMIT 100"}
+        ${slug ? "LIMIT 1" : ""}
       `,
       slug ? [slug] : [],
     );
