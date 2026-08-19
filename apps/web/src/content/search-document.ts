@@ -5,6 +5,7 @@ import {
   markdownField,
   stringField,
 } from "./fields";
+import { instructorMatchKey, normalizeInstructorDisplayName } from "./encoding";
 import { lessonFreeForeverFromFields } from "./lesson-access";
 import { lessonCanonicalPathForRouteContext } from "./lesson-route-context";
 import {
@@ -44,6 +45,8 @@ export type SearchIndexDocument = {
   description: string;
   freeForever: boolean;
   id: string;
+  instructorKeys: string[];
+  instructorNames: string[];
   isProContent: boolean;
   legacyPaths: string[];
   parentResources: SearchDocumentParentResource[];
@@ -66,6 +69,7 @@ export type ContentResourceForSearch = {
 };
 
 type SearchDocumentInput = {
+  instructorNames?: readonly string[] | undefined;
   parentCourseSlug?: string | null | undefined;
   parentCourseTitle?: string | null | undefined;
   resource: ContentResourceForSearch;
@@ -104,6 +108,8 @@ export const EGGHEAD_TYPESENSE_COLLECTION_SCHEMA: TypesenseCollectionSchema = {
     { name: "description", type: "string", optional: true },
     { name: "summary", type: "string", optional: true },
     { name: "body", type: "string", optional: true },
+    { name: "instructorNames", type: "string[]", facet: true },
+    { name: "instructorKeys", type: "string[]", facet: true },
     { name: "visibility", type: "string", facet: true },
     { name: "state", type: "string", facet: true },
     { name: "courseLinked", type: "bool", facet: true },
@@ -200,6 +206,16 @@ export function searchDocumentFromResource(input: SearchDocumentInput): SearchIn
           },
         ]
       : [];
+  const instructorNames = input.instructorNames
+    ? [
+        ...new Map(
+          input.instructorNames
+            .map(normalizeInstructorDisplayName)
+            .filter(Boolean)
+            .map((name) => [instructorMatchKey(name), name]),
+        ).values(),
+      ]
+    : [];
 
   return {
     body,
@@ -210,6 +226,8 @@ export function searchDocumentFromResource(input: SearchDocumentInput): SearchIn
     freeForever:
       type === "lesson" ? lessonFreeForeverFromFields(fields) : booleanField(fields, "freeForever"),
     id: input.resource.id,
+    instructorKeys: instructorNames.map(instructorMatchKey).filter(Boolean),
+    instructorNames,
     isProContent: booleanField(fields, "isProContent"),
     legacyPaths: uniqueLegacyPaths(legacyPathsForSearchDocument(type, slug), path),
     parentResources,

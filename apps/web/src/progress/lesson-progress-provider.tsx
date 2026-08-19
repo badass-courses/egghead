@@ -11,7 +11,7 @@ import {
 } from "react";
 
 import { CourseCompletionReview } from "./course-completion-review";
-import { syncCourseCompletion } from "./course-progress-action";
+import { syncCourseCompletion, type SyncCourseCompletionResult } from "./course-progress-action";
 import {
   completeLessonProgress,
   uncompleteLessonProgress,
@@ -56,6 +56,14 @@ type LessonProgressContextValue = {
 
 const idleFeedback: LessonProgressFeedback = { status: "idle", message: null };
 
+function isCourseCompletionFailure(status: SyncCourseCompletionResult["status"]) {
+  return status === "authentication_required" || status === "invalid_course" || status === "failed";
+}
+
+function shouldRetryCourseCompletion(status: SyncCourseCompletionResult["status"]) {
+  return status === "incomplete" || isCourseCompletionFailure(status);
+}
+
 const LessonProgressContext = createContext<LessonProgressContextValue | null>(null);
 
 export function LessonProgressProvider({
@@ -78,6 +86,8 @@ export function LessonProgressProvider({
   const [isCourseReviewOpen, setIsCourseReviewOpen] = useState(false);
   // Initial progress is mount-only; callers must remount with a new key for a new snapshot.
   const completedLessonIdsRef = useRef<ReadonlySet<string>>(completedLessonIds);
+  const inFlightLessonIdsRef = useRef<Set<string>>(new Set());
+  const courseSyncRetryLessonIdsRef = useRef<Set<string>>(new Set());
 
   const setFeedback = useCallback((resourceId: string, feedback: LessonProgressFeedback) => {
     setFeedbackByLesson((current) => {
@@ -105,7 +115,48 @@ export function LessonProgressProvider({
 
   const completeLesson = useCallback(
     async (resourceId: string, source: LessonProgressSource = "lesson_progress_control") => {
-      if (completedLessonIdsRef.current.has(resourceId)) return;
+      if (inFlightLessonIdsRef.current.has(resourceId)) {
+        return;
+      }
+
+      if (completedLessonIdsRef.current.has(resourceId)) {
+        if (!course || !courseSyncRetryLessonIdsRef.current.has(resourceId)) return;
+
+        inFlightLessonIdsRef.current.add(resourceId);
+        setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
+
+        try {
+          const courseResult = await syncCourseCompletion({
+            courseId: course.id,
+            courseSlug: course.slug,
+          });
+
+          if (shouldRetryCourseCompletion(courseResult.status)) {
+            setFeedback(resourceId, {
+              status: "course_completion_failed",
+              message: "Lesson progress saved, but course completion could not be saved",
+            });
+            return;
+          }
+
+          courseSyncRetryLessonIdsRef.current.delete(resourceId);
+          if (courseResult.status === "completed" && courseResult.shouldPromptForReview) {
+            setIsCourseReviewOpen(true);
+          }
+          setFeedback(resourceId, {
+            status: "completed",
+            message: "Lesson marked as watched",
+          });
+        } catch {
+          setFeedback(resourceId, {
+            status: "course_completion_failed",
+            message: "Lesson progress saved, but course completion could not be saved",
+          });
+        } finally {
+          inFlightLessonIdsRef.current.delete(resourceId);
+        }
+        return;
+      }
 
       if (!isAuthenticated && source !== "lesson_player_ended") {
         setFeedback(resourceId, {
@@ -115,11 +166,8 @@ export function LessonProgressProvider({
         return;
       }
 
-      const nextCompletedLessonIds = addOptimisticCompletion(resourceId);
-      const completesCourse =
-        course !== undefined &&
-        course.lessonIds.length > 0 &&
-        course.lessonIds.every((lessonId) => nextCompletedLessonIds.has(lessonId));
+      inFlightLessonIdsRef.current.add(resourceId);
+      addOptimisticCompletion(resourceId);
       setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
 
       try {
@@ -127,13 +175,18 @@ export function LessonProgressProvider({
 
         switch (result.status) {
           case "completed": {
+            const completesCourse =
+              course !== undefined &&
+              course.lessonIds.length > 0 &&
+              course.lessonIds.every((lessonId) => completedLessonIdsRef.current.has(lessonId));
             if (completesCourse && course) {
               const courseResult = await syncCourseCompletion({
                 courseId: course.id,
                 courseSlug: course.slug,
               });
 
-              if (courseResult.status !== "completed") {
+              if (shouldRetryCourseCompletion(courseResult.status)) {
+                courseSyncRetryLessonIdsRef.current.add(resourceId);
                 setFeedback(resourceId, {
                   status: "course_completion_failed",
                   message: "Lesson progress saved, but course completion could not be saved",
@@ -141,7 +194,10 @@ export function LessonProgressProvider({
                 return;
               }
 
-              if (courseResult.shouldPromptForReview) setIsCourseReviewOpen(true);
+              courseSyncRetryLessonIdsRef.current.delete(resourceId);
+              if (courseResult.status === "completed" && courseResult.shouldPromptForReview) {
+                setIsCourseReviewOpen(true);
+              }
             }
 
             setFeedback(resourceId, {
@@ -199,6 +255,8 @@ export function LessonProgressProvider({
           status: "failed",
           message: "Lesson progress could not be saved",
         });
+      } finally {
+        inFlightLessonIdsRef.current.delete(resourceId);
       }
     },
     [addOptimisticCompletion, course, isAuthenticated, rollBackOptimisticCompletion, setFeedback],
@@ -206,7 +264,12 @@ export function LessonProgressProvider({
 
   const uncompleteLesson = useCallback(
     async (resourceId: string) => {
-      if (!completedLessonIdsRef.current.has(resourceId)) return;
+      if (
+        !completedLessonIdsRef.current.has(resourceId) ||
+        inFlightLessonIdsRef.current.has(resourceId)
+      ) {
+        return;
+      }
 
       if (!isAuthenticated) {
         setFeedback(resourceId, {
@@ -220,6 +283,7 @@ export function LessonProgressProvider({
         course !== undefined &&
         course.lessonIds.length > 0 &&
         course.lessonIds.every((lessonId) => completedLessonIdsRef.current.has(lessonId));
+      inFlightLessonIdsRef.current.add(resourceId);
       rollBackOptimisticCompletion(resourceId);
       setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
 
@@ -228,13 +292,14 @@ export function LessonProgressProvider({
 
         switch (result.status) {
           case "uncompleted": {
+            courseSyncRetryLessonIdsRef.current.delete(resourceId);
             if (courseWasCompleted && course) {
               const courseResult = await syncCourseCompletion({
                 courseId: course.id,
                 courseSlug: course.slug,
               });
 
-              if (courseResult.status !== "incomplete") {
+              if (isCourseCompletionFailure(courseResult.status)) {
                 setFeedback(resourceId, {
                   status: "course_completion_failed",
                   message: "Lesson progress saved, but course completion could not be saved",
@@ -285,6 +350,8 @@ export function LessonProgressProvider({
           status: "failed",
           message: "Lesson progress could not be saved",
         });
+      } finally {
+        inFlightLessonIdsRef.current.delete(resourceId);
       }
     },
     [addOptimisticCompletion, course, isAuthenticated, rollBackOptimisticCompletion, setFeedback],

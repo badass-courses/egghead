@@ -150,7 +150,7 @@ export function ResourceListHeaderEyebrow({ className, ...props }: ComponentProp
     <p
       data-slot="resource-list-header-eyebrow"
       className={cn(
-        "m-0 text-xs font-black uppercase tracking-wider text-rust dark:text-sky",
+        "m-0 text-xs font-black uppercase tracking-wider text-muted-foreground",
         className,
       )}
       {...props}
@@ -326,12 +326,13 @@ export function ResourceListLink<T extends ElementType = "a">({
 
 /* ── Indicator: the knob at the start of every row ── */
 
-type ResourceIndicatorStatus = ResourceStatus | "active-completed";
+export type ResourceIndicatorStatus = ResourceStatus | "active-completed";
 
 const indicatorStatus: Record<ResourceIndicatorStatus, string> = {
   upcoming: "border-border-strong bg-well text-muted-foreground shadow-well",
   completed: "border-sage-line bg-sage-wash text-sage-foreground",
-  "active-completed": "border-yolk-foreground/20 bg-yolk-foreground text-yolk",
+  "active-completed":
+    "border-foreground bg-foreground text-background ring-2 ring-inset ring-background/40",
   active: "border-border-strong bg-surface-grad text-foreground shadow-knob",
   locked: "border-border-strong bg-well text-muted-foreground shadow-well",
 };

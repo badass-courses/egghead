@@ -7,6 +7,7 @@ import {
   safePublicAvatarUrl,
 } from "../apps/web/src/profile/contracts";
 import {
+  escapeMysqlLikePattern,
   PRIVATE_PROFILE_ACCOUNTS_SQL,
   OWNER_SCOPED_NAME_UPDATE_SQL,
   PUBLISHED_COMPLETION_STATS_SQL,
@@ -196,6 +197,21 @@ const checks = [
     parsePublicProfileId("learner%123456789"),
     null,
   ),
+  assertEqual(
+    "profile search preserves ordinary text",
+    escapeMysqlLikePattern("react course"),
+    "react course",
+  ),
+  assertEqual(
+    "profile search escapes LIKE wildcards",
+    escapeMysqlLikePattern("100%_complete"),
+    "100\\%\\_complete",
+  ),
+  assertEqual(
+    "profile search escapes the escape character first",
+    escapeMysqlLikePattern("path\\name"),
+    "path\\\\name",
+  ),
   assertIncludes("public lookup uses an exact ID predicate", publicQuery, "where user.id = ?"),
   assertNotIncludes("public lookup does not use a prefix query", publicQuery, "like"),
   assertNotIncludes("public user lookup does not select email", publicQuery, "email"),
@@ -267,6 +283,21 @@ const checks = [
   assertEqual(
     "a break within the chain stops the streak count",
     currentLearningStreakDays(["2026-08-07", "2026-08-05"], streakToday),
+    1,
+  ),
+  assertEqual(
+    "malformed completion days are ignored",
+    currentLearningStreakDays(["not-a-date", "2026-08-07"], streakToday),
+    1,
+  ),
+  assertEqual(
+    "invalid calendar days are ignored",
+    currentLearningStreakDays(["2026-02-30", "2026-08-07"], streakToday),
+    1,
+  ),
+  assertEqual(
+    "future completion days do not extend the streak",
+    currentLearningStreakDays(["2026-08-09", "2026-08-08", "2026-08-07"], streakToday),
     1,
   ),
   expectThrow("GitHub disconnect rejects an anonymous actor", () =>

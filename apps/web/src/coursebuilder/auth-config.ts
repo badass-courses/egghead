@@ -6,7 +6,10 @@ import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEggheadRuntime } from "../db/local-docker";
 import { getEnv } from "../env";
 import { claimAnonymousLessonCompletions } from "../progress/anonymous-lesson-progress";
+import { isEmailDeliveryEnabled } from "./email-delivery";
 import { createPostmarkEmailProvider } from "./email-provider";
+
+const LOCAL_EMAIL_FROM = "egghead development <no-reply@egghead.local>";
 
 export function isGithubAuthConfigured() {
   const githubClientId = getEnv("GITHUB_CLIENT_ID");
@@ -19,7 +22,10 @@ export function isEmailAuthConfigured() {
   const postmarkApiKey = getEnv("POSTMARK_API_KEY");
   const postmarkFromEmail = getEnv("POSTMARK_FROM_EMAIL");
 
-  return Boolean(getEggheadRuntime() === "local" && postmarkApiKey && postmarkFromEmail);
+  return Boolean(
+    getEggheadRuntime() === "local" &&
+    (!isEmailDeliveryEnabled(getEnv("SEND_EMAILS")) || (postmarkApiKey && postmarkFromEmail)),
+  );
 }
 
 function getAuthProviders(): NextAuthConfig["providers"] {
@@ -39,11 +45,11 @@ function getAuthProviders(): NextAuthConfig["providers"] {
     );
   }
 
-  if (getEggheadRuntime() === "local" && postmarkApiKey && postmarkFromEmail) {
+  if (isEmailAuthConfigured()) {
     providers.push(
       createPostmarkEmailProvider({
         apiKey: postmarkApiKey,
-        from: postmarkFromEmail,
+        from: postmarkFromEmail ?? LOCAL_EMAIL_FROM,
       }),
     );
   }

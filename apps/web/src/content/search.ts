@@ -2,6 +2,8 @@ import type { RowDataPacket } from "mysql2";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
+import { doubleEncodedUtf8Variant, instructorMatchKey } from "./encoding";
+import { instructorNamesByContentId, instructorUserIdsForName } from "./instructors";
 import { parentCourseSlugsForLessonIds } from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
 import { contentResourceSlugSql } from "./resource-slug";
@@ -56,11 +58,23 @@ function normalizedSearchContentType(typeFilter?: string | null) {
     : "invalid";
 }
 
-async function searchRowsFromDatabase(term: string, typeFilter?: string | null, limit = 24) {
+async function searchRowsFromDatabase(
+  term: string,
+  typeFilter?: string | null,
+  instructorFilter?: string | null,
+  limit = 24,
+) {
   const normalized = term.trim().toLowerCase();
   const likeTerm = `%${normalized}%`;
   const normalizedType = normalizedSearchContentType(typeFilter);
   if (normalizedType === "invalid") return [];
+  const normalizedInstructor = instructorFilter?.trim() || null;
+  // Display names are enriched from legacy instructor profiles, so filter by
+  // the contributing user ids; fall back to stored names (both spellings —
+  // some rows hold them double-encoded) when no ids resolve.
+  const instructorUserIds = normalizedInstructor
+    ? await instructorUserIdsForName(normalizedInstructor)
+    : [];
 
   const connection = await createLocalMysqlConnection();
   const typeClause = normalizedType
@@ -76,10 +90,28 @@ async function searchRowsFromDatabase(term: string, typeFilter?: string | null, 
             )
         `
     : "";
+  const instructorCandidates = instructorUserIds.length
+    ? instructorUserIds
+    : normalizedInstructor
+      ? [...new Set([normalizedInstructor, doubleEncodedUtf8Variant(normalizedInstructor)])]
+      : [];
+  const instructorColumn = instructorUserIds.length ? "user.id" : "user.name";
+  const instructorClause = instructorCandidates.length
+    ? `
+            AND EXISTS (
+              SELECT 1
+              FROM egghead_ContentContribution contribution
+              JOIN egghead_User user ON user.id = contribution.userId
+              WHERE contribution.contentId = resource.id
+                AND ${instructorColumn} IN (${instructorCandidates.map(() => "?").join(", ")})
+            )
+        `
+    : "";
   const params = [
     ...SEARCH_CONTENT_TYPE_VALUES,
     ...(normalizedType ? [normalizedType] : []),
     ...(normalized ? [likeTerm, likeTerm, likeTerm] : []),
+    ...instructorCandidates,
   ];
   const limitClause = limit > 0 ? `LIMIT ${limit}` : "";
 
@@ -96,6 +128,7 @@ async function searchRowsFromDatabase(term: string, typeFilter?: string | null, 
             AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${publicTypePlaceholders})
             ${typeClause}
             ${termClause}
+            ${instructorClause}
           ORDER BY resource.createdAt DESC
           ${limitClause}
         `,
@@ -112,13 +145,17 @@ async function searchDocumentsFromRows(rows: SearchResourceRow[]) {
   const connection = await createLocalMysqlConnection();
 
   try {
-    const parentCourseSlugs = await parentCourseSlugsForLessonIds(
-      connection,
-      rows.filter((row) => searchDocumentTypeFromResource(row) === "lesson").map((row) => row.id),
-    );
+    const [parentCourseSlugs, instructorNames] = await Promise.all([
+      parentCourseSlugsForLessonIds(
+        connection,
+        rows.filter((row) => searchDocumentTypeFromResource(row) === "lesson").map((row) => row.id),
+      ),
+      instructorNamesByContentId(rows.map((row) => row.id)),
+    ]);
 
     return rows.map((row) =>
       searchDocumentFromResource({
+        instructorNames: instructorNames.get(row.id),
         parentCourseSlug: parentCourseSlugs.get(row.id),
         resource: row,
       }),
@@ -139,35 +176,63 @@ function searchResultFromDocument(document: SearchIndexDocument): SearchResult {
   };
 }
 
-async function searchSqlContent(term: string, typeFilter?: string | null) {
-  const rows = await searchRowsFromDatabase(term, typeFilter);
+async function searchSqlContent(
+  term: string,
+  typeFilter?: string | null,
+  instructorFilter?: string | null,
+) {
+  const rows = await searchRowsFromDatabase(term, typeFilter, instructorFilter);
   const documents = await searchDocumentsFromRows(rows);
   return documents.map(searchResultFromDocument);
 }
 
-function typesenseFilter(typeFilter?: string | null) {
-  const normalizedType = normalizedSearchContentType(typeFilter);
-  if (normalizedType === "invalid") return "type:=__invalid__";
-  if (normalizedType) return `type:=${normalizedType}`;
-  return `type:=[${SEARCH_CONTENT_TYPE_VALUES.join(", ")}]`;
+function typesenseFilterValue(value: string) {
+  return `\`${value.replaceAll("`", "\\`")}\``;
 }
 
-async function searchTypesenseContent(term: string, typeFilter?: string | null) {
-  if (!isEggheadTypesenseSearchConfigured()) return null;
+export function typesenseFilter(typeFilter?: string | null, instructorFilter?: string | null) {
+  const normalizedType = normalizedSearchContentType(typeFilter);
+  const filters = [
+    normalizedType === "invalid"
+      ? "type:=__invalid__"
+      : normalizedType
+        ? `type:=${normalizedType}`
+        : `type:=[${SEARCH_CONTENT_TYPE_VALUES.join(", ")}]`,
+  ];
+  const instructorKey = instructorMatchKey(instructorFilter ?? "");
+  if (instructorKey) {
+    filters.push(`instructorKeys:=${typesenseFilterValue(instructorKey)}`);
+  }
+  return filters.join(" && ");
+}
 
-  const config = getEggheadTypesenseConfig();
-  const client = createEggheadTypesenseSearchClient();
+export function typesenseSearchParameters(
+  term: string,
+  typeFilter?: string | null,
+  instructorFilter?: string | null,
+) {
   const normalized = term.trim();
-  const filter = typesenseFilter(typeFilter);
-  const searchParams = {
+  return {
     q: normalized || "*",
-    query_by: "title,description,summary,body",
+    query_by: "title,description,summary,body,instructorNames",
     per_page: 24,
     sort_by: normalized
       ? "_text_match:desc,updated_at_timestamp:desc"
       : "updated_at_timestamp:desc",
-    ...(filter ? { filter_by: filter } : {}),
+    filter_by: typesenseFilter(typeFilter, instructorFilter),
   };
+}
+
+async function searchTypesenseContent(
+  term: string,
+  typeFilter?: string | null,
+  instructorFilter?: string | null,
+) {
+  if (!isEggheadTypesenseSearchConfigured()) return null;
+
+  const config = getEggheadTypesenseConfig();
+  const client = createEggheadTypesenseSearchClient();
+  const searchParams = typesenseSearchParameters(term, typeFilter, instructorFilter);
   const response = await client
     .collections<SearchIndexDocument>(config.collectionName)
     .documents()
@@ -184,7 +249,7 @@ export async function loadSearchIndexDocuments({
 }: {
   limit?: number;
 } = {}) {
-  const rows = await searchRowsFromDatabase("", null, limit ?? 0);
+  const rows = await searchRowsFromDatabase("", null, null, limit ?? 0);
   const selectedRows = typeof limit === "number" && limit > 0 ? rows.slice(0, limit) : rows;
   return searchDocumentsFromRows(selectedRows);
 }
@@ -192,17 +257,18 @@ export async function loadSearchIndexDocuments({
 export async function searchContent(
   term: string,
   typeFilter?: string | null,
+  instructorFilter?: string | null,
 ): Promise<SearchResult[]> {
   "use cache";
   cacheLife("minutes");
   cacheTag("egghead-search");
 
   try {
-    const typesenseResults = await searchTypesenseContent(term, typeFilter);
+    const typesenseResults = await searchTypesenseContent(term, typeFilter, instructorFilter);
     if (typesenseResults) return typesenseResults;
   } catch {
-    return searchSqlContent(term, typeFilter);
+    return searchSqlContent(term, typeFilter, instructorFilter);
   }
 
-  return searchSqlContent(term, typeFilter);
+  return searchSqlContent(term, typeFilter, instructorFilter);
 }

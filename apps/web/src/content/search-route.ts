@@ -3,6 +3,7 @@ export type SearchRouteParams = {
 };
 
 export type SearchRouteSearchParams = {
+  instructor?: string | string[];
   q?: string | string[];
   type?: string | string[];
 };
@@ -37,4 +38,8 @@ export function searchTermFromRoute(input: {
 
 export function contentTypeFromSearchParams(searchParams: SearchRouteSearchParams) {
   return firstSearchParamValue(searchParams.type).trim();
+}
+
+export function instructorFromSearchParams(searchParams: SearchRouteSearchParams) {
+  return normalizeSearchTerm(firstSearchParamValue(searchParams.instructor));
 }

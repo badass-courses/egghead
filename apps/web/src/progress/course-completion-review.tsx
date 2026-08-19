@@ -7,7 +7,7 @@ import { submitCourseReview } from "./course-progress-action";
 
 const RATINGS = [1, 2, 3, 4, 5, 6, 7] as const;
 
-type SubmissionState = "idle" | "saving" | "saved" | "failed";
+type SubmissionState = "idle" | "saving" | "saved" | "course_incomplete" | "failed";
 
 export function CourseCompletionReview({
   course,
@@ -29,12 +29,20 @@ export function CourseCompletionReview({
     const dialog = dialogRef.current;
     if (!dialog) return;
 
-    if (open && !dialog.open) {
-      dialog.showModal();
-      dialog.focus();
+    if (open) {
+      setRating(null);
+      setComment("");
+      setSubmission("idle");
+
+      if (!dialog.open) {
+        dialog.showModal();
+        dialog.focus();
+      }
+      return;
     }
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
+
+    if (dialog.open) dialog.close();
+  }, [course.id, open]);
 
   async function submitReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -49,7 +57,13 @@ export function CourseCompletionReview({
         rating,
         comment,
       });
-      setSubmission(result.status === "saved" ? "saved" : "failed");
+      setSubmission(
+        result.status === "saved"
+          ? "saved"
+          : result.status === "course_incomplete"
+            ? "course_incomplete"
+            : "failed",
+      );
     } catch {
       setSubmission("failed");
     }
@@ -115,12 +129,16 @@ export function CourseCompletionReview({
           </fieldset>
 
           <div>
-            <label className="text-sm font-extrabold" htmlFor="course-review-comment">
+            <label
+              className="text-sm font-extrabold"
+              htmlFor="course-review-comment"
+              id="course-review-comment-label"
+            >
               Anything else? <span className="font-normal text-muted-foreground">Optional</span>
             </label>
             <textarea
               aria-describedby={comment.length > 1_800 ? "course-review-comment-count" : undefined}
-              aria-label="Course review comment"
+              aria-labelledby="course-review-comment-label"
               className="mt-2 min-h-28 w-full resize-y rounded-xl border border-border-strong bg-surface px-4 py-3 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               id="course-review-comment"
               maxLength={2_000}
@@ -141,7 +159,11 @@ export function CourseCompletionReview({
             ) : null}
           </div>
 
-          {submission === "failed" ? (
+          {submission === "course_incomplete" ? (
+            <p className="m-0 text-sm font-bold text-rust" role="alert">
+              Complete every lesson before reviewing this course.
+            </p>
+          ) : submission === "failed" ? (
             <p className="m-0 text-sm font-bold text-rust" role="alert">
               We couldn’t save your review. Try again.
             </p>

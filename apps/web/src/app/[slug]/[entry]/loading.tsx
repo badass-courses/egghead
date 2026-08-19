@@ -58,7 +58,7 @@ export default function CollectionEntryLoading() {
 
       <div aria-hidden className="flex animate-pulse flex-col gap-flow motion-reduce:animate-none">
         <div className="grid gap-flow">
-          <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-0">
+          <div className="grid gap-8 min-[960px]:grid-cols-[minmax(0,1fr)_minmax(260px,340px)] min-[960px]:gap-x-0 min-[960px]:gap-y-flow">
             <div className="egghead-lesson-player-cell min-w-0">
               <div className="egghead-video-placeholder" />
             </div>
