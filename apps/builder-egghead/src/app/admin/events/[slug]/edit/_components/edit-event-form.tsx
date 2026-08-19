@@ -151,6 +151,8 @@ const eventFormConfig: ResourceFormConfig<Event, typeof EventSchema> = {
 				},
 				details: event?.fields?.details || '',
 				attendeeInstructions: event?.fields?.attendeeInstructions || '',
+				registrationUrl: event?.fields?.registrationUrl || '',
+				ctaLabel: event?.fields?.ctaLabel || 'Register for the workshop',
 			},
 			// Handle resourceProducts (specific to EventSchema merge)
 			resourceProducts: event?.resourceProducts || [],
@@ -332,6 +334,49 @@ const EventFormFields = ({
 						<FormLabel className="text-lg font-semibold">Slug</FormLabel>
 						<FormDescription>Short with keywords is best.</FormDescription>
 						<Input {...field} />
+						<FormMessage />
+					</FormItem>
+				)}
+			/>
+			<FormField
+				control={form.control}
+				name="fields.registrationUrl"
+				render={({ field }) => (
+					<FormItem className="px-5">
+						<FormLabel className="text-lg font-semibold">
+							Registration URL
+						</FormLabel>
+						<FormDescription>
+							The public workshop page sends buyers here. Leave blank until
+							registration is ready.
+						</FormDescription>
+						<Input
+							{...field}
+							placeholder="https://egghead.io/..."
+							type="url"
+							value={field.value ?? ''}
+						/>
+						<FormMessage />
+					</FormItem>
+				)}
+			/>
+			<FormField
+				control={form.control}
+				name="fields.ctaLabel"
+				render={({ field }) => (
+					<FormItem className="px-5">
+						<FormLabel className="text-lg font-semibold">
+							Registration button label
+						</FormLabel>
+						<FormDescription>
+							Shown on the public sales page when the registration URL is set.
+						</FormDescription>
+						<Input
+							{...field}
+							maxLength={60}
+							placeholder="Register for the workshop"
+							value={field.value ?? ''}
+						/>
 						<FormMessage />
 					</FormItem>
 				)}

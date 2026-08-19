@@ -49,6 +49,7 @@ const checks = [
   ),
   assertIncludes("sitemap includes root", SITEMAP_STATIC_PATHS, "/"),
   assertIncludes("sitemap includes courses index", SITEMAP_STATIC_PATHS, "/courses"),
+  assertIncludes("sitemap includes workshops index", SITEMAP_STATIC_PATHS, "/workshops"),
   assertIncludes("sitemap includes lessons index", SITEMAP_STATIC_PATHS, "/lessons"),
   assertIncludes("sitemap includes blog index", SITEMAP_STATIC_PATHS, "/blog"),
   assertIncludes("sitemap includes podcasts index", SITEMAP_STATIC_PATHS, "/podcasts"),

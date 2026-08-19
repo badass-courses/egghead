@@ -57,6 +57,8 @@ export const EventSchema = ContentResourceSchema.merge(
 				})
 				.optional(),
 			calendarId: z.string().optional(),
+			registrationUrl: z.union([z.string().url(), z.literal('')]).optional(),
+			ctaLabel: z.string().max(60).optional(),
 			thumbnailTime: z.number().nullish(),
 			featured: z.boolean().default(false).optional(),
 		}),
