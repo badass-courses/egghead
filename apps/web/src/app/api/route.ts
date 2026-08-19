@@ -19,6 +19,11 @@ export function GET() {
         content: {
           coursebuilder: "/api/coursebuilder",
         },
+        commerce: {
+          subscribe: "/subscribe",
+          stripeWebhook: "/api/coursebuilder/webhook/stripe",
+          inngest: "/api/inngest",
+        },
         auth: {
           currentUser: "/api/current-user",
         },
@@ -28,9 +33,8 @@ export function GET() {
         localDevOnly: runtime === "local",
         betaRuntime: runtime === "beta",
         betaDatabaseApproved: isBetaDatabaseApproved(),
-        noCommerce: true,
-        noStripeWriterChange: true,
-        noInngestWriterChange: true,
+        commerceWritesLocalOnly: true,
+        subscriptionManagementExcluded: true,
         noReadFlip: true,
         noPlanetScaleWrites: true,
       },

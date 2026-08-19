@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --turbo --port 3008",
+    "dev:inngest": "pnpx inngest-cli@latest dev --no-discovery -u http://localhost:3008/api/inngest",
+    "dev:stripe": "stripe listen --events checkout.session.completed,customer.subscription.updated --forward-to http://localhost:3008/api/coursebuilder/webhook/stripe",
     "build": "next build",
     "typegen": "next typegen",
     "typecheck": "pnpm typegen && tsc --noEmit -p tsconfig.json",
@@ -19,6 +21,7 @@
     "@mux/mux-player-react": "3.13.0",
     "@react-email/components": "0.0.27",
     "drizzle-orm": "0.36.0",
+    "inngest": "3.54.2",
     "mysql2": "^3.22.5",
     "next": "16.0.10",
     "next-auth": "5.0.0-beta.25",

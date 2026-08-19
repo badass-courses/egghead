@@ -18,8 +18,9 @@ export type DatabaseSafety = {
   betaDatabaseAllowed: boolean;
   productionRuntimeBlocked: boolean;
   readFlipBlocked: true;
-  stripeWriterBlocked: true;
-  inngestWriterBlocked: true;
+  commerceWritesAllowed: boolean;
+  stripeWriterBlocked: boolean;
+  inngestWriterBlocked: boolean;
   planetScaleWritesApproved: false;
 };
 
@@ -74,6 +75,7 @@ export function assertDatabaseUrlForRuntime(rawUrl = getDatabaseUrl()): Database
   const betaDatabaseAllowed =
     runtime === "beta" && betaDatabaseApproved && isPlanetScaleDatabase({ host });
   const productionRuntimeBlocked = runtime === "production";
+  const commerceWritesAllowed = runtime === "local" && localDockerOnly;
 
   if (productionRuntimeBlocked) {
     throw new Error("Refusing production Egghead runtime before explicit read-flip approval.");
@@ -101,10 +103,31 @@ export function assertDatabaseUrlForRuntime(rawUrl = getDatabaseUrl()): Database
     betaDatabaseAllowed,
     productionRuntimeBlocked,
     readFlipBlocked: true,
-    stripeWriterBlocked: true,
-    inngestWriterBlocked: true,
+    commerceWritesAllowed,
+    stripeWriterBlocked: !commerceWritesAllowed,
+    inngestWriterBlocked: !commerceWritesAllowed,
     planetScaleWritesApproved: false,
   };
+}
+
+export function commerceWritesAreAllowed(rawUrl = getDatabaseUrl()) {
+  try {
+    return assertDatabaseUrlForRuntime(rawUrl).commerceWritesAllowed;
+  } catch {
+    return false;
+  }
+}
+
+export function assertCommerceWritesAllowed(rawUrl = getDatabaseUrl()) {
+  const safety = assertDatabaseUrlForRuntime(rawUrl);
+
+  if (!safety.commerceWritesAllowed) {
+    throw new Error(
+      `Refusing Egghead commerce writes outside the local Docker runtime: runtime=${safety.runtime} host=${safety.host} database=${safety.database}`,
+    );
+  }
+
+  return safety;
 }
 
 export function assertLocalDockerDatabaseUrl(rawUrl = getDatabaseUrl()) {
@@ -173,6 +196,7 @@ export async function getRuntimeDbProof() {
       database: safety.database,
       query: Array.isArray(rows) ? rows[0] : null,
       readFlipBlocked: safety.readFlipBlocked,
+      commerceWritesAllowed: safety.commerceWritesAllowed,
       stripeWriterBlocked: safety.stripeWriterBlocked,
       inngestWriterBlocked: safety.inngestWriterBlocked,
       planetScaleWritesApproved: false,
@@ -193,6 +217,7 @@ export async function getRuntimeDbProof() {
       betaDatabaseAllowed: false,
       error: error instanceof Error ? error.message : String(error),
       readFlipBlocked: true,
+      commerceWritesAllowed: false,
       stripeWriterBlocked: true,
       inngestWriterBlocked: true,
       planetScaleWritesApproved: false,
