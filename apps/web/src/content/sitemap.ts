@@ -19,6 +19,7 @@ export const EGGHEAD_SITE_URL = "https://egghead.io";
 export const SITEMAP_STATIC_PATHS = [
   "/",
   "/courses",
+  "/workshops",
   "/lessons",
   "/blog",
   "/podcasts",
@@ -306,6 +307,26 @@ async function publicContentRows(
     );
 }
 
+async function workshopRows(connection: Awaited<ReturnType<typeof createLocalMysqlConnection>>) {
+  const workshopSlugSql = await contentResourceSlugSql(connection, "workshop");
+  const [rows] = await connection.execute<SitemapRow[]>(
+    `
+      SELECT ${workshopSlugSql} AS path, workshop.updatedAt
+      FROM egghead_ContentResource workshop
+      WHERE workshop.deletedAt IS NULL
+        AND workshop.type = 'event'
+        ${publishedResourceSql("workshop")}
+        AND ${workshopSlugSql} IS NOT NULL
+        AND ${workshopSlugSql} != ''
+      ORDER BY workshop.updatedAt DESC, workshop.createdAt DESC
+    `,
+  );
+
+  return rows
+    .filter((row) => row.path)
+    .map((row) => sitemapEntry(`/workshops/${row.path ?? ""}`, row.updatedAt, 0.8));
+}
+
 export async function getEggheadSitemapEntriesUncached(): Promise<MetadataRoute.Sitemap> {
   const connection = await createLocalMysqlConnection();
 
@@ -314,6 +335,7 @@ export async function getEggheadSitemapEntriesUncached(): Promise<MetadataRoute.
     const collectionLessons = await collectionLessonRows(connection);
     const standaloneLessons = await standaloneLessonRows(connection);
     const publicResources = await publicContentRows(connection);
+    const workshops = await workshopRows(connection);
 
     const staticEntries = SITEMAP_STATIC_PATHS.map((path) =>
       sitemapEntry(path, null, path === "/" ? 1 : 0.6),
@@ -325,6 +347,7 @@ export async function getEggheadSitemapEntriesUncached(): Promise<MetadataRoute.
       ...collectionLessons,
       ...standaloneLessons,
       ...publicResources,
+      ...workshops,
     ]);
   } finally {
     await connection.end();
