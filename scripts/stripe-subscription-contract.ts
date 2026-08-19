@@ -120,6 +120,12 @@ try {
         }),
         400,
       );
+      assert.equal(
+        getStripeSubscriptionCurrentPeriodEnd({
+          items: { data: [{ current_period_end: 500, quantity: null }] },
+        }),
+        500,
+      );
       assert.equal(getStripeSubscriptionCurrentPeriodEnd({}), null);
     }),
     check("team subscription quantities remain bounded and explicit", () => {
@@ -128,6 +134,7 @@ try {
       assert.throws(() => subscriptionCheckoutQuantitySchema.parse("0"));
       assert.throws(() => subscriptionCheckoutQuantitySchema.parse("101"));
       assert.equal(getStripeSubscriptionQuantity({ items: { data: [{ quantity: 8 }] } }), 8);
+      assert.equal(getStripeSubscriptionQuantity({ items: { data: [{ quantity: null }] } }), 1);
       assert.equal(getStripeSubscriptionQuantity({ items: { data: [{}] } }), 1);
       assert.equal(isTeamSubscription({ ownerId: "owner_1", seats: 2 }), true);
       assert.equal(isTeamSubscription({ ownerId: "owner_1", seats: 1 }), false);

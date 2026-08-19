@@ -47,6 +47,7 @@ function subscriptionEventWasApplied(
 
 export async function syncStripeSubscriptionEntitlement(input: {
   currentPeriodEnd: Date;
+  entitlementId?: string;
   localSubscriptionId: string;
   organizationId: string;
   organizationMembershipId: string;
@@ -58,7 +59,7 @@ export async function syncStripeSubscriptionEntitlement(input: {
   userId: string;
 }) {
   const db = getEggheadDatabase();
-  const id = stripeSubscriptionEntitlementId(input.stripeSubscriptionId);
+  const id = input.entitlementId ?? stripeSubscriptionEntitlementId(input.stripeSubscriptionId);
   const deletedAt = stripeSubscriptionGrantsAccess(input.status) ? null : new Date();
   const metadata = {
     productId: input.productId,

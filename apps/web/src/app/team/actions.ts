@@ -26,6 +26,7 @@ import {
   MAX_TEAM_SEATS,
   mergeTeamSubscriptionFields,
   subscriptionCheckoutQuantitySchema,
+  teamSubscriptionFieldsSchema,
 } from "../../subscriptions/team-contracts";
 
 const subscriptionIdSchema = z.string().min(1).max(191);
@@ -187,27 +188,46 @@ export async function addTeamSeats(formData: FormData) {
   const stripeProvider = getStripeProvider();
   if (!teamState || !stripeProvider) redirect("/team?error=team-unavailable");
 
-  const currentQuantity = subscriptionCheckoutQuantitySchema.safeParse(
+  const stripeQuantity = subscriptionCheckoutQuantitySchema.safeParse(
     getStripeSubscriptionQuantity(teamState.stripeSubscription),
   );
-  const nextQuantity = currentQuantity.success
-    ? currentQuantity.data + additionalSeats.data
-    : MAX_TEAM_SEATS + 1;
-  if (nextQuantity > MAX_TEAM_SEATS) redirect("/team?error=invalid-seat-count");
+  if (!stripeQuantity.success) redirect("/team?error=invalid-seat-count");
 
-  await stripeProvider.options.paymentsAdapter.updateSubscriptionItemQuantity(
-    teamState.ownedSubscription.stripeSubscriptionId,
-    nextQuantity,
-  );
-  await getEggheadDatabase()
-    .update(subscription)
-    .set({
-      fields: mergeTeamSubscriptionFields(teamState.ownedSubscription.row.fields, {
-        ownerId: currentUser.id,
-        seats: nextQuantity,
-      }),
-    })
-    .where(eq(subscription.id, subscriptionId.data));
+  const seatUpdate = await getEggheadDatabase().transaction(async (transaction) => {
+    const [storedSubscription] = await transaction
+      .select({ fields: subscription.fields })
+      .from(subscription)
+      .where(eq(subscription.id, subscriptionId.data))
+      .for("update");
+    const storedFields = teamSubscriptionFieldsSchema.safeParse(storedSubscription?.fields);
+    if (!storedFields.success || storedFields.data.ownerId !== currentUser.id) {
+      return "unavailable" as const;
+    }
+
+    // The row lock serializes local seat additions. Stripe may be ahead while a
+    // webhook is converging, so never calculate from a lower local quantity.
+    const currentQuantity = Math.max(storedFields.data.seats, stripeQuantity.data);
+    const nextQuantity = currentQuantity + additionalSeats.data;
+    if (nextQuantity > MAX_TEAM_SEATS) return "invalid" as const;
+
+    await stripeProvider.options.paymentsAdapter.updateSubscriptionItemQuantity(
+      teamState.ownedSubscription.stripeSubscriptionId,
+      nextQuantity,
+    );
+    await transaction
+      .update(subscription)
+      .set({
+        fields: mergeTeamSubscriptionFields(storedSubscription?.fields, {
+          ownerId: currentUser.id,
+          seats: nextQuantity,
+        }),
+      })
+      .where(eq(subscription.id, subscriptionId.data));
+
+    return "updated" as const;
+  });
+  if (seatUpdate === "unavailable") redirect("/team?error=team-unavailable");
+  if (seatUpdate === "invalid") redirect("/team?error=invalid-seat-count");
 
   refreshTeamPages();
   redirect("/team?notice=seats-added");

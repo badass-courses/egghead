@@ -34,7 +34,7 @@ const checkoutReservationSchema = z.object({
   country: z.string(),
   pendingUntil: z.number().int(),
   productId: z.string(),
-  quantity: subscriptionCheckoutQuantitySchema,
+  quantity: subscriptionCheckoutQuantitySchema.default(1),
   sessionExpiresAt: z.number().int().optional(),
   sessionId: z.string().optional(),
   token: z.string(),

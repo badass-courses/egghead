@@ -276,17 +276,17 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
               ) : null}
             </div>
 
-            {hasLibraryMembership ? (
-              <div className="grid w-full justify-items-stretch gap-3 md:w-auto md:min-w-48">
-                {teamSubscription ? (
-                  <Link
-                    className="press inline-flex min-h-11 items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-5 py-3 text-sm font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
-                    href="/team"
-                  >
-                    Manage {teamSubscription.totalSeats} team seats
-                  </Link>
-                ) : null}
-                {membershipBilling ? (
+            <div className="grid w-full justify-items-stretch gap-3 md:w-auto md:min-w-48">
+              {teamSubscription ? (
+                <Link
+                  className="press inline-flex min-h-11 items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-5 py-3 text-sm font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
+                  href="/team"
+                >
+                  Manage {teamSubscription.totalSeats} team seats
+                </Link>
+              ) : null}
+              {hasLibraryMembership ? (
+                membershipBilling ? (
                   <form action={manageMembership}>
                     <ManageMembershipButton />
                   </form>
@@ -294,28 +294,28 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                   <p className="max-w-56 text-center text-xs text-muted-foreground">
                     Contact support to manage this access.
                   </p>
-                )}
-              </div>
-            ) : (
-              <div className="grid justify-items-stretch gap-3 md:justify-items-center">
-                <Link
-                  className="press inline-flex w-full items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] text-base font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover md:min-w-44"
-                  href={getSubscribeHref()}
-                >
-                  Subscribe
-                </Link>
-                <p className="text-center text-xs text-muted-foreground">
-                  Think this is a mistake?{" "}
-                  <a
-                    className="font-extrabold text-foreground underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
-                    href="mailto:support@egghead.io"
+                )
+              ) : teamSubscription ? null : (
+                <>
+                  <Link
+                    className="press inline-flex w-full items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] text-base font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover md:min-w-44"
+                    href={getSubscribeHref()}
                   >
-                    Contact support
-                  </a>
-                  .
-                </p>
-              </div>
-            )}
+                    Subscribe
+                  </Link>
+                  <p className="text-center text-xs text-muted-foreground">
+                    Think this is a mistake?{" "}
+                    <a
+                      className="font-extrabold text-foreground underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
+                      href="mailto:support@egghead.io"
+                    >
+                      Contact support
+                    </a>
+                    .
+                  </p>
+                </>
+              )}
+            </div>
           </div>
         </section>
 

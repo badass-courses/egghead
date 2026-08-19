@@ -165,7 +165,7 @@ export function SubscriptionOptions({
 
         <div aria-live="polite" className="grid min-h-24 content-center gap-1">
           <p
-            aria-label={`${selectedOption.price} per ${selectedOption.billingInterval}`}
+            aria-label={`${teamPurchase ? `${totalPrice} total for ${teamSeats} seats` : selectedOption.price} per ${selectedOption.billingInterval}`}
             className="flex items-end justify-center gap-1"
           >
             <span className="mb-7 text-sm font-extrabold text-muted-foreground">US</span>

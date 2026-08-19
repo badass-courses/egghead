@@ -184,7 +184,11 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
             </div>
             <form action={claimTeamSeat}>
               <input name="subscriptionId" type="hidden" value={team.id} />
-              <Button disabled={!writesAllowed} type="submit" variant="navy">
+              <Button
+                disabled={!writesAllowed || team.availableSeats === 0}
+                type="submit"
+                variant="navy"
+              >
                 Claim my seat
               </Button>
             </form>

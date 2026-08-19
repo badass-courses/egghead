@@ -3,7 +3,7 @@ import { z } from "zod";
 const stripeSubscriptionItemSchema = z
   .object({
     current_period_end: z.number().optional(),
-    quantity: z.number().int().positive().optional(),
+    quantity: z.number().int().positive().nullable().optional(),
   })
   .passthrough();
 

@@ -42,9 +42,11 @@ async function ResolvedSubscriptionThanks({
   searchParams: Promise<SubscriptionThanksSearchParams>;
 }) {
   const [user, resolvedSearchParams] = await Promise.all([getCurrentUser(), searchParams]);
-  const [subscription, teamSubscription] = user?.id
+  const [subscription, teamSubscriptionCandidate] = user?.id
     ? await Promise.all([getCurrentSubscriptionForUser(user.id), getOwnedTeamSubscription(user.id)])
     : [null, null];
+  const teamSubscription =
+    subscription?.id === teamSubscriptionCandidate?.id ? teamSubscriptionCandidate : null;
   const billingSummary =
     subscription && user?.id ? await getMembershipBillingSummary(user.id) : null;
   const checkoutSessionId = firstParam(resolvedSearchParams.session_id);
