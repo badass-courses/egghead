@@ -5,6 +5,7 @@ import { Container } from "@egghead/ui/container";
 import { getCurrentUser } from "../../../coursebuilder/current-user";
 import { getMembershipBillingSummary } from "../../../subscriptions/billing";
 import { getCurrentSubscriptionForUser } from "../../../subscriptions/status";
+import { getOwnedTeamSubscription } from "../../../subscriptions/team";
 import { MembershipStatusRefresh } from "./membership-status-refresh";
 
 type SubscriptionThanksSearchParams = {
@@ -41,7 +42,11 @@ async function ResolvedSubscriptionThanks({
   searchParams: Promise<SubscriptionThanksSearchParams>;
 }) {
   const [user, resolvedSearchParams] = await Promise.all([getCurrentUser(), searchParams]);
-  const subscription = user?.id ? await getCurrentSubscriptionForUser(user.id) : null;
+  const [subscription, teamSubscriptionCandidate] = user?.id
+    ? await Promise.all([getCurrentSubscriptionForUser(user.id), getOwnedTeamSubscription(user.id)])
+    : [null, null];
+  const teamSubscription =
+    subscription?.id === teamSubscriptionCandidate?.id ? teamSubscriptionCandidate : null;
   const billingSummary =
     subscription && user?.id ? await getMembershipBillingSummary(user.id) : null;
   const checkoutSessionId = firstParam(resolvedSearchParams.session_id);
@@ -56,10 +61,12 @@ async function ResolvedSubscriptionThanks({
             className="text-balance text-4xl font-black tracking-tight"
             id="subscription-thanks-heading"
           >
-            Welcome to egghead.
+            {teamSubscription ? "Your team is ready." : "Welcome to egghead."}
           </h1>
           <p className="mt-3 text-pretty font-semibold text-muted-foreground">
-            Your membership is active and the full egghead library is ready for you.
+            {teamSubscription
+              ? `You have ${teamSubscription.totalSeats} seats ready to turn into shared momentum.`
+              : "Your membership is active and the full egghead library is ready for you."}
           </p>
           <p className="mt-4 flex items-center justify-center gap-2 text-sm font-extrabold">
             <span aria-hidden className="size-2.5 rounded-full bg-sage" />
@@ -70,7 +77,11 @@ async function ResolvedSubscriptionThanks({
         <dl className="grid gap-x-6 gap-y-4 border-y border-border py-5 text-left sm:grid-cols-3">
           <div className="min-w-0">
             <dt className="text-xs font-extrabold text-muted-foreground">Access</dt>
-            <dd className="mt-1 break-words font-extrabold">Full egghead library</dd>
+            <dd className="mt-1 break-words font-extrabold">
+              {teamSubscription
+                ? `${teamSubscription.totalSeats} full-library seats`
+                : "Full egghead library"}
+            </dd>
           </div>
           <div className="min-w-0">
             <dt className="text-xs font-extrabold text-muted-foreground">Billing</dt>
@@ -112,12 +123,21 @@ async function ResolvedSubscriptionThanks({
               Download invoice
             </a>
           ) : null}
-          <Link
-            className="press inline-flex items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
-            href="/courses"
-          >
-            Browse courses
-          </Link>
+          {teamSubscription ? (
+            <Link
+              className="press inline-flex items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
+              href="/team"
+            >
+              Assign team seats
+            </Link>
+          ) : (
+            <Link
+              className="press inline-flex items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
+              href="/courses"
+            >
+              Browse courses
+            </Link>
+          )}
         </div>
       </section>
     );

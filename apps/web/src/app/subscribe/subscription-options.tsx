@@ -7,13 +7,16 @@ import { Button } from "@egghead/ui/button";
 import type { BillingInterval } from "@coursebuilder/core/schemas";
 
 import { subscriptionIntervalLabel } from "../../subscriptions/options";
+import { MAX_TEAM_SEATS, MIN_TEAM_SEATS } from "../../subscriptions/team-contracts";
 import { startSubscriptionCheckout } from "./actions";
 
 export type SubscriptionOption = {
   productId: string;
   name: string;
   description: string | null;
+  currency: string;
   price: string;
+  unitAmount: number;
   billingInterval: NonNullable<BillingInterval>;
 };
 
@@ -52,6 +55,7 @@ export function SubscriptionOptions({
   signedIn,
 }: SubscriptionOptionsProps) {
   const [selectedProductId, setSelectedProductId] = useState(() => options.at(0)?.productId ?? "");
+  const [quantity, setQuantity] = useState(1);
   const selectedOption =
     options.find((option) => option.productId === selectedProductId) ?? options.at(0);
 
@@ -59,6 +63,12 @@ export function SubscriptionOptions({
 
   const intervalLabel = subscriptionIntervalLabel(selectedOption.billingInterval);
   const membershipName = options.at(0)?.name ?? selectedOption.name;
+  const teamPurchase = quantity >= MIN_TEAM_SEATS;
+  const totalPrice = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: selectedOption.currency,
+    maximumFractionDigits: Number.isInteger(selectedOption.unitAmount) ? 0 : 2,
+  }).format(selectedOption.unitAmount * quantity);
 
   return (
     <article className="overflow-hidden rounded-2xl bg-well shadow-well">
@@ -66,7 +76,9 @@ export function SubscriptionOptions({
         <div className="grid gap-2">
           <h2 className="text-balance text-2xl font-black tracking-tight">{membershipName}</h2>
           <p className="text-sm font-semibold text-muted-foreground">
-            {selectedOption.description ?? "Unlimited learning for one egghead account."}
+            {teamPurchase
+              ? `Full egghead access for ${quantity} people, managed from one account.`
+              : (selectedOption.description ?? "Unlimited learning for one egghead account.")}
           </p>
         </div>
 
@@ -98,29 +110,67 @@ export function SubscriptionOptions({
           </fieldset>
         ) : null}
 
-        <div aria-live="polite" className="grid min-h-24 content-center gap-1">
-          <p
-            aria-label={`${selectedOption.price} per ${selectedOption.billingInterval}`}
-            className="flex items-end justify-center gap-1"
-          >
-            <span className="mb-7 text-sm font-extrabold text-muted-foreground">US</span>
-            <span className="text-5xl font-black tracking-tight tabular-nums sm:text-6xl">
-              {selectedOption.price}
-            </span>
-            <span className="mb-2 text-lg font-extrabold text-muted-foreground">
-              /{selectedOption.billingInterval}
-            </span>
-          </p>
-          <p className="text-xs font-bold text-muted-foreground">
-            Billed every {selectedOption.billingInterval}. Cancel anytime.
-          </p>
+        <div className="grid gap-4">
+          <div aria-live="polite" className="grid min-h-24 content-center gap-1">
+            <p
+              aria-label={`${totalPrice} total per ${selectedOption.billingInterval} for ${quantity} ${quantity === 1 ? "seat" : "seats"}`}
+              className="flex items-end justify-center gap-1"
+            >
+              <span className="mb-7 text-sm font-extrabold text-muted-foreground">US</span>
+              <span className="text-5xl font-black tracking-tight tabular-nums sm:text-6xl">
+                {totalPrice}
+              </span>
+              <span className="mb-2 text-lg font-extrabold text-muted-foreground">
+                /{selectedOption.billingInterval}
+              </span>
+            </p>
+            <p className="text-xs font-bold text-muted-foreground">
+              {selectedOption.price} per seat. Billed every {selectedOption.billingInterval}. Cancel
+              anytime.
+            </p>
+          </div>
+
+          <div className="mx-auto grid w-full max-w-[24rem] gap-2">
+            <div className="flex items-center justify-center gap-3">
+              <label className="text-sm font-extrabold" htmlFor="subscription-seats">
+                Seats
+              </label>
+              <input
+                aria-describedby="subscription-seats-help"
+                aria-label="Seats"
+                className="h-12 w-24 rounded-xl border border-border-strong bg-well px-3 text-center text-lg font-black tabular-nums shadow-well focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                id="subscription-seats"
+                max={MAX_TEAM_SEATS}
+                min={1}
+                onChange={(event) => {
+                  const nextQuantity = event.currentTarget.valueAsNumber;
+                  if (Number.isInteger(nextQuantity)) {
+                    setQuantity(Math.min(MAX_TEAM_SEATS, Math.max(1, nextQuantity)));
+                  }
+                }}
+                type="number"
+                value={quantity}
+              />
+            </div>
+            <p
+              className="whitespace-nowrap text-xs font-semibold text-muted-foreground"
+              id="subscription-seats-help"
+            >
+              {teamPurchase
+                ? "Team account created after checkout."
+                : "2+ seats create a team account."}
+            </p>
+          </div>
         </div>
 
         {signedIn ? (
           <form action={startSubscriptionCheckout} className="grid gap-3">
             <input name="productId" type="hidden" value={selectedOption.productId} />
+            <input name="quantity" type="hidden" value={quantity} />
             <Button className="w-full" disabled={!checkoutAvailable} size="lg" type="submit">
-              Subscribe {intervalLabel.toLowerCase()}
+              {teamPurchase
+                ? `Subscribe for ${quantity} seats`
+                : `Subscribe ${intervalLabel.toLowerCase()}`}
             </Button>
             {!commerceWritesAllowed ? (
               <p className="text-xs font-semibold text-muted-foreground">
@@ -155,8 +205,16 @@ export function SubscriptionOptions({
           </li>
           <li className="flex gap-3">
             <IncludedIcon />
-            Progress saved to your egghead account
+            {teamPurchase
+              ? "A private learning profile for every teammate"
+              : "Progress saved to your egghead account"}
           </li>
+          {teamPurchase ? (
+            <li className="flex gap-3">
+              <IncludedIcon />
+              Invite, remove, and reassign seats anytime
+            </li>
+          ) : null}
         </ul>
       </div>
     </article>

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { eq, sql } from "drizzle-orm";
 
 import { getEggheadDatabase } from "../db/adapter";
@@ -14,6 +16,13 @@ export function stripeSubscriptionGrantsAccess(status: string) {
 
 export function stripeSubscriptionEntitlementId(stripeSubscriptionId: string) {
   return `stripe_ent_${stripeSubscriptionId}`;
+}
+
+export function stripeSubscriptionSeatEntitlementId(stripeSubscriptionId: string, userId: string) {
+  const seatFingerprint = createHash("sha256")
+    .update(`${stripeSubscriptionId}:${userId}`)
+    .digest("hex");
+  return `stripe_seat_${seatFingerprint}`;
 }
 
 type StripeSubscriptionEventKind = "checkout" | "subscription_update";
@@ -46,10 +55,13 @@ export async function syncStripeSubscriptionEntitlement(input: {
   stripeEventCreatedAt: number;
   stripeEventKind: StripeSubscriptionEventKind;
   stripeSubscriptionId: string;
+  teamSeat?: true;
   userId: string;
 }) {
   const db = getEggheadDatabase();
-  const id = stripeSubscriptionEntitlementId(input.stripeSubscriptionId);
+  const id = input.teamSeat
+    ? stripeSubscriptionSeatEntitlementId(input.stripeSubscriptionId, input.userId)
+    : stripeSubscriptionEntitlementId(input.stripeSubscriptionId);
   const deletedAt = stripeSubscriptionGrantsAccess(input.status) ? null : new Date();
   const metadata = {
     productId: input.productId,
@@ -57,6 +69,7 @@ export async function syncStripeSubscriptionEntitlement(input: {
     stripeEventCreatedAt: input.stripeEventCreatedAt,
     stripeEventKind: input.stripeEventKind,
     stripeSubscriptionId: input.stripeSubscriptionId,
+    ...(input.teamSeat ? { teamSeat: true } : {}),
   };
   const storedEventCreatedAt = sql`CAST(
     JSON_UNQUOTE(JSON_EXTRACT(${entitlements.metadata}, '$.stripeEventCreatedAt')) AS UNSIGNED

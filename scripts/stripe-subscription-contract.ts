@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 
 import { subscriptionCheckoutIdempotencyKey } from "../apps/web/src/coursebuilder/stripe-provider";
-import { getStripeSubscriptionCurrentPeriodEnd } from "../apps/web/src/inngest/stripe-subscription";
 import {
   stripeSubscriptionEntitlementId,
   stripeSubscriptionGrantsAccess,
+  stripeSubscriptionSeatEntitlementId,
 } from "../apps/web/src/subscriptions/access";
 import { assertCommerceWritesAllowed } from "../apps/web/src/db/local-docker";
 import {
@@ -18,6 +18,20 @@ import {
   subscriptionIntervalLabel,
   subscriptionProductIds,
 } from "../apps/web/src/subscriptions/options";
+import {
+  getStripeSubscriptionCurrentPeriodEnd,
+  getStripeSubscriptionQuantity,
+} from "../apps/web/src/subscriptions/stripe";
+import {
+  isTeamSubscription,
+  mergeTeamSubscriptionFields,
+  subscriptionCheckoutQuantitySchema,
+} from "../apps/web/src/subscriptions/team-contracts";
+import {
+  createTeamInviteToken,
+  teamInviteMatchesEmail,
+  verifyTeamInviteToken,
+} from "../apps/web/src/subscriptions/team-invite-token";
 
 type ContractCheck = {
   name: string;
@@ -60,6 +74,14 @@ try {
       assert.equal(
         stripeSubscriptionEntitlementId("sub_contract_fixture"),
         "stripe_ent_sub_contract_fixture",
+      );
+      assert.equal(
+        stripeSubscriptionSeatEntitlementId("sub_contract_fixture", "user_1"),
+        stripeSubscriptionSeatEntitlementId("sub_contract_fixture", "user_1"),
+      );
+      assert.notEqual(
+        stripeSubscriptionSeatEntitlementId("sub_contract_fixture", "user_1"),
+        stripeSubscriptionSeatEntitlementId("sub_contract_fixture", "user_2"),
       );
     }),
     check("Stripe checkout idempotency includes request parameters", () => {
@@ -104,6 +126,37 @@ try {
         400,
       );
       assert.equal(getStripeSubscriptionCurrentPeriodEnd({}), null);
+    }),
+    check("team subscription quantities remain bounded and explicit", () => {
+      assert.equal(subscriptionCheckoutQuantitySchema.parse("1"), 1);
+      assert.equal(subscriptionCheckoutQuantitySchema.parse("25"), 25);
+      assert.throws(() => subscriptionCheckoutQuantitySchema.parse("0"));
+      assert.throws(() => subscriptionCheckoutQuantitySchema.parse("101"));
+      assert.equal(getStripeSubscriptionQuantity({ items: { data: [{ quantity: 8 }] } }), 8);
+      assert.equal(getStripeSubscriptionQuantity({ items: { data: [{}] } }), 1);
+      assert.equal(isTeamSubscription({ ownerId: "owner_1", seats: 2 }), true);
+      assert.equal(isTeamSubscription({ ownerId: "owner_1", seats: 1 }), false);
+      assert.deepEqual(
+        mergeTeamSubscriptionFields({ preserved: true }, { ownerId: "owner_1", seats: 6 }),
+        { ownerId: "owner_1", preserved: true, seats: 6 },
+      );
+    }),
+    check("team invite links are signed and optionally email-scoped", () => {
+      const genericToken = createTeamInviteToken("subscription_contract_fixture");
+      const genericPayload = verifyTeamInviteToken(genericToken);
+      assert.ok(genericPayload);
+      assert.equal(genericPayload.subscriptionId, "subscription_contract_fixture");
+      assert.equal(teamInviteMatchesEmail(genericPayload, "anyone@example.test"), true);
+
+      const scopedToken = createTeamInviteToken(
+        "subscription_contract_fixture",
+        "invitee@example.test",
+      );
+      const scopedPayload = verifyTeamInviteToken(scopedToken);
+      assert.ok(scopedPayload);
+      assert.equal(teamInviteMatchesEmail(scopedPayload, "INVITEE@example.test"), true);
+      assert.equal(teamInviteMatchesEmail(scopedPayload, "someone-else@example.test"), false);
+      assert.equal(verifyTeamInviteToken(`${scopedToken}tampered`), null);
     }),
     check("membership billing details are customer-readable", () => {
       assert.equal(membershipIntervalLabel("month", 1), "Monthly");

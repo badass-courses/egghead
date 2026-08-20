@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 
@@ -10,6 +11,7 @@ import { getEnv } from "../../env";
 import { formatProductPrice } from "../../subscriptions/billing";
 import { compareSubscriptionIntervals, subscriptionProductIds } from "../../subscriptions/options";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
+import { getOwnedTeamSubscription } from "../../subscriptions/team";
 import { SubscriptionOptions, type SubscriptionOption } from "./subscription-options";
 
 type SubscribeSearchParams = {
@@ -23,6 +25,7 @@ function firstParam(value: string | string[] | undefined) {
 function checkoutErrorMessage(error: string | undefined) {
   if (error === "missing-email") return "Your account needs an email address before checkout.";
   if (error === "invalid-product") return "That membership option is no longer available.";
+  if (error === "invalid-seats") return "Choose between 1 and 100 membership seats.";
   if (error === "not-configured") return "Subscription checkout is not configured yet.";
   if (error === "checkout") return "Stripe could not start checkout. Please try again.";
   if (error === "checkout-pending") {
@@ -51,7 +54,9 @@ async function getSubscriptionOption(productId: string): Promise<SubscriptionOpt
     productId: product.id,
     name: product.name,
     description: product.fields.description ?? null,
+    currency: "USD",
     price,
+    unitAmount: product.price.unitAmount,
     billingInterval: product.fields.billingInterval,
   };
 }
@@ -81,6 +86,8 @@ async function ResolvedSubscriptionState({
 }: {
   searchParams: Promise<SubscribeSearchParams>;
 }) {
+  await connection();
+
   const productIds = subscriptionProductIds(
     getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_IDS"),
     getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_ID"),
@@ -90,7 +97,9 @@ async function ResolvedSubscriptionState({
     searchParams,
     getSubscriptionOptions(productIds),
   ]);
-  const currentSubscription = user?.id ? await getCurrentSubscriptionForUser(user.id) : null;
+  const [currentSubscription, teamSubscription] = user?.id
+    ? await Promise.all([getCurrentSubscriptionForUser(user.id), getOwnedTeamSubscription(user.id)])
+    : [null, null];
   const configured = isStripeConfigured() && subscriptionOptions.length > 0;
   const commerceWritesAllowed = commerceWritesAreAllowed();
   const checkoutAvailable = configured && commerceWritesAllowed;
@@ -122,9 +131,9 @@ async function ResolvedSubscriptionState({
           <p className="font-extrabold text-sage-foreground">Your membership is active.</p>
           <Link
             className="press inline-flex items-center justify-center rounded-xl border border-border-strong bg-surface-grad px-7 pt-[15px] pb-[13px] font-extrabold shadow-btn-ghost"
-            href="/courses"
+            href={teamSubscription ? "/team" : "/courses"}
           >
-            Browse courses
+            {teamSubscription ? "Manage team seats" : "Browse courses"}
           </Link>
         </div>
       ) : subscriptionOptions.length > 0 ? (

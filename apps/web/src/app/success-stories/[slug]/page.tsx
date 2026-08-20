@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { getPublicContentStaticParams } from "../../../content/public-resource";
 import { getPublicContentMetadata, renderPublicContentRoute } from "../../../content/public-route";
+import { EMPTY_STATIC_PARAM, withStaticParamFallback } from "../../../content/static-params";
 
 type SuccessStoryPageProps = {
   params: Promise<{
@@ -14,8 +15,10 @@ async function slugFromParams(params: SuccessStoryPageProps["params"]) {
   return decodeURIComponent(resolved.slug);
 }
 
-export function generateStaticParams() {
-  return getPublicContentStaticParams(["success-story"]);
+export async function generateStaticParams() {
+  return withStaticParamFallback(await getPublicContentStaticParams(["success-story"]), {
+    slug: EMPTY_STATIC_PARAM,
+  });
 }
 
 export async function generateMetadata({ params }: SuccessStoryPageProps): Promise<Metadata> {

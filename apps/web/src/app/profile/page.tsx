@@ -13,6 +13,7 @@ import { getPrivateAccountProfile } from "../../profile/data";
 import { gravatarUrlForEmail } from "../../profile/gravatar";
 import { getEnv } from "../../env";
 import { getMembershipBillingSummary } from "../../subscriptions/billing";
+import { getOwnedTeamSubscription, getTeamMembershipForUser } from "../../subscriptions/team";
 import { manageMembership, signOutOfEgghead, updateProfileName } from "./actions";
 import {
   CompletionFilterControls,
@@ -60,6 +61,10 @@ function initialFor(name: string | null) {
   return name?.trim().charAt(0).toUpperCase() || "E";
 }
 
+function teamAccessLabel(productName: string) {
+  return /\bpro\b/i.test(productName) ? "Pro access" : "Membership access";
+}
+
 function getSubscribeHref() {
   const siteUrl = getEnv("NEXT_PUBLIC_APP_URL");
   if (!siteUrl) throw new Error("NEXT_PUBLIC_APP_URL is required for the profile subscribe link.");
@@ -98,6 +103,7 @@ type ProfileSearchParams = {
   billing?: string;
   completion?: string;
   error?: string;
+  team?: string;
   updated?: string;
 };
 
@@ -124,7 +130,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
       requestHeaders.get("cf-ipcountry") ??
       requestHeaders.get("x-country"),
   );
-  const [profile, membershipBilling] = await Promise.all([
+  const [profile, teamMembership, teamSubscription] = await Promise.all([
     getPrivateAccountProfile({
       actorUserId: currentUser.id,
       profileUserId: currentUser.id,
@@ -132,19 +138,27 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
       emailAuthConfigured: isEmailAuthConfigured(),
       ...(completionFilter === "all" ? {} : { recentCompletionFamily: completionFilter }),
     }),
-    getMembershipBillingSummary(currentUser.id),
+    getTeamMembershipForUser(currentUser.id),
+    getOwnedTeamSubscription(currentUser.id),
   ]);
 
   if (!profile) notFound();
 
+  const teammateMembership =
+    teamMembership && teamMembership.ownerId !== currentUser.id ? teamMembership : null;
+  const membershipBilling = teammateMembership
+    ? null
+    : await getMembershipBillingSummary(currentUser.id);
   const name = profile.name?.trim() || "egghead learner";
   const hasLibraryMembership = profile.learningAccess.libraryWide;
   const hasIncludedCourses = profile.learningAccess.courseSpecific.length > 0;
-  const membershipDescription = hasLibraryMembership
-    ? "Your membership includes the full egghead library."
-    : hasIncludedCourses
-      ? "Your included courses and free resources remain available. Subscribe for full library access."
-      : "Free resources remain available. Subscribe for full library access.";
+  const membershipDescription = teammateMembership
+    ? `You have ${teamAccessLabel(teammateMembership.productName).toLowerCase()} through a team account.`
+    : hasLibraryMembership
+      ? "Your membership includes the full egghead library."
+      : hasIncludedCourses
+        ? "Your included courses and free resources remain available. Subscribe for full library access."
+        : "Free resources remain available. Subscribe for full library access.";
 
   return (
     <main>
@@ -184,6 +198,14 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
             </div>
           </div>
         </header>
+
+        {notice.team === "joined" || notice.team === "already-member" ? (
+          <output className="rounded-xl border border-sage-line bg-sage-wash px-4 py-3 text-sm font-extrabold text-sage-foreground">
+            {notice.team === "joined"
+              ? "Team invite accepted. Your membership access is active."
+              : "You already have access through this team account."}
+          </output>
+        ) : null}
 
         {notice.updated === "name" ? (
           <output className="rounded-xl border border-sage-line bg-sage-wash px-4 py-3 text-sm font-extrabold text-sage-foreground">
@@ -235,12 +257,34 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                 className="mt-3 text-balance text-3xl font-black tracking-tight"
                 id="membership-heading"
               >
-                {hasLibraryMembership ? "Full library access" : "Unlock the full library"}
+                {teammateMembership
+                  ? `${teamAccessLabel(teammateMembership.productName)} through a team account`
+                  : hasLibraryMembership
+                    ? "Full library access"
+                    : "Unlock the full library"}
               </h2>
               <p className="mt-2 max-w-[62ch] text-pretty text-base text-muted-foreground">
                 {membershipDescription}
               </p>
-              {hasLibraryMembership ? (
+              {teammateMembership ? (
+                <dl className="mt-5 max-w-2xl border-t border-border pt-4">
+                  <div>
+                    <dt className="text-xs font-extrabold text-muted-foreground">
+                      Team account owner
+                    </dt>
+                    <dd className="mt-1 font-extrabold">
+                      {teammateMembership.ownerName?.trim() ||
+                        teammateMembership.ownerEmail ||
+                        "Team owner"}
+                    </dd>
+                    {teammateMembership.ownerName?.trim() && teammateMembership.ownerEmail ? (
+                      <dd className="mt-0.5 text-sm font-semibold text-muted-foreground">
+                        {teammateMembership.ownerEmail}
+                      </dd>
+                    ) : null}
+                  </div>
+                </dl>
+              ) : hasLibraryMembership ? (
                 <dl className="mt-5 grid max-w-2xl gap-x-8 gap-y-3 border-t border-border pt-4 sm:grid-cols-3">
                   <div className="min-w-0">
                     <dt className="text-xs font-extrabold text-muted-foreground">Active plan</dt>
@@ -266,7 +310,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                   </div>
                 </dl>
               ) : null}
-              {membershipBilling?.cancelAtPeriodEnd ? (
+              {!teammateMembership && membershipBilling?.cancelAtPeriodEnd ? (
                 <p className="mt-3 text-sm font-bold text-rust">
                   Your membership is set to end on{" "}
                   {formatMembershipDate(membershipBilling.renewsAt)} and will not renew.
@@ -274,8 +318,16 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
               ) : null}
             </div>
 
-            {hasLibraryMembership ? (
+            {hasLibraryMembership && !teammateMembership ? (
               <div className="grid w-full justify-items-stretch gap-3 md:w-auto md:min-w-48">
+                {teamSubscription ? (
+                  <Link
+                    className="press inline-flex min-h-11 items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-5 py-3 text-sm font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
+                    href="/team"
+                  >
+                    Manage {teamSubscription.totalSeats} team seats
+                  </Link>
+                ) : null}
                 {membershipBilling ? (
                   <form action={manageMembership}>
                     <ManageMembershipButton />
@@ -286,7 +338,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                   </p>
                 )}
               </div>
-            ) : (
+            ) : !hasLibraryMembership ? (
               <div className="grid justify-items-stretch gap-3 md:justify-items-center">
                 <Link
                   className="press inline-flex w-full items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] text-base font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover md:min-w-44"
@@ -305,7 +357,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                   .
                 </p>
               </div>
-            )}
+            ) : null}
           </div>
         </section>
 
