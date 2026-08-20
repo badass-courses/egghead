@@ -17,7 +17,11 @@ import {
   grantTeamSubscriptionSeat,
   removeTeamSubscriptionSeat,
 } from "../../subscriptions/team";
-import { createTeamInviteToken } from "../../subscriptions/team-invite-token";
+import {
+  createTeamInviteToken,
+  teamInviteMatchesEmail,
+  verifyTeamInviteToken,
+} from "../../subscriptions/team-invite-token";
 
 const subscriptionIdSchema = z.string().min(1).max(191);
 const userIdSchema = z.string().min(1).max(255);
@@ -56,6 +60,54 @@ function teamActionError(status: "already-assigned" | "full" | "not-found") {
   if (status === "already-assigned") return "already-assigned";
   if (status === "full") return "team-full";
   return "team-unavailable";
+}
+
+function teamInvitePath(token: string) {
+  return `/team/invite/${encodeURIComponent(token)}`;
+}
+
+export async function acceptTeamInvite(formData: FormData) {
+  assertCommerceWritesAllowed();
+
+  const token = formData.get("token");
+  if (typeof token !== "string") redirect("/team");
+
+  const invitePath = teamInvitePath(token);
+  const payload = verifyTeamInviteToken(token);
+  if (!payload) redirect("/team");
+
+  const currentUser = await getCurrentUser();
+  if (!currentUser?.id) {
+    const loginParams = new URLSearchParams({ callbackUrl: invitePath });
+    redirect(`/login?${loginParams.toString()}`);
+  }
+
+  if (!teamInviteMatchesEmail(payload, currentUser.email ?? "")) {
+    redirect(`${invitePath}?error=email-mismatch`);
+  }
+
+  const inviteDetails = await getTeamInviteDetails(payload.subscriptionId);
+  if (!inviteDetails) redirect(`${invitePath}?error=unavailable`);
+  if (inviteDetails.availableSeats === 0) redirect(`${invitePath}?status=claimed`);
+
+  const teamState = await getTeamStripeState(payload.subscriptionId, inviteDetails.ownerId);
+  if (!teamState) redirect(`${invitePath}?error=unavailable`);
+
+  const result = await grantTeamSubscriptionSeat({
+    currentPeriodEnd: teamState.currentPeriodEnd,
+    ownerId: inviteDetails.ownerId,
+    seatUserId: currentUser.id,
+    status: teamState.status,
+    stripeSubscriptionId: teamState.ownedSubscription.stripeSubscriptionId,
+    subscriptionId: payload.subscriptionId,
+  });
+
+  if (result.status === "already-assigned") redirect("/profile?team=already-member");
+  if (result.status === "full") redirect(`${invitePath}?status=claimed`);
+  if (result.status === "not-found") redirect(`${invitePath}?error=unavailable`);
+
+  refreshTeamPages();
+  redirect("/profile?team=joined");
 }
 
 export async function claimTeamSeat(formData: FormData) {
