@@ -57,6 +57,12 @@ CourseBuilder's `MerchantProduct` and `MerchantPrice` rows, a `month` or `year`
 `billingInterval`, and the database must contain the Stripe `MerchantAccount`
 row.
 
+Create and maintain those records from the builder admin at `/admin/subscriptions`. The admin
+creates the Stripe product and recurring price together with the CourseBuilder `Product`, `Price`,
+`MerchantProduct`, and `MerchantPrice` mappings. Changing amount or interval creates a replacement
+Stripe price and retires the previous price. Phase 0 mutations require local Docker, an administrator
+session, and a Stripe test-mode secret; beta is read-only and production remains blocked.
+
 Run the app and the Inngest dev server in separate terminals:
 
 ```bash

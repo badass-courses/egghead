@@ -10,7 +10,7 @@ import {
 	SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { getServerAuthSession } from '@/server/auth'
-import { CalendarIcon, MailIcon, MicIcon, TagIcon } from 'lucide-react'
+import { CalendarIcon, CreditCardIcon, MailIcon, MicIcon, TagIcon } from 'lucide-react'
 
 const adminSidebar = [
 	{
@@ -32,6 +32,11 @@ const adminSidebar = [
 		label: 'Events',
 		href: '/admin/events',
 		icon: CalendarIcon,
+	},
+	{
+		label: 'Subscriptions',
+		href: '/admin/subscriptions',
+		icon: CreditCardIcon,
 	},
 ]
 

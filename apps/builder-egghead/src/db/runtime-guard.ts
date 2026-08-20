@@ -109,3 +109,17 @@ export function assertBuilderDatabaseUrlForRuntime(
 		writesApproved: false,
 	};
 }
+
+export function assertBuilderCommerceWritesAllowed(
+	rawUrl = process.env["DATABASE_URL"] ?? DEFAULT_LOCAL_DOCKER_MYSQL_URL,
+): BuilderDatabaseSafety {
+	const safety = assertBuilderDatabaseUrlForRuntime(rawUrl);
+
+	if (safety.runtime !== "local" || !safety.localDockerOnly) {
+		throw new Error(
+			`Refusing builder commerce writes outside local Docker: runtime=${safety.runtime} host=${safety.host} database=${safety.database}`,
+		);
+	}
+
+	return safety;
+}
