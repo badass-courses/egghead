@@ -15,7 +15,6 @@ import { SubscriptionOptions, type SubscriptionOption } from "./subscription-opt
 
 type SubscribeSearchParams = {
   error?: string | string[];
-  purchase?: string | string[];
 };
 
 function firstParam(value: string | string[] | undefined) {
@@ -102,7 +101,6 @@ async function ResolvedSubscriptionState({
   const commerceWritesAllowed = commerceWritesAreAllowed();
   const checkoutAvailable = configured && commerceWritesAllowed;
   const errorMessage = checkoutErrorMessage(firstParam(resolvedSearchParams.error));
-  const defaultTeamPurchase = firstParam(resolvedSearchParams.purchase) === "team";
 
   return (
     <section className={subscriptionPanelClassName}>
@@ -141,7 +139,6 @@ async function ResolvedSubscriptionState({
             checkoutAvailable={checkoutAvailable}
             commerceWritesAllowed={commerceWritesAllowed}
             configured={configured}
-            defaultTeamPurchase={defaultTeamPurchase}
             options={subscriptionOptions}
             signedIn={Boolean(user)}
           />

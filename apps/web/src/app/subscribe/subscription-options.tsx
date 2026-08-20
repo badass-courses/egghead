@@ -24,7 +24,6 @@ type SubscriptionOptionsProps = {
   checkoutAvailable: boolean;
   commerceWritesAllowed: boolean;
   configured: boolean;
-  defaultTeamPurchase: boolean;
   options: SubscriptionOption[];
   signedIn: boolean;
 };
@@ -52,13 +51,11 @@ export function SubscriptionOptions({
   checkoutAvailable,
   commerceWritesAllowed,
   configured,
-  defaultTeamPurchase,
   options,
   signedIn,
 }: SubscriptionOptionsProps) {
   const [selectedProductId, setSelectedProductId] = useState(() => options.at(0)?.productId ?? "");
-  const [teamPurchase, setTeamPurchase] = useState(defaultTeamPurchase);
-  const [teamSeats, setTeamSeats] = useState(5);
+  const [quantity, setQuantity] = useState(1);
   const selectedOption =
     options.find((option) => option.productId === selectedProductId) ?? options.at(0);
 
@@ -66,7 +63,7 @@ export function SubscriptionOptions({
 
   const intervalLabel = subscriptionIntervalLabel(selectedOption.billingInterval);
   const membershipName = options.at(0)?.name ?? selectedOption.name;
-  const quantity = teamPurchase ? teamSeats : 1;
+  const teamPurchase = quantity >= MIN_TEAM_SEATS;
   const totalPrice = new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: selectedOption.currency,
@@ -80,60 +77,10 @@ export function SubscriptionOptions({
           <h2 className="text-balance text-2xl font-black tracking-tight">{membershipName}</h2>
           <p className="text-sm font-semibold text-muted-foreground">
             {teamPurchase
-              ? `Full egghead access for ${teamSeats} people, managed from one account.`
+              ? `Full egghead access for ${quantity} people, managed from one account.`
               : (selectedOption.description ?? "Unlimited learning for one egghead account.")}
           </p>
         </div>
-
-        <fieldset className="mx-auto grid w-full max-w-[24rem] gap-2">
-          <legend className="sr-only">Choose who the membership is for</legend>
-          <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-well p-1.5 shadow-well">
-            {[
-              { label: "Just me", team: false },
-              { label: "My team", team: true },
-            ].map((choice) => (
-              <label className="relative cursor-pointer" key={choice.label}>
-                <input
-                  aria-label={choice.label}
-                  checked={teamPurchase === choice.team}
-                  className="peer sr-only"
-                  name="purchaseKindPreview"
-                  onChange={() => setTeamPurchase(choice.team)}
-                  type="radio"
-                />
-                <span className="press flex min-h-12 items-center justify-center rounded-xl px-4 py-2 font-extrabold text-muted-foreground transition-[background-color,color,box-shadow] peer-checked:bg-surface-grad peer-checked:text-foreground peer-checked:shadow-btn-ghost peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring">
-                  {choice.label}
-                </span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        {teamPurchase ? (
-          <div className="mx-auto grid w-full max-w-[24rem] grid-cols-[1fr_auto] items-end gap-4 rounded-2xl border border-border-strong bg-surface-grad p-4 text-left shadow-btn-ghost">
-            <label className="grid gap-1.5" htmlFor="team-seats">
-              <span className="text-sm font-extrabold">Team seats</span>
-              <span className="text-xs font-semibold text-muted-foreground">
-                You can invite teammates after checkout.
-              </span>
-            </label>
-            <input
-              aria-label="Team seats"
-              className="h-12 w-24 rounded-xl border border-border-strong bg-well px-3 text-center text-lg font-black tabular-nums shadow-well focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-              id="team-seats"
-              max={MAX_TEAM_SEATS}
-              min={MIN_TEAM_SEATS}
-              onChange={(event) => {
-                const nextSeats = event.currentTarget.valueAsNumber;
-                if (Number.isInteger(nextSeats)) {
-                  setTeamSeats(Math.min(MAX_TEAM_SEATS, Math.max(MIN_TEAM_SEATS, nextSeats)));
-                }
-              }}
-              type="number"
-              value={teamSeats}
-            />
-          </div>
-        ) : null}
 
         {options.length > 1 ? (
           <fieldset className="mx-auto grid w-full max-w-[24rem] gap-2">
@@ -163,23 +110,57 @@ export function SubscriptionOptions({
           </fieldset>
         ) : null}
 
-        <div aria-live="polite" className="grid min-h-24 content-center gap-1">
-          <p
-            aria-label={`${teamPurchase ? `${totalPrice} total for ${teamSeats} seats` : selectedOption.price} per ${selectedOption.billingInterval}`}
-            className="flex items-end justify-center gap-1"
-          >
-            <span className="mb-7 text-sm font-extrabold text-muted-foreground">US</span>
-            <span className="text-5xl font-black tracking-tight tabular-nums sm:text-6xl">
-              {teamPurchase ? totalPrice : selectedOption.price}
-            </span>
-            <span className="mb-2 text-lg font-extrabold text-muted-foreground">
-              /{selectedOption.billingInterval}
-            </span>
-          </p>
-          <p className="text-xs font-bold text-muted-foreground">
-            {teamPurchase ? `${selectedOption.price} per seat. ` : ""}Billed every{" "}
-            {selectedOption.billingInterval}. Cancel anytime.
-          </p>
+        <div className="grid gap-4">
+          <div aria-live="polite" className="grid min-h-24 content-center gap-1">
+            <p
+              aria-label={`${totalPrice} total per ${selectedOption.billingInterval} for ${quantity} ${quantity === 1 ? "seat" : "seats"}`}
+              className="flex items-end justify-center gap-1"
+            >
+              <span className="mb-7 text-sm font-extrabold text-muted-foreground">US</span>
+              <span className="text-5xl font-black tracking-tight tabular-nums sm:text-6xl">
+                {totalPrice}
+              </span>
+              <span className="mb-2 text-lg font-extrabold text-muted-foreground">
+                /{selectedOption.billingInterval}
+              </span>
+            </p>
+            <p className="text-xs font-bold text-muted-foreground">
+              {selectedOption.price} per seat. Billed every {selectedOption.billingInterval}. Cancel
+              anytime.
+            </p>
+          </div>
+
+          <div className="mx-auto grid w-full max-w-[24rem] gap-2">
+            <div className="flex items-center justify-center gap-3">
+              <label className="text-sm font-extrabold" htmlFor="subscription-seats">
+                Seats
+              </label>
+              <input
+                aria-describedby="subscription-seats-help"
+                aria-label="Seats"
+                className="h-12 w-24 rounded-xl border border-border-strong bg-well px-3 text-center text-lg font-black tabular-nums shadow-well focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                id="subscription-seats"
+                max={MAX_TEAM_SEATS}
+                min={1}
+                onChange={(event) => {
+                  const nextQuantity = event.currentTarget.valueAsNumber;
+                  if (Number.isInteger(nextQuantity)) {
+                    setQuantity(Math.min(MAX_TEAM_SEATS, Math.max(1, nextQuantity)));
+                  }
+                }}
+                type="number"
+                value={quantity}
+              />
+            </div>
+            <p
+              className="whitespace-nowrap text-xs font-semibold text-muted-foreground"
+              id="subscription-seats-help"
+            >
+              {teamPurchase
+                ? "Team account created after checkout."
+                : "2+ seats create a team account."}
+            </p>
+          </div>
         </div>
 
         {signedIn ? (
@@ -188,7 +169,7 @@ export function SubscriptionOptions({
             <input name="quantity" type="hidden" value={quantity} />
             <Button className="w-full" disabled={!checkoutAvailable} size="lg" type="submit">
               {teamPurchase
-                ? `Subscribe for ${teamSeats} seats`
+                ? `Subscribe for ${quantity} seats`
                 : `Subscribe ${intervalLabel.toLowerCase()}`}
             </Button>
             {!commerceWritesAllowed ? (

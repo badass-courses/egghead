@@ -6,9 +6,12 @@ import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
 
 import { getCurrentUser } from "../../coursebuilder/current-user";
+import { getSiteUrl } from "../../coursebuilder/stripe-provider";
 import { commerceWritesAreAllowed } from "../../db/local-docker";
 import { getOwnedTeamSubscription } from "../../subscriptions/team";
-import { addTeamSeats, claimTeamSeat, inviteTeamMember, removeTeamMember } from "./actions";
+import { createTeamInviteToken } from "../../subscriptions/team-invite-token";
+import { claimTeamSeat, inviteTeamMember, removeTeamMember } from "./actions";
+import { TeamInviteLink } from "./team-invite-link";
 
 export const metadata: Metadata = {
   title: "Your team | egghead",
@@ -26,9 +29,9 @@ function firstParam(value: string | string[] | undefined) {
 
 function teamErrorMessage(error: string | undefined) {
   if (error === "invalid-invite") return "Enter a valid teammate email address.";
+  if (error === "invite-email-failed") return "We could not send that invitation. Try again.";
   if (error === "already-assigned") return "That person already has a seat on this team.";
   if (error === "team-full") return "Every team seat is currently assigned.";
-  if (error === "invalid-seat-count") return "Choose a valid number of additional seats.";
   if (error) return "We could not update this team membership. Please try again.";
   return null;
 }
@@ -36,11 +39,7 @@ function teamErrorMessage(error: string | undefined) {
 function teamNoticeMessage(notice: string | undefined) {
   if (notice === "seat-claimed") return "Your seat is active. Welcome to the team.";
   if (notice === "seat-removed") return "The seat is available for someone new.";
-  if (notice === "seats-added") return "Your additional seats are ready to assign.";
-  if (notice === "invited") return "The teammate has access and their invitation is on its way.";
-  if (notice === "invited-email-delayed") {
-    return "The teammate has access. Their email was delayed, so send them the sign-in link directly.";
-  }
+  if (notice === "invite-sent") return "Invitation sent. The seat is claimed when they accept.";
   return null;
 }
 
@@ -107,7 +106,7 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
           </div>
           <Link
             className="press inline-flex items-center justify-center rounded-full border border-yolk-shadow/40 bg-yolk-grad px-9 pt-[17px] pb-[15px] text-lg font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
-            href="/subscribe?purchase=team"
+            href="/subscribe"
           >
             View team plans
           </Link>
@@ -115,6 +114,9 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
       </Container>
     );
   }
+
+  const inviteToken = createTeamInviteToken(team.id);
+  const inviteUrl = new URL(`/team/invite/${inviteToken}`, getSiteUrl()).toString();
 
   return (
     <main>
@@ -184,18 +186,14 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
             </div>
             <form action={claimTeamSeat}>
               <input name="subscriptionId" type="hidden" value={team.id} />
-              <Button
-                disabled={!writesAllowed || team.availableSeats === 0}
-                type="submit"
-                variant="navy"
-              >
+              <Button disabled={!writesAllowed} type="submit" variant="navy">
                 Claim my seat
               </Button>
             </form>
           </section>
         ) : null}
 
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.45fr)]">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.45fr)] lg:items-start">
           <section className="rounded-2xl border border-border-strong bg-surface-grad shadow-card">
             <div className="border-b border-border p-5 sm:p-6">
               <h2 className="text-2xl font-black tracking-tight">Your roster</h2>
@@ -248,14 +246,22 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
 
           <aside className="grid content-start gap-6">
             <section className="rounded-2xl border border-border-strong bg-surface-grad p-5 shadow-card sm:p-6">
-              <h2 className="text-xl font-black">Invite a teammate</h2>
+              <h2 className="text-xl font-black">Invite teammates</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Their access starts now. We’ll email a sign-in link too.
+                Share this link. Each person signs in and accepts their own seat.
               </p>
-              <form action={inviteTeamMember} className="mt-5 grid gap-3">
+              <TeamInviteLink
+                disabled={!writesAllowed || team.availableSeats === 0}
+                url={inviteUrl}
+              />
+
+              <form
+                action={inviteTeamMember}
+                className="mt-5 grid gap-3 border-t border-border pt-5"
+              >
                 <input name="subscriptionId" type="hidden" value={team.id} />
                 <label className="grid gap-1.5" htmlFor="team-email">
-                  <span className="text-sm font-extrabold">Email address</span>
+                  <span className="text-sm font-extrabold">Send to a specific email</span>
                   <input
                     aria-label="Teammate email address"
                     autoComplete="email"
@@ -272,42 +278,17 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
                   className="w-full"
                   disabled={!writesAllowed || team.availableSeats === 0}
                   type="submit"
-                >
-                  {team.availableSeats === 0 ? "Team is full" : "Assign seat"}
-                </Button>
-              </form>
-            </section>
-
-            <section className="rounded-2xl border border-border-strong bg-well p-5 shadow-well sm:p-6">
-              <h2 className="text-xl font-black">Need more room?</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Additional seats are prorated by Stripe for the current billing period.
-              </p>
-              <form action={addTeamSeats} className="mt-5 grid grid-cols-[6rem_1fr] gap-3">
-                <input name="subscriptionId" type="hidden" value={team.id} />
-                <label className="sr-only" htmlFor="additional-seats">
-                  Additional seats
-                </label>
-                <input
-                  aria-label="Additional seats"
-                  className="h-12 rounded-xl border border-border-strong bg-surface px-3 text-center text-lg font-black tabular-nums shadow-inner focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                  defaultValue={1}
-                  disabled={!writesAllowed || team.totalSeats >= 100}
-                  id="additional-seats"
-                  max={100 - team.totalSeats}
-                  min={1}
-                  name="additionalSeats"
-                  required
-                  type="number"
-                />
-                <Button
-                  disabled={!writesAllowed || team.totalSeats >= 100}
-                  type="submit"
                   variant="ghost"
                 >
-                  Add seats
+                  {team.availableSeats === 0 ? "Team is full" : "Email invite link"}
                 </Button>
               </form>
+
+              {team.availableSeats === 0 ? (
+                <p className="mt-3 text-xs font-bold text-rust">
+                  Your team is full. Remove a teammate before sending another invite.
+                </p>
+              ) : null}
             </section>
           </aside>
         </div>

@@ -376,7 +376,6 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
           completeEntitlements.map((entitlement) =>
             syncStripeSubscriptionEntitlement({
               currentPeriodEnd: new Date(currentPeriodEnd * 1000),
-              entitlementId: entitlement.id,
               localSubscriptionId: localSubscription.id,
               organizationId,
               organizationMembershipId: entitlement.organizationMembershipId,
@@ -385,6 +384,7 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
               stripeEventCreatedAt,
               stripeEventKind: "subscription_update",
               stripeSubscriptionId,
+              teamSeat: true,
               userId: entitlement.userId,
             }),
           ),

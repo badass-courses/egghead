@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
 import { entitlements, organizationMemberships, subscription } from "../db/schema";
@@ -33,6 +33,100 @@ export type OwnedTeamSubscription = {
   totalSeats: number;
   usedSeats: number;
 };
+
+export type TeamMembershipAccess = {
+  ownerEmail: string | null;
+  ownerId: string;
+  ownerName: string | null;
+  productName: string;
+  subscriptionId: string;
+};
+
+export type TeamInviteDetails = TeamMembershipAccess & {
+  availableSeats: number;
+  totalSeats: number;
+};
+
+export async function getTeamMembershipForUser(
+  userId: string,
+): Promise<TeamMembershipAccess | null> {
+  const adapter = getCourseBuilderAdapter();
+  const db = getEggheadDatabase();
+  const seatEntitlements = await db.query.entitlements.findMany({
+    where: and(
+      eq(entitlements.userId, userId),
+      eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
+      isNull(entitlements.deletedAt),
+      gt(entitlements.expiresAt, new Date()),
+    ),
+  });
+  const subscriptionIds = seatEntitlements
+    .map((entitlement) => entitlement.sourceId)
+    .filter((sourceId): sourceId is string => Boolean(sourceId));
+  if (subscriptionIds.length === 0) return null;
+
+  const subscriptions = await db.query.subscription.findMany({
+    where: and(
+      inArray(subscription.id, subscriptionIds),
+      inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
+    ),
+    with: { product: true },
+  });
+  const teamSubscription = subscriptions.find((candidate) => {
+    const fields = teamSubscriptionFieldsSchema.safeParse(candidate.fields);
+    return fields.success && fields.data.seats >= MIN_TEAM_SEATS;
+  });
+  const fields = teamSubscriptionFieldsSchema.safeParse(teamSubscription?.fields);
+  if (!teamSubscription || !fields.success) return null;
+
+  const owner = await adapter.getUserById(fields.data.ownerId);
+
+  return {
+    ownerEmail: owner?.email ?? null,
+    ownerId: fields.data.ownerId,
+    ownerName: owner?.name ?? null,
+    productName: teamSubscription.product?.name ?? "egghead team membership",
+    subscriptionId: teamSubscription.id,
+  };
+}
+
+export async function getTeamInviteDetails(
+  subscriptionId: string,
+): Promise<TeamInviteDetails | null> {
+  const adapter = getCourseBuilderAdapter();
+  const db = getEggheadDatabase();
+  const teamSubscription = await db.query.subscription.findFirst({
+    where: and(
+      eq(subscription.id, subscriptionId),
+      inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
+    ),
+    with: { product: true },
+  });
+  const fields = teamSubscriptionFieldsSchema.safeParse(teamSubscription?.fields);
+  if (!teamSubscription || !fields.success || fields.data.seats < MIN_TEAM_SEATS) return null;
+
+  const [owner, assignedSeats] = await Promise.all([
+    adapter.getUserById(fields.data.ownerId),
+    db.query.entitlements.findMany({
+      columns: { id: true },
+      where: and(
+        eq(entitlements.sourceId, teamSubscription.id),
+        eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
+        isNull(entitlements.deletedAt),
+      ),
+    }),
+  ]);
+
+  return {
+    availableSeats: Math.max(0, fields.data.seats - assignedSeats.length),
+    ownerEmail: owner?.email ?? null,
+    ownerId: fields.data.ownerId,
+    ownerName: owner?.name ?? null,
+    productName: teamSubscription.product?.name ?? "egghead team membership",
+    subscriptionId: teamSubscription.id,
+    totalSeats: fields.data.seats,
+  };
+}
 
 export async function getOwnedTeamSubscription(
   userId: string,

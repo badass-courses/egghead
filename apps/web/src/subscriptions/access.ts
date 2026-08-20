@@ -47,7 +47,6 @@ function subscriptionEventWasApplied(
 
 export async function syncStripeSubscriptionEntitlement(input: {
   currentPeriodEnd: Date;
-  entitlementId?: string;
   localSubscriptionId: string;
   organizationId: string;
   organizationMembershipId: string;
@@ -56,10 +55,13 @@ export async function syncStripeSubscriptionEntitlement(input: {
   stripeEventCreatedAt: number;
   stripeEventKind: StripeSubscriptionEventKind;
   stripeSubscriptionId: string;
+  teamSeat?: true;
   userId: string;
 }) {
   const db = getEggheadDatabase();
-  const id = input.entitlementId ?? stripeSubscriptionEntitlementId(input.stripeSubscriptionId);
+  const id = input.teamSeat
+    ? stripeSubscriptionSeatEntitlementId(input.stripeSubscriptionId, input.userId)
+    : stripeSubscriptionEntitlementId(input.stripeSubscriptionId);
   const deletedAt = stripeSubscriptionGrantsAccess(input.status) ? null : new Date();
   const metadata = {
     productId: input.productId,
@@ -67,6 +69,7 @@ export async function syncStripeSubscriptionEntitlement(input: {
     stripeEventCreatedAt: input.stripeEventCreatedAt,
     stripeEventKind: input.stripeEventKind,
     stripeSubscriptionId: input.stripeSubscriptionId,
+    ...(input.teamSeat ? { teamSeat: true } : {}),
   };
   const storedEventCreatedAt = sql`CAST(
     JSON_UNQUOTE(JSON_EXTRACT(${entitlements.metadata}, '$.stripeEventCreatedAt')) AS UNSIGNED
