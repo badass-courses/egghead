@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
 
@@ -82,7 +83,25 @@ function InviteMessage({
   );
 }
 
-export default async function TeamInvitePage({
+export default function TeamInvitePage(props: {
+  params: Promise<{ token: string }>;
+  searchParams: Promise<InviteSearchParams>;
+}) {
+  return (
+    <Suspense
+      fallback={
+        <InviteMessage
+          description="Checking the invitation details."
+          title="Loading your invitation"
+        />
+      }
+    >
+      <TeamInviteContent {...props} />
+    </Suspense>
+  );
+}
+
+async function TeamInviteContent({
   params,
   searchParams,
 }: {

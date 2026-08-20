@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 
@@ -85,6 +86,8 @@ async function ResolvedSubscriptionState({
 }: {
   searchParams: Promise<SubscribeSearchParams>;
 }) {
+  await connection();
+
   const productIds = subscriptionProductIds(
     getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_IDS"),
     getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_ID"),
