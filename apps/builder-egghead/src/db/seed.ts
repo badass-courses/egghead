@@ -1,4 +1,4 @@
-import { db } from '@/db/index'
+import { closeBuilderDatabase, db } from '@/db/index'
 import {
 	communicationChannel,
 	communicationPreferenceTypes,
@@ -164,3 +164,5 @@ for (const seedChannel of seededCommunicationChannels) {
 		await db.insert(communicationChannel).values(seedChannel)
 	}
 }
+
+await closeBuilderDatabase()
