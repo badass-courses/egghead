@@ -6,6 +6,7 @@ import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEggheadRuntime } from "../db/local-docker";
 import { getEnv } from "../env";
 import { claimAnonymousLessonCompletions } from "../progress/anonymous-lesson-progress";
+import { isEmailAuthEnabled } from "./email-auth";
 import { isEmailDeliveryEnabled } from "./email-delivery";
 import { createPostmarkEmailProvider } from "./email-provider";
 
@@ -22,10 +23,12 @@ export function isEmailAuthConfigured() {
   const postmarkApiKey = getEnv("POSTMARK_API_KEY");
   const postmarkFromEmail = getEnv("POSTMARK_FROM_EMAIL");
 
-  return Boolean(
-    getEggheadRuntime() === "local" &&
-    (!isEmailDeliveryEnabled(getEnv("SEND_EMAILS")) || (postmarkApiKey && postmarkFromEmail)),
-  );
+  return isEmailAuthEnabled({
+    deliveryEnabled: isEmailDeliveryEnabled(getEnv("SEND_EMAILS")),
+    postmarkApiKey,
+    postmarkFromEmail,
+    runtime: getEggheadRuntime(),
+  });
 }
 
 function getAuthProviders(): NextAuthConfig["providers"] {
