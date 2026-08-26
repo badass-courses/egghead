@@ -8,6 +8,8 @@ import { getCurrentUser } from "../../coursebuilder/current-user";
 import { profileNameSchema } from "../../profile/contracts";
 import { updatePrivateProfileName } from "../../profile/data";
 import { disconnectPrivateGithubAccount } from "../../profile/github-disconnect";
+import { signOut } from "../../server/auth";
+import { getMembershipBillingPortalUrl } from "../../subscriptions/billing";
 
 export type GithubDisconnectActionResult =
   | { status: "disconnected" }
@@ -15,6 +17,20 @@ export type GithubDisconnectActionResult =
   | { status: "missing" }
   | { status: "unauthorized" }
   | { status: "error" };
+
+export async function signOutOfEgghead() {
+  await signOut({ redirectTo: "/" });
+}
+
+export async function manageMembership() {
+  const currentUser = await getCurrentUser();
+  if (!currentUser?.id) redirect("/login?callbackUrl=%2Fprofile");
+
+  const billingPortalUrl = await getMembershipBillingPortalUrl(currentUser.id);
+  if (!billingPortalUrl) redirect("/profile?billing=unavailable");
+
+  redirect(billingPortalUrl);
+}
 
 export async function updateProfileName(formData: FormData) {
   const currentUser = await getCurrentUser();
