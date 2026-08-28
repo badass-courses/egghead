@@ -152,24 +152,44 @@ export async function getOwnedTeamSubscription(
       inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
     ),
   });
-  const ownedSubscription = subscriptions.find((candidate) => {
+  const ownedCandidates = subscriptions.flatMap((candidate) => {
     const fields = teamSubscriptionFieldsSchema.safeParse(candidate.fields);
-    return fields.success && fields.data.ownerId === userId && fields.data.seats >= MIN_TEAM_SEATS;
+    if (!fields.success || fields.data.ownerId !== userId || fields.data.seats < MIN_TEAM_SEATS) {
+      return [];
+    }
+
+    return [{ fields: fields.data, subscription: candidate }];
   });
-  if (!ownedSubscription) return null;
+  if (ownedCandidates.length === 0) return null;
 
-  const parsedFields = teamSubscriptionFieldsSchema.safeParse(ownedSubscription.fields);
-  if (!parsedFields.success) return null;
+  const storedMerchantSubscriptions = await db.query.merchantSubscription.findMany({
+    where: inArray(
+      merchantSubscription.id,
+      ownedCandidates.map((candidate) => candidate.subscription.merchantSubscriptionId),
+    ),
+  });
+  const merchantSubscriptionsById = new Map(
+    storedMerchantSubscriptions.map((storedSubscription) => [
+      storedSubscription.id,
+      storedSubscription,
+    ]),
+  );
+  const ownedCandidate = ownedCandidates.find((candidate) =>
+    Boolean(
+      merchantSubscriptionsById.get(candidate.subscription.merchantSubscriptionId)?.identifier,
+    ),
+  );
+  if (!ownedCandidate) return null;
 
-  const [storedMerchantSubscription, storedProduct] = await Promise.all([
-    db.query.merchantSubscription.findFirst({
-      where: eq(merchantSubscription.id, ownedSubscription.merchantSubscriptionId),
-    }),
-    db.query.products.findFirst({
-      where: eq(products.id, ownedSubscription.productId),
-    }),
-  ]);
+  const ownedSubscription = ownedCandidate.subscription;
+  const parsedFields = ownedCandidate.fields;
+  const storedMerchantSubscription = merchantSubscriptionsById.get(
+    ownedSubscription.merchantSubscriptionId,
+  );
   if (!storedMerchantSubscription?.identifier) return null;
+  const storedProduct = await db.query.products.findFirst({
+    where: eq(products.id, ownedSubscription.productId),
+  });
 
   const seatEntitlements = await db.query.entitlements.findMany({
     where: and(
@@ -186,7 +206,7 @@ export async function getOwnedTeamSubscription(
       {
         email: entitlement.user.email,
         entitlementId: entitlement.id,
-        isOwner: entitlement.user.id === parsedFields.data.ownerId,
+        isOwner: entitlement.user.id === parsedFields.ownerId,
         joinedAt: entitlement.createdAt,
         name: entitlement.user.name,
         userId: entitlement.user.id,
@@ -196,14 +216,14 @@ export async function getOwnedTeamSubscription(
   const usedSeats = members.length;
 
   return {
-    availableSeats: Math.max(0, parsedFields.data.seats - usedSeats),
+    availableSeats: Math.max(0, parsedFields.seats - usedSeats),
     id: ownedSubscription.id,
     members,
     ownerHasSeat: members.some((member) => member.isOwner),
-    ownerId: parsedFields.data.ownerId,
+    ownerId: parsedFields.ownerId,
     productName: storedProduct?.name ?? "egghead team membership",
     stripeSubscriptionId: storedMerchantSubscription.identifier,
-    totalSeats: parsedFields.data.seats,
+    totalSeats: parsedFields.seats,
     usedSeats,
   };
 }
