@@ -11,6 +11,7 @@ import { isEmailAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { getPrivateAccountProfile } from "../../profile/data";
 import { gravatarUrlForEmail } from "../../profile/gravatar";
+import { EGGHEAD_BUILDER_URL, staffAccountPresentation } from "../../profile/account-role";
 import { getEnv } from "../../env";
 import { getMembershipBillingSummary } from "../../subscriptions/billing";
 import { getOwnedTeamSubscription, getTeamMembershipForUser } from "../../subscriptions/team";
@@ -152,13 +153,17 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
   const name = profile.name?.trim() || "egghead learner";
   const hasLibraryMembership = profile.learningAccess.libraryWide;
   const hasIncludedCourses = profile.learningAccess.courseSpecific.length > 0;
-  const membershipDescription = teammateMembership
-    ? `You have ${teamAccessLabel(teammateMembership.productName).toLowerCase()} through a team account.`
-    : hasLibraryMembership
-      ? "Your membership includes the full egghead library."
-      : hasIncludedCourses
-        ? "Your included courses and free resources remain available. Subscribe for full library access."
-        : "Free resources remain available. Subscribe for full library access.";
+  const staffAccount = staffAccountPresentation(currentUser.role);
+  const membershipDescription =
+    !hasLibraryMembership && staffAccount
+      ? staffAccount.description
+      : teammateMembership
+        ? `You have ${teamAccessLabel(teammateMembership.productName).toLowerCase()} through a team account.`
+        : hasLibraryMembership
+          ? "Your membership includes the full egghead library."
+          : hasIncludedCourses
+            ? "Your included courses and free resources remain available. Subscribe for full library access."
+            : "Free resources remain available. Subscribe for full library access.";
 
   return (
     <main>
@@ -249,9 +254,13 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
               <p className="flex items-center gap-2 text-sm font-extrabold text-muted-foreground">
                 <span
                   aria-hidden
-                  className={`size-2.5 shrink-0 rounded-full ${hasLibraryMembership ? "bg-sage" : "bg-rust"}`}
+                  className={`size-2.5 shrink-0 rounded-full ${hasLibraryMembership || staffAccount ? "bg-sage" : "bg-rust"}`}
                 />
-                {hasLibraryMembership ? "Membership active" : "No active membership"}
+                {hasLibraryMembership
+                  ? "Membership active"
+                  : staffAccount
+                    ? staffAccount.status
+                    : "No active membership"}
               </p>
               <h2
                 className="mt-3 text-balance text-3xl font-black tracking-tight"
@@ -261,7 +270,9 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                   ? `${teamAccessLabel(teammateMembership.productName)} through a team account`
                   : hasLibraryMembership
                     ? "Full library access"
-                    : "Unlock the full library"}
+                    : staffAccount
+                      ? staffAccount.heading
+                      : "Unlock the full library"}
               </h2>
               <p className="mt-2 max-w-[62ch] text-pretty text-base text-muted-foreground">
                 {membershipDescription}
@@ -337,6 +348,15 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                     Contact support to manage this access.
                   </p>
                 )}
+              </div>
+            ) : !hasLibraryMembership && staffAccount ? (
+              <div className="grid justify-items-stretch gap-3 md:justify-items-center">
+                <a
+                  className="press inline-flex w-full items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] text-base font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover md:min-w-44"
+                  href={EGGHEAD_BUILDER_URL}
+                >
+                  {staffAccount.actionLabel}
+                </a>
               </div>
             ) : !hasLibraryMembership ? (
               <div className="grid justify-items-stretch gap-3 md:justify-items-center">
