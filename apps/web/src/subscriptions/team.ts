@@ -3,7 +3,13 @@ import { randomUUID } from "node:crypto";
 import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
-import { entitlements, organizationMemberships, subscription } from "../db/schema";
+import {
+  entitlements,
+  merchantSubscription,
+  organizationMemberships,
+  products,
+  subscription,
+} from "../db/schema";
 import {
   EGGHEAD_SUBSCRIPTION_ENTITLEMENT,
   STRIPE_SUBSCRIPTION_SOURCE,
@@ -145,21 +151,45 @@ export async function getOwnedTeamSubscription(
       inArray(subscription.organizationId, organizationIds),
       inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
     ),
-    with: { merchantSubscription: true, product: true },
   });
-  const ownedSubscription = subscriptions.find((candidate) => {
+  const ownedCandidates = subscriptions.flatMap((candidate) => {
     const fields = teamSubscriptionFieldsSchema.safeParse(candidate.fields);
-    return (
-      fields.success &&
-      fields.data.ownerId === userId &&
-      fields.data.seats >= MIN_TEAM_SEATS &&
-      Boolean(candidate.merchantSubscription?.identifier)
-    );
-  });
-  if (!ownedSubscription?.merchantSubscription?.identifier) return null;
+    if (!fields.success || fields.data.ownerId !== userId || fields.data.seats < MIN_TEAM_SEATS) {
+      return [];
+    }
 
-  const parsedFields = teamSubscriptionFieldsSchema.safeParse(ownedSubscription.fields);
-  if (!parsedFields.success) return null;
+    return [{ fields: fields.data, subscription: candidate }];
+  });
+  if (ownedCandidates.length === 0) return null;
+
+  const storedMerchantSubscriptions = await db.query.merchantSubscription.findMany({
+    where: inArray(
+      merchantSubscription.id,
+      ownedCandidates.map((candidate) => candidate.subscription.merchantSubscriptionId),
+    ),
+  });
+  const merchantSubscriptionsById = new Map(
+    storedMerchantSubscriptions.map((storedSubscription) => [
+      storedSubscription.id,
+      storedSubscription,
+    ]),
+  );
+  const ownedCandidate = ownedCandidates.find((candidate) =>
+    Boolean(
+      merchantSubscriptionsById.get(candidate.subscription.merchantSubscriptionId)?.identifier,
+    ),
+  );
+  if (!ownedCandidate) return null;
+
+  const ownedSubscription = ownedCandidate.subscription;
+  const parsedFields = ownedCandidate.fields;
+  const storedMerchantSubscription = merchantSubscriptionsById.get(
+    ownedSubscription.merchantSubscriptionId,
+  );
+  if (!storedMerchantSubscription?.identifier) return null;
+  const storedProduct = await db.query.products.findFirst({
+    where: eq(products.id, ownedSubscription.productId),
+  });
 
   const seatEntitlements = await db.query.entitlements.findMany({
     where: and(
@@ -176,7 +206,7 @@ export async function getOwnedTeamSubscription(
       {
         email: entitlement.user.email,
         entitlementId: entitlement.id,
-        isOwner: entitlement.user.id === parsedFields.data.ownerId,
+        isOwner: entitlement.user.id === parsedFields.ownerId,
         joinedAt: entitlement.createdAt,
         name: entitlement.user.name,
         userId: entitlement.user.id,
@@ -186,14 +216,14 @@ export async function getOwnedTeamSubscription(
   const usedSeats = members.length;
 
   return {
-    availableSeats: Math.max(0, parsedFields.data.seats - usedSeats),
+    availableSeats: Math.max(0, parsedFields.seats - usedSeats),
     id: ownedSubscription.id,
     members,
     ownerHasSeat: members.some((member) => member.isOwner),
-    ownerId: parsedFields.data.ownerId,
-    productName: ownedSubscription.product?.name ?? "egghead team membership",
-    stripeSubscriptionId: ownedSubscription.merchantSubscription.identifier,
-    totalSeats: parsedFields.data.seats,
+    ownerId: parsedFields.ownerId,
+    productName: storedProduct?.name ?? "egghead team membership",
+    stripeSubscriptionId: storedMerchantSubscription.identifier,
+    totalSeats: parsedFields.seats,
     usedSeats,
   };
 }
