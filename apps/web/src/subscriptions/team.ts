@@ -3,7 +3,13 @@ import { randomUUID } from "node:crypto";
 import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
-import { entitlements, organizationMemberships, subscription } from "../db/schema";
+import {
+  entitlements,
+  merchantSubscription,
+  organizationMemberships,
+  products,
+  subscription,
+} from "../db/schema";
 import {
   EGGHEAD_SUBSCRIPTION_ENTITLEMENT,
   STRIPE_SUBSCRIPTION_SOURCE,
@@ -145,21 +151,25 @@ export async function getOwnedTeamSubscription(
       inArray(subscription.organizationId, organizationIds),
       inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
     ),
-    with: { merchantSubscription: true, product: true },
   });
   const ownedSubscription = subscriptions.find((candidate) => {
     const fields = teamSubscriptionFieldsSchema.safeParse(candidate.fields);
-    return (
-      fields.success &&
-      fields.data.ownerId === userId &&
-      fields.data.seats >= MIN_TEAM_SEATS &&
-      Boolean(candidate.merchantSubscription?.identifier)
-    );
+    return fields.success && fields.data.ownerId === userId && fields.data.seats >= MIN_TEAM_SEATS;
   });
-  if (!ownedSubscription?.merchantSubscription?.identifier) return null;
+  if (!ownedSubscription) return null;
 
   const parsedFields = teamSubscriptionFieldsSchema.safeParse(ownedSubscription.fields);
   if (!parsedFields.success) return null;
+
+  const [storedMerchantSubscription, storedProduct] = await Promise.all([
+    db.query.merchantSubscription.findFirst({
+      where: eq(merchantSubscription.id, ownedSubscription.merchantSubscriptionId),
+    }),
+    db.query.products.findFirst({
+      where: eq(products.id, ownedSubscription.productId),
+    }),
+  ]);
+  if (!storedMerchantSubscription?.identifier) return null;
 
   const seatEntitlements = await db.query.entitlements.findMany({
     where: and(
@@ -191,8 +201,8 @@ export async function getOwnedTeamSubscription(
     members,
     ownerHasSeat: members.some((member) => member.isOwner),
     ownerId: parsedFields.data.ownerId,
-    productName: ownedSubscription.product?.name ?? "egghead team membership",
-    stripeSubscriptionId: ownedSubscription.merchantSubscription.identifier,
+    productName: storedProduct?.name ?? "egghead team membership",
+    stripeSubscriptionId: storedMerchantSubscription.identifier,
     totalSeats: parsedFields.data.seats,
     usedSeats,
   };
