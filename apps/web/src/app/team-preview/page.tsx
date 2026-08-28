@@ -27,7 +27,7 @@ const MEMBERS = [
     topic: "TypeScript",
     lessons: 9,
     learningDays: 4,
-    lastLearning: "Today",
+    lastLearning: "Aug 26",
     status: "learning",
   },
   {
@@ -37,7 +37,7 @@ const MEMBERS = [
     topic: "GenAI",
     lessons: 7,
     learningDays: 3,
-    lastLearning: "Yesterday",
+    lastLearning: "Aug 25",
     status: "learning",
   },
   {
@@ -47,7 +47,7 @@ const MEMBERS = [
     topic: "Next.js",
     lessons: 8,
     learningDays: 3,
-    lastLearning: "2 days ago",
+    lastLearning: "Aug 24",
     status: "learning",
   },
   {
@@ -57,7 +57,7 @@ const MEMBERS = [
     topic: "React",
     lessons: 6,
     learningDays: 2,
-    lastLearning: "3 days ago",
+    lastLearning: "Aug 23",
     status: "learning",
   },
   {
@@ -67,7 +67,7 @@ const MEMBERS = [
     topic: "Next.js",
     lessons: 9,
     learningDays: 4,
-    lastLearning: "4 days ago",
+    lastLearning: "Aug 22",
     status: "learning",
   },
   {
@@ -77,7 +77,7 @@ const MEMBERS = [
     topic: "Supabase",
     lessons: 5,
     learningDays: 2,
-    lastLearning: "6 days ago",
+    lastLearning: "Aug 20",
     status: "learning",
   },
   {
@@ -110,11 +110,11 @@ const TOPICS = [
 ] as const;
 
 const WEEKLY_ACTIVITY = [
-  { label: "Jul 20", lessons: 5 },
-  { label: "Jul 27", lessons: 8 },
-  { label: "Aug 3", lessons: 11 },
-  { label: "Aug 10", lessons: 9 },
-  { label: "This week", lessons: 11 },
+  { label: "Jul 27", lessons: 5 },
+  { label: "Aug 3", lessons: 8 },
+  { label: "Aug 10", lessons: 11 },
+  { label: "Aug 17", lessons: 9 },
+  { label: "Aug 24", lessons: 11 },
 ] as const;
 
 function Avatar({ member }: { member: Member }) {
@@ -128,7 +128,7 @@ function Avatar({ member }: { member: Member }) {
 function statusLabel(status: Member["status"]) {
   if (status === "learning") return "Learning";
   if (status === "invited") return "Invited";
-  return "Quiet this month";
+  return "No activity in period";
 }
 
 function ActivityChart() {
@@ -258,7 +258,7 @@ export default function TeamPreviewPage() {
           <dl className="team-header-facts">
             <div>
               <dt>Period</dt>
-              <dd>Last 30 days</dd>
+              <dd>Jul 28–Aug 26, 2026</dd>
             </div>
             <div>
               <dt>Seats</dt>
@@ -278,7 +278,7 @@ export default function TeamPreviewPage() {
               <h2 id="overview-heading">TypeScript and Next.js are becoming shared team skills.</h2>
               <p>
                 <strong>6 of 8 teammates</strong> learned on <strong>12 different days</strong>,
-                completing <strong>44 lessons</strong> this month.
+                completing <strong>44 lessons</strong> during this period.
               </p>
             </div>
             <p className="team-overview-note">
