@@ -3,12 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-import { isEmailAuthConfigured } from "../../coursebuilder/auth-config";
+import { isEmailAuthConfigured, isGithubAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { profileNameSchema } from "../../profile/contracts";
 import { updatePrivateProfileName } from "../../profile/data";
 import { disconnectPrivateGithubAccount } from "../../profile/github-disconnect";
-import { signOut } from "../../server/auth";
+import { signIn, signOut } from "../../server/auth";
 import { getMembershipBillingPortalUrl } from "../../subscriptions/billing";
 
 export type GithubDisconnectActionResult =
@@ -20,6 +20,14 @@ export type GithubDisconnectActionResult =
 
 export async function signOutOfEgghead() {
   await signOut({ redirectTo: "/" });
+}
+
+export async function connectGithubAccount() {
+  const currentUser = await getCurrentUser();
+  if (!currentUser?.id) redirect("/login?callbackUrl=%2Fprofile");
+  if (!isGithubAuthConfigured()) redirect("/profile");
+
+  await signIn("github", { redirectTo: "/profile" });
 }
 
 export async function manageMembership() {

@@ -7,7 +7,7 @@ import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
 
 import { normalizeRequestCountry } from "../../access/evaluate";
-import { isEmailAuthConfigured } from "../../coursebuilder/auth-config";
+import { isEmailAuthConfigured, isGithubAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { getPrivateAccountProfile } from "../../profile/data";
 import { gravatarUrlForEmail } from "../../profile/gravatar";
@@ -552,6 +552,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                 </h2>
                 <GithubAccountControl
                   connected={profile.githubConnection.connected}
+                  connectionAvailable={isGithubAuthConfigured()}
                   disconnectAllowed={profile.githubConnection.disconnectAllowed}
                 />
                 <p className="mt-3 text-xs text-muted-foreground">
