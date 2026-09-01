@@ -14,7 +14,7 @@ import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { getOwnedTeamSubscription } from "../../subscriptions/team";
 import { SubscriptionOptions, type SubscriptionOption } from "./subscription-options";
 
-type SubscribeSearchParams = {
+type PricingSearchParams = {
   error?: string | string[];
 };
 
@@ -73,7 +73,7 @@ async function getSubscriptionOptions(productIds: string[]) {
 
 const subscriptionPanelClassName = "mx-auto grid w-full max-w-[44rem] gap-7";
 
-function SubscribeLoadingState() {
+function PricingLoadingState() {
   return (
     <section aria-busy="true" className={subscriptionPanelClassName}>
       <p className="text-center font-bold text-muted-foreground">Checking your membership…</p>
@@ -81,10 +81,10 @@ function SubscribeLoadingState() {
   );
 }
 
-async function ResolvedSubscriptionState({
+async function ResolvedPricingState({
   searchParams,
 }: {
-  searchParams: Promise<SubscribeSearchParams>;
+  searchParams: Promise<PricingSearchParams>;
 }) {
   await connection();
 
@@ -161,10 +161,10 @@ async function ResolvedSubscriptionState({
   );
 }
 
-export default function SubscribePage({
+export default function PricingPage({
   searchParams,
 }: {
-  searchParams: Promise<SubscribeSearchParams>;
+  searchParams: Promise<PricingSearchParams>;
 }) {
   return (
     <Container
@@ -172,8 +172,8 @@ export default function SubscribePage({
       className="content-center gap-y-0 py-[clamp(2.5rem,8vh,6rem)]"
       size="narrow"
     >
-      <Suspense fallback={<SubscribeLoadingState />}>
-        <ResolvedSubscriptionState searchParams={searchParams} />
+      <Suspense fallback={<PricingLoadingState />}>
+        <ResolvedPricingState searchParams={searchParams} />
       </Suspense>
     </Container>
   );

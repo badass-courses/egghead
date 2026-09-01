@@ -106,7 +106,7 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
           </div>
           <Link
             className="press inline-flex items-center justify-center rounded-full border border-yolk-shadow/40 bg-yolk-grad px-9 pt-[17px] pb-[15px] text-lg font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
-            href="/subscribe"
+            href="/pricing"
           >
             View team plans
           </Link>

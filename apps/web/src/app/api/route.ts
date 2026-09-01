@@ -20,7 +20,7 @@ export function GET() {
           coursebuilder: "/api/coursebuilder",
         },
         commerce: {
-          subscribe: "/subscribe",
+          pricing: "/pricing",
           stripeWebhook: "/api/coursebuilder/webhook/stripe",
           inngest: "/api/inngest",
         },

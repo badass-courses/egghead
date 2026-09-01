@@ -72,8 +72,9 @@ stripe listen --events checkout.session.completed,customer.subscription.updated 
 ```
 
 Copy the `whsec_...` value printed by Stripe CLI into `STRIPE_WEBHOOK_SECRET`, restart the
-web app, sign in, and open `/subscribe`. Choose **My team** to send a multi-seat quantity to
-Stripe Checkout. The checkout success page waits for the durable webhook handler to create the
+web app, sign in, and open `/pricing`. Use the **Seats** input to select two or more seats, then
+click **Subscribe for {quantity} seats** to send that quantity to Stripe Checkout. The checkout
+success page waits for the durable webhook handler to create the
 subscription, then links to `/team`, where the owner can claim, invite, remove, and add seats.
 
 Team subscription renewal and cancellation events fan out to every assigned seat entitlement.

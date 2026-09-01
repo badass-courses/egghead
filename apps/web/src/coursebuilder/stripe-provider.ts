@@ -119,9 +119,9 @@ export function getStripeProvider(subscriptionCheckoutAttempt: string | null = n
   const siteUrl = getSiteUrl();
 
   return StripeProvider({
-    errorRedirectUrl: `${siteUrl}/subscribe?error=checkout`,
+    errorRedirectUrl: `${siteUrl}/pricing?error=checkout`,
     baseSuccessUrl: siteUrl,
-    cancelUrl: `${siteUrl}/subscribe`,
+    cancelUrl: `${siteUrl}/pricing`,
     paymentsAdapter: new EggheadStripePaymentAdapter(
       {
         stripeToken,
