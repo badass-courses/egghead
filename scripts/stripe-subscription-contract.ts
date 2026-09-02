@@ -13,11 +13,8 @@ import {
   membershipIntervalLabel,
   stripeInvoiceDownloadUrl,
 } from "../apps/web/src/subscriptions/billing";
-import {
-  isConfiguredSubscriptionProductId,
-  subscriptionIntervalLabel,
-  subscriptionProductIds,
-} from "../apps/web/src/subscriptions/options";
+import { subscriptionIntervalLabel } from "../apps/web/src/subscriptions/options";
+import { isActiveMembershipProduct } from "../apps/web/src/subscriptions/catalog";
 import {
   getStripeSubscriptionCurrentPeriodEnd,
   getStripeSubscriptionQuantity,
@@ -174,13 +171,22 @@ try {
       assert.equal(formatProductPrice(150, "usd"), "$150");
       assert.equal(formatProductPrice(20.5, "usd"), "$20.50");
     }),
-    check("subscription options preserve product allowlisting", () => {
-      const configuredIds = subscriptionProductIds(" monthly-product, yearly-product ", undefined);
+    check("subscription options use active membership products", () => {
+      const activeMembership = {
+        fields: { billingInterval: "month" as const },
+        price: { status: 1 },
+        status: 1,
+        type: "membership" as const,
+      };
 
-      assert.deepEqual(configuredIds, ["monthly-product", "yearly-product"]);
-      assert.deepEqual(subscriptionProductIds(undefined, "single-product"), ["single-product"]);
-      assert.equal(isConfiguredSubscriptionProductId("yearly-product", configuredIds), true);
-      assert.equal(isConfiguredSubscriptionProductId("unlisted-product", configuredIds), false);
+      assert.equal(isActiveMembershipProduct(activeMembership), true);
+      assert.equal(isActiveMembershipProduct({ ...activeMembership, status: 0 }), false);
+      assert.equal(isActiveMembershipProduct({ ...activeMembership, type: "self-paced" }), false);
+      assert.equal(isActiveMembershipProduct({ ...activeMembership, price: { status: 0 } }), false);
+      assert.equal(
+        isActiveMembershipProduct({ ...activeMembership, fields: { billingInterval: null } }),
+        false,
+      );
       assert.equal(subscriptionIntervalLabel("month"), "Monthly");
       assert.equal(subscriptionIntervalLabel("year"), "Yearly");
     }),
