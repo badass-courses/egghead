@@ -169,7 +169,7 @@ async function ResolvedSubscriptionThanks({
   if (checkoutProvider) callbackSearchParams.set("provider", checkoutProvider);
   const callbackQuery = callbackSearchParams.toString();
   const callbackUrl = `/thanks/subscription${callbackQuery ? `?${callbackQuery}` : ""}`;
-  const destination = user ? "/subscribe" : `/login?callbackUrl=${encodeURIComponent(callbackUrl)}`;
+  const destination = user ? "/pricing" : `/login?callbackUrl=${encodeURIComponent(callbackUrl)}`;
 
   return (
     <section

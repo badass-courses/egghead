@@ -7,7 +7,7 @@ import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
 
 import { normalizeRequestCountry } from "../../access/evaluate";
-import { isEmailAuthConfigured } from "../../coursebuilder/auth-config";
+import { isEmailAuthConfigured, isGithubAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { getPrivateAccountProfile } from "../../profile/data";
 import { gravatarUrlForEmail } from "../../profile/gravatar";
@@ -65,12 +65,11 @@ function teamAccessLabel(productName: string) {
   return /\bpro\b/i.test(productName) ? "Pro access" : "Membership access";
 }
 
-function getSubscribeHref() {
+function getPricingHref() {
   const siteUrl = getEnv("NEXT_PUBLIC_APP_URL");
   if (!siteUrl) throw new Error("NEXT_PUBLIC_APP_URL is required for the profile subscribe link.");
 
-  const pathname = process.env.NODE_ENV === "development" ? "/subscribe" : "/pricing";
-  return new URL(pathname, siteUrl).toString();
+  return new URL("/pricing", siteUrl).toString();
 }
 
 function ProfileFallback() {
@@ -342,7 +341,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
               <div className="grid justify-items-stretch gap-3 md:justify-items-center">
                 <Link
                   className="press inline-flex w-full items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] text-base font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover md:min-w-44"
-                  href={getSubscribeHref()}
+                  href={getPricingHref()}
                 >
                   Subscribe
                 </Link>
@@ -552,6 +551,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                 </h2>
                 <GithubAccountControl
                   connected={profile.githubConnection.connected}
+                  connectionAvailable={isGithubAuthConfigured()}
                   disconnectAllowed={profile.githubConnection.disconnectAllowed}
                 />
                 <p className="mt-3 text-xs text-muted-foreground">

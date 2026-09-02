@@ -164,10 +164,10 @@ export async function startSubscriptionCheckout(formData: FormData) {
   const user = await getCurrentUser();
 
   if (!user?.id) {
-    redirect("/login?callbackUrl=/subscribe");
+    redirect("/login?callbackUrl=/pricing");
   }
   if (!user.email) {
-    redirect("/subscribe?error=missing-email");
+    redirect("/pricing?error=missing-email");
   }
 
   const currentSubscription = await getCurrentSubscriptionForUser(user.id);
@@ -179,10 +179,10 @@ export async function startSubscriptionCheckout(formData: FormData) {
   const requestedQuantity = subscriptionCheckoutQuantitySchema.safeParse(formData.get("quantity"));
 
   if (typeof requestedProductId !== "string") {
-    redirect("/subscribe?error=invalid-product");
+    redirect("/pricing?error=invalid-product");
   }
   if (!requestedQuantity.success) {
-    redirect("/subscribe?error=invalid-seats");
+    redirect("/pricing?error=invalid-seats");
   }
 
   const productId = requestedProductId;
@@ -191,10 +191,10 @@ export async function startSubscriptionCheckout(formData: FormData) {
   const product = await getActiveMembershipProduct(productId);
 
   if (!product) {
-    redirect("/subscribe?error=invalid-product");
+    redirect("/pricing?error=invalid-product");
   }
   if (!isStripeConfigured()) {
-    redirect("/subscribe?error=not-configured");
+    redirect("/pricing?error=not-configured");
   }
 
   const requestHeaders = await headers();
@@ -212,11 +212,11 @@ export async function startSubscriptionCheckout(formData: FormData) {
     country,
   );
   if (checkoutReservation.productId !== productId || checkoutReservation.quantity !== quantity) {
-    redirect("/subscribe?error=checkout-pending");
+    redirect("/pricing?error=checkout-pending");
   }
   const stripeProvider = getStripeProvider(checkoutReservation.token);
   if (!stripeProvider) {
-    redirect("/subscribe?error=not-configured");
+    redirect("/pricing?error=not-configured");
   }
   let checkoutRedirect: string;
 
@@ -229,7 +229,7 @@ export async function startSubscriptionCheckout(formData: FormData) {
         quantity,
         bulk: quantity > 1,
         country: checkoutReservation.country,
-        cancelUrl: `${getSiteUrl()}/subscribe`,
+        cancelUrl: `${getSiteUrl()}/pricing`,
       },
       adapter,
     );
@@ -254,7 +254,7 @@ export async function startSubscriptionCheckout(formData: FormData) {
         .digest("hex")
         .slice(0, 12),
     });
-    redirect("/subscribe?error=checkout");
+    redirect("/pricing?error=checkout");
   }
 
   redirect(checkoutRedirect);
