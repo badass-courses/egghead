@@ -18,11 +18,7 @@ import {
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../../db/adapter";
 import { organization as organizationTable } from "../../db/schema";
 import { assertCommerceWritesAllowed } from "../../db/local-docker";
-import { getEnv } from "../../env";
-import {
-  isConfiguredSubscriptionProductId,
-  subscriptionProductIds,
-} from "../../subscriptions/options";
+import { getActiveMembershipProduct } from "../../subscriptions/catalog";
 import { ensurePersonalOrganization } from "../../subscriptions/personal-organization";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { subscriptionCheckoutQuantitySchema } from "../../subscriptions/team-contracts";
@@ -179,17 +175,10 @@ export async function startSubscriptionCheckout(formData: FormData) {
     redirect("/thanks/subscription?existing=true");
   }
 
-  const configuredProductIds = subscriptionProductIds(
-    getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_IDS"),
-    getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_ID"),
-  );
   const requestedProductId = formData.get("productId");
   const requestedQuantity = subscriptionCheckoutQuantitySchema.safeParse(formData.get("quantity"));
 
-  if (
-    typeof requestedProductId !== "string" ||
-    !isConfiguredSubscriptionProductId(requestedProductId, configuredProductIds)
-  ) {
+  if (typeof requestedProductId !== "string") {
     redirect("/subscribe?error=invalid-product");
   }
   if (!requestedQuantity.success) {
@@ -199,16 +188,12 @@ export async function startSubscriptionCheckout(formData: FormData) {
   const productId = requestedProductId;
   const quantity = requestedQuantity.data;
   const adapter = getCourseBuilderAdapter();
-  const product = await adapter.getProduct(productId, false);
+  const product = await getActiveMembershipProduct(productId);
 
-  if (
-    !isStripeConfigured() ||
-    !product ||
-    product.type !== "membership" ||
-    !product.price ||
-    product.price.status !== 1 ||
-    !product.fields.billingInterval
-  ) {
+  if (!product) {
+    redirect("/subscribe?error=invalid-product");
+  }
+  if (!isStripeConfigured()) {
     redirect("/subscribe?error=not-configured");
   }
 

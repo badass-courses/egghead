@@ -5,11 +5,13 @@ import { Container } from "@egghead/ui/container";
 
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { isStripeConfigured } from "../../coursebuilder/stripe-provider";
-import { getCourseBuilderAdapter } from "../../db/adapter";
 import { commerceWritesAreAllowed } from "../../db/local-docker";
-import { getEnv } from "../../env";
 import { formatProductPrice } from "../../subscriptions/billing";
-import { compareSubscriptionIntervals, subscriptionProductIds } from "../../subscriptions/options";
+import {
+  getActiveMembershipProducts,
+  type ActiveMembershipProduct,
+} from "../../subscriptions/catalog";
+import { compareSubscriptionIntervals } from "../../subscriptions/options";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { getOwnedTeamSubscription } from "../../subscriptions/team";
 import { SubscriptionOptions, type SubscriptionOption } from "./subscription-options";
@@ -34,19 +36,7 @@ function checkoutErrorMessage(error: string | undefined) {
   return null;
 }
 
-async function getSubscriptionOption(productId: string): Promise<SubscriptionOption | null> {
-  const product = await getCourseBuilderAdapter().getProduct(productId, false);
-
-  if (
-    !product ||
-    product.type !== "membership" ||
-    !product.price ||
-    product.price.status !== 1 ||
-    !product.fields.billingInterval
-  ) {
-    return null;
-  }
-
+function getSubscriptionOption(product: ActiveMembershipProduct): SubscriptionOption | null {
   const price = formatProductPrice(product.price.unitAmount, "USD");
   if (!price) return null;
 
@@ -61,10 +51,9 @@ async function getSubscriptionOption(productId: string): Promise<SubscriptionOpt
   };
 }
 
-async function getSubscriptionOptions(productIds: string[]) {
-  const options = await Promise.all(productIds.map(getSubscriptionOption));
-
-  return options
+function getSubscriptionOptions(products: ActiveMembershipProduct[]) {
+  return products
+    .map(getSubscriptionOption)
     .filter((option): option is SubscriptionOption => option !== null)
     .toSorted((first, second) =>
       compareSubscriptionIntervals(first.billingInterval, second.billingInterval),
@@ -88,15 +77,12 @@ async function ResolvedSubscriptionState({
 }) {
   await connection();
 
-  const productIds = subscriptionProductIds(
-    getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_IDS"),
-    getEnv("EGGHEAD_SUBSCRIPTION_PRODUCT_ID"),
-  );
-  const [user, resolvedSearchParams, subscriptionOptions] = await Promise.all([
+  const [user, resolvedSearchParams, membershipProducts] = await Promise.all([
     getCurrentUser(),
     searchParams,
-    getSubscriptionOptions(productIds),
+    getActiveMembershipProducts(),
   ]);
+  const subscriptionOptions = getSubscriptionOptions(membershipProducts);
   const [currentSubscription, teamSubscription] = user?.id
     ? await Promise.all([getCurrentSubscriptionForUser(user.id), getOwnedTeamSubscription(user.id)])
     : [null, null];

@@ -5,24 +5,6 @@ const billingIntervalOrder: Record<NonNullable<BillingInterval>, number> = {
   year: 1,
 };
 
-export function subscriptionProductIds(
-  configuredProductIds: string | undefined,
-  fallbackProductId: string | undefined,
-) {
-  const productIds = configuredProductIds
-    ?.split(",")
-    .map((productId) => productId.trim())
-    .filter(Boolean);
-
-  return [
-    ...new Set(productIds?.length ? productIds : fallbackProductId ? [fallbackProductId] : []),
-  ];
-}
-
-export function isConfiguredSubscriptionProductId(productId: string, configuredIds: string[]) {
-  return configuredIds.includes(productId);
-}
-
 export function subscriptionIntervalLabel(interval: NonNullable<BillingInterval>) {
   if (interval === "month") return "Monthly";
   return "Yearly";
