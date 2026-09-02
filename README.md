@@ -51,8 +51,8 @@ INNGEST_SIGNING_KEY=
 
 The pricing page discovers active CourseBuilder products whose type is `membership`. Each product
 must have a recurring Stripe price connected through CourseBuilder's `MerchantProduct` and
-`MerchantPrice` rows, a `month` or `year` `billingInterval`, and the database must contain the
-Stripe `MerchantAccount` row.
+`MerchantPrice` rows. Both mapping rows must be active with `status = 1`. The product also needs a
+`month` or `year` `billingInterval`, and the database must contain the Stripe `MerchantAccount` row.
 
 Run the app and the Inngest dev server in separate terminals:
 

@@ -24,6 +24,7 @@ export type ActiveMembershipProduct = Product & {
   type: "membership";
 };
 
+/** Checks the local product and price fields required for a recurring membership. */
 export function isActiveMembershipProduct(
   product: MembershipProductCandidate | Product | null,
 ): product is ActiveMembershipProduct {
@@ -36,6 +37,7 @@ export function isActiveMembershipProduct(
   );
 }
 
+/** Checks that a product has active Stripe product and price mapping rows with identifiers. */
 async function hasActiveMerchantProductAndPrice(productId: string) {
   const adapter = getCourseBuilderAdapter();
   const merchantProduct = await adapter.getMerchantProductForProductId(productId);
@@ -49,6 +51,7 @@ async function hasActiveMerchantProductAndPrice(productId: string) {
   return merchantPrice?.status === 1 && Boolean(merchantPrice.identifier);
 }
 
+/** Loads one membership only when its local product, price, and Stripe mappings are active. */
 export async function getActiveMembershipProduct(productId: string) {
   const product = await getCourseBuilderAdapter().getProduct(productId, false);
 
@@ -64,6 +67,7 @@ export async function getActiveMembershipProduct(productId: string) {
   return product;
 }
 
+/** Discovers every active CourseBuilder membership that is ready to be displayed and purchased. */
 export async function getActiveMembershipProducts() {
   const db = getEggheadDatabase();
   const productIds = await db

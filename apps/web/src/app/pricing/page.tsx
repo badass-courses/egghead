@@ -36,6 +36,7 @@ function checkoutErrorMessage(error: string | undefined) {
   return null;
 }
 
+/** Converts a validated membership product into the pricing card's display model. */
 function getSubscriptionOption(product: ActiveMembershipProduct): SubscriptionOption | null {
   const price = formatProductPrice(product.price.unitAmount, "USD");
   if (!price) return null;
@@ -51,6 +52,7 @@ function getSubscriptionOption(product: ActiveMembershipProduct): SubscriptionOp
   };
 }
 
+/** Builds displayable pricing options in monthly-to-yearly order. */
 function getSubscriptionOptions(products: ActiveMembershipProduct[]) {
   return products
     .map(getSubscriptionOption)
@@ -70,6 +72,7 @@ function PricingLoadingState() {
   );
 }
 
+/** Resolves account state and the active membership catalog for the pricing page. */
 async function ResolvedPricingState({
   searchParams,
 }: {

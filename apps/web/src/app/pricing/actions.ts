@@ -158,6 +158,7 @@ async function storeSubscriptionCheckoutSession(
   });
 }
 
+/** Validates a selected active membership and starts its hosted Stripe Checkout session. */
 export async function startSubscriptionCheckout(formData: FormData) {
   assertCommerceWritesAllowed();
 
