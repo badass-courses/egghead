@@ -18,17 +18,12 @@ import {
 	type EventSeries,
 	type EventSeriesFormData,
 } from '@/lib/events'
+import { createEventAs, updateEventAs } from '@/lib/events-mutations'
 import { getServerAuthSession } from '@/server/auth'
-import { guid } from '@coursebuilder/utils/guid'
-import { subject } from '@casl/ability'
-import slugify from '@sindresorhus/slugify'
 import { and, asc, eq, inArray, or, sql } from 'drizzle-orm'
 import { z } from 'zod'
 
-import {
-	RESOURCE_CREATED_EVENT,
-	RESOURCE_UPDATED_EVENT,
-} from '../inngest/events/resource-management'
+import { RESOURCE_CREATED_EVENT } from '../inngest/events/resource-management'
 import { inngest } from '../inngest/inngest.server'
 import { EmailSchema, type NewEmail } from './emails'
 import { createEmail } from './emails-query'
@@ -133,153 +128,11 @@ export async function updateEvent(
 	const { session, ability } = await getServerAuthSession()
 	const user = session?.user
 
-	if (!input.id) {
-		throw new Error('Event id is required')
-	}
-
-	const currentEvent = await getEventOrEventSeries(input.id)
-
-	if (!currentEvent) {
-		console.error('event.update.notfound', {
-			eventId: input.id,
-			userId: user?.id,
-			action,
-		})
-		throw new Error(`Event with id ${input.id} not found.`)
-	}
-
-	if (!user || !ability.can(action, subject('Content', currentEvent))) {
-		console.error('event.update.unauthorized', {
-			eventId: input.id,
-			userId: user?.id,
-			action,
-		})
+	if (!user) {
 		throw new Error('Unauthorized')
 	}
 
-	let eventSlug = currentEvent.fields.slug
-
-	if (
-		input.fields?.title !== currentEvent.fields.title &&
-		input.fields?.slug?.includes('~')
-	) {
-		const splitSlug = currentEvent.fields.slug.split('~') || ['', guid()]
-		eventSlug = `${slugify(input.fields.title)}~${splitSlug[1] || guid()}`
-		console.log('event.update.slug.changed', {
-			eventId: input.id,
-			oldSlug: currentEvent.fields.slug,
-			newSlug: eventSlug,
-			userId: user.id,
-		})
-	} else if (input?.fields?.slug !== currentEvent.fields.slug) {
-		eventSlug = input?.fields?.slug || ''
-		console.log('event.update.slug.manual', {
-			eventId: input.id,
-			oldSlug: currentEvent.fields.slug,
-			newSlug: eventSlug,
-			userId: user.id,
-		})
-	}
-
-	try {
-		// await upsertPostToTypeSense(
-		// 	{
-		// 		...currentEvent,
-		// 		resources: [],
-		// 		fields: {
-		// 			...currentEvent.fields,
-		// 			...input.fields,
-		// 			description: input.fields?.description || '',
-		// 			slug: eventSlug,
-		// 		},
-		// 	},
-		// 	action,
-		// )
-		console.log('event.update.typesense.success', {
-			eventId: input.id,
-			action,
-			userId: user.id,
-		})
-		console.log('🔍 Event updated in Typesense')
-	} catch (error) {
-		console.error('event.update.typesense.failed', {
-			eventId: input.id,
-			action,
-			userId: user.id,
-		})
-		console.log('❌ Error updating event in Typesense', error)
-	}
-
-	try {
-		const updatedEvent = await courseBuilderAdapter.updateContentResourceFields(
-			{
-				id: currentEvent.id,
-				fields: {
-					...currentEvent.fields,
-					...input.fields,
-					slug: eventSlug,
-				},
-			},
-		)
-
-		if (!updatedEvent) {
-			console.error(`Failed to fetch updated event: ${currentEvent.id}`)
-			return null
-		}
-
-		console.log('event.update.success', {
-			eventId: input.id,
-			action,
-			userId: user.id,
-			changes: Object.keys(input.fields || {}),
-		})
-
-		revalidate && revalidateTag('events', 'max')
-		try {
-			console.log(
-				`Dispatching ${RESOURCE_UPDATED_EVENT} for resource: ${updatedEvent.id} (type: ${updatedEvent.type})`,
-			)
-			const result = await inngest.send({
-				name: RESOURCE_UPDATED_EVENT,
-				data: {
-					id: updatedEvent.id,
-					type: updatedEvent.type,
-				},
-			})
-			console.log(
-				`Dispatched ${RESOURCE_UPDATED_EVENT} for resource: ${updatedEvent.id} (type: ${updatedEvent.type})`,
-				result,
-			)
-		} catch (error) {
-			console.error(`Error dispatching ${RESOURCE_UPDATED_EVENT}`, error)
-		}
-		try {
-			console.log(
-				`Dispatching ${RESOURCE_UPDATED_EVENT} for resource: ${updatedEvent.id} (type: ${updatedEvent.type})`,
-			)
-			const result = await inngest.send({
-				name: RESOURCE_UPDATED_EVENT,
-				data: {
-					id: updatedEvent.id,
-					type: updatedEvent.type,
-				},
-			})
-			console.log(
-				`Dispatched ${RESOURCE_UPDATED_EVENT} for resource: ${updatedEvent.id} (type: ${updatedEvent.type})`,
-				result,
-			)
-		} catch (error) {
-			console.error(`Error dispatching ${RESOURCE_UPDATED_EVENT}`, error)
-		}
-		return updatedEvent
-	} catch (error) {
-		console.error('event.update.failed', {
-			eventId: input.id,
-			action,
-			userId: user.id,
-		})
-		throw error
-	}
+	return updateEventAs(input, action, { user, ability }, revalidate)
 }
 
 /**
@@ -489,35 +342,10 @@ export async function getActiveEvents() {
 export async function createEvent(input: EventFormData) {
 	const { session, ability } = await getServerAuthSession()
 	const user = session?.user
-	if (!user || !ability.can('create', 'Content')) {
+	if (!user) {
 		throw new Error('Unauthorized')
 	}
-	const event = await courseBuilderAdapter.createEvent(input, user.id)
-
-	if (!event) {
-		throw new Error('Failed to create event')
-	}
-	if (!event) {
-		throw new Error('Failed to create event')
-	}
-
-	try {
-		console.log(
-			`Dispatching ${RESOURCE_CREATED_EVENT} for resource: ${event.id} (type: ${event.type})`,
-		)
-		await inngest.send({
-			name: RESOURCE_CREATED_EVENT,
-			data: {
-				id: event.id,
-				type: event.type,
-			},
-		})
-	} catch (error) {
-		console.error(`Error dispatching ${RESOURCE_CREATED_EVENT}`, error)
-	}
-
-	// await upsertPostToTypeSense(event, 'save')
-	return event
+	return createEventAs(input, { user, ability })
 }
 
 /**
