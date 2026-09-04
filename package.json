@@ -25,7 +25,8 @@
     "subscription:lifecycle-contract": "tsx --tsconfig apps/web/tsconfig.json scripts/subscription-lifecycle-contract.ts",
     "identity:readiness-contract": "tsx --tsconfig apps/web/tsconfig.json scripts/identity-readiness-contract.ts",
     "progress:readiness-contract": "tsx --tsconfig apps/web/tsconfig.json scripts/progress-readiness-contract.ts",
-    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm search:typesense-contract && pnpm sitemap:contract && pnpm stripe:subscription-contract && pnpm profile:contract && pnpm email:contract && pnpm beta:runtime-guard && pnpm checkout:readiness-contract && pnpm subscription:lifecycle-contract && pnpm identity:readiness-contract && pnpm progress:readiness-contract && pnpm builder:smoke",
+    "readiness:regression": "tsx --tsconfig apps/web/tsconfig.json --experimental-test-module-mocks --experimental-import-meta-resolve --test --test-concurrency=1 --test-timeout=15000 --test-reporter=tap scripts/readiness-regression/*.test.ts",
+    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm search:typesense-contract && pnpm sitemap:contract && pnpm stripe:subscription-contract && pnpm profile:contract && pnpm email:contract && pnpm beta:runtime-guard && pnpm checkout:readiness-contract && pnpm subscription:lifecycle-contract && pnpm identity:readiness-contract && pnpm progress:readiness-contract && pnpm readiness:regression && pnpm builder:smoke",
     "hooks:install": "lefthook install",
     "hooks:pre-commit": "lefthook run pre-commit --all-files"
   },

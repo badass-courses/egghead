@@ -176,6 +176,13 @@ records the exact implementation commit; no real customer data or credentials ar
 
 - `pnpm check`: both TypeScript compilers, strict lint, formatting, existing contracts and
   the new runtime, checkout, lifecycle, identity and progress contracts pass locally.
+- `pnpm readiness:regression`: 97 regressions through real application entry points, included
+  in `pnpm check`. Test-only commit `4c67b8e` was cherry-picked onto pre-implementation
+  `fab0259` as `d3f3026`: all 97 fail with assertion errors there, then the identical 97 pass
+  on implementation `88aa2be` plus the test commit. No cases skip or cancel. The committed
+  test trees are identical; no implementation files were cherry-picked. Persistence and
+  provider boundaries remain synthetic: this does not prove live database locking,
+  Stripe charges, or Inngest delivery/deduplication.
 - Checkout contracts cover slow concurrent creation, changed selection, lost responses,
   failed expiration, current-state retrieval after idempotency replay, expired key retention,
   exact canceled-subscription association, and ambiguous catalog rejection. These demonstrate
