@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getCourseBySlug } from "../content/course";
 import { getCurrentUser } from "../coursebuilder/current-user";
 import { saveCourseReviewForUser, syncCourseProgressForUser } from "./course-progress";
+import { withProgressTransaction } from "./progress-transaction";
 
 const courseProgressInputSchema = z.object({
   courseId: z.string().min(1).max(255),
@@ -25,7 +26,7 @@ export type SyncCourseCompletionResult =
       shouldPromptForReview: boolean;
     }
   | {
-      status: "incomplete";
+      status: "incomplete" | "empty_course";
       courseId: string;
       completedAt: null;
       shouldPromptForReview: false;
@@ -97,7 +98,7 @@ export async function syncCourseCompletion(input: unknown): Promise<SyncCourseCo
 
     if (!progress.completed || !progress.completedAt) {
       return {
-        status: "incomplete",
+        status: progress.emptyCourse ? "empty_course" : "incomplete",
         courseId: course.id,
         completedAt: null,
         shouldPromptForReview: false,
@@ -142,11 +143,24 @@ export async function submitCourseReview(input: unknown): Promise<SubmitCourseRe
     const course = await validatedCourse(parsed.data);
     if (!course) return { status: "invalid_course", courseId };
 
-    const result = await saveCourseReviewForUser({
-      userId: user.id,
-      courseId: course.id,
-      rating: parsed.data.rating,
-      comment: parsed.data.comment,
+    const result = await withProgressTransaction(user.id, async (connection) => {
+      await syncCourseProgressForUser(
+        {
+          userId: user.id,
+          courseId: course.id,
+          lessonIds: course.lessons.map((lesson) => lesson.id),
+        },
+        connection,
+      );
+      return saveCourseReviewForUser(
+        {
+          userId: user.id,
+          courseId: course.id,
+          rating: parsed.data.rating,
+          comment: parsed.data.comment,
+        },
+        connection,
+      );
     });
 
     switch (result.status) {

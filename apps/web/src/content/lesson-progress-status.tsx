@@ -20,13 +20,14 @@ function WatchedIcon({ className }: { className: string }) {
 }
 
 export function LessonProgressControl({ lessonResourceId }: { lessonResourceId: string }) {
-  const { completeLesson, feedbackForLesson, isLessonCompleted, uncompleteLesson } =
+  const { completeLesson, feedbackForLesson, isLessonCompleted, readStatus, uncompleteLesson } =
     useLessonProgress();
   const isCompleted = isLessonCompleted(lessonResourceId);
   const isSaving = feedbackForLesson(lessonResourceId).status === "saving";
+  const isUnavailable = readStatus === "unavailable";
 
   function toggleLessonCompletion() {
-    if (isSaving) return;
+    if (isSaving || isUnavailable) return;
 
     if (isCompleted) {
       void uncompleteLesson(lessonResourceId);
@@ -36,11 +37,15 @@ export function LessonProgressControl({ lessonResourceId }: { lessonResourceId: 
     void completeLesson(lessonResourceId);
   }
 
-  const label = isCompleted ? "Mark lesson as unwatched" : "Mark lesson as watched";
+  const label = isUnavailable
+    ? "Saved progress unavailable"
+    : isCompleted
+      ? "Mark lesson as unwatched"
+      : "Mark lesson as watched";
 
   return (
     <button
-      aria-disabled={isSaving}
+      aria-disabled={isSaving || isUnavailable}
       aria-label={label}
       aria-pressed={isCompleted}
       className={
@@ -48,7 +53,9 @@ export function LessonProgressControl({ lessonResourceId }: { lessonResourceId: 
           ? "-mx-2 inline-grid size-11 shrink-0 place-items-center rounded-full text-sage-foreground transition-colors hover:bg-sage-wash focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-disabled:opacity-50"
           : "group -mx-2 inline-grid size-11 shrink-0 place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring aria-disabled:opacity-50"
       }
-      data-progress-control={isCompleted ? "completed" : "incomplete"}
+      data-progress-control={
+        isUnavailable ? "unavailable" : isCompleted ? "completed" : "incomplete"
+      }
       onClick={toggleLessonCompletion}
       title={label}
       type="button"

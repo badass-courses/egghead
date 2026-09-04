@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev --turbo --port 3008",
     "dev:inngest": "pnpx inngest-cli@latest dev --no-discovery -u http://localhost:3008/api/inngest",
-    "dev:stripe": "stripe listen --events checkout.session.completed,customer.subscription.updated --forward-to http://localhost:3008/api/coursebuilder/webhook/stripe",
+    "dev:stripe": "stripe listen --events checkout.session.completed,customer.subscription.updated,customer.subscription.deleted,invoice.paid --forward-to http://localhost:3008/api/coursebuilder/webhook/stripe",
     "build": "next build",
     "typegen": "next typegen",
     "typecheck": "pnpm typegen && tsc --noEmit -p tsconfig.json",

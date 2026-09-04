@@ -172,7 +172,7 @@ export default async function RootContentPage({ params }: RootContentPageProps) 
 
   const lesson = await getLessonBySlug(slug);
 
-  if (lesson?.courseLinked) {
+  if (lesson?.parentCourseSlug) {
     permanentRedirect(lesson.canonicalPath);
   }
 

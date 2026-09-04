@@ -2,11 +2,17 @@ import { courseAccessFromFields } from "../apps/web/src/content/course-access";
 import { COURSE_LESSON_STATIC_PARAM_LIMIT } from "../apps/web/src/content/course";
 import {
   ACCESS_ENTITLEMENT_ROWS_SQL,
+  evaluateAccessEntitlementRows,
+  type AccessEntitlement,
   entitlementGrantsAccess,
   normalizeRequestCountry,
 } from "../apps/web/src/access/evaluate";
+import { selectCurrentSubscriptionForUser } from "../apps/web/src/subscriptions/status";
+import { supportAccessReadbackFromRows } from "../apps/web/src/support/readback";
+import { getLessonPlaybackForAccess, lessonForPageFromRows } from "../apps/web/src/content/lesson";
 import { lessonCanonicalPathForRouteContext } from "../apps/web/src/content/lesson-route-context";
 import {
+  lessonAccessFromFields,
   lessonFreeForeverFromFields,
   lessonHasRailsProContentSignal,
   lessonRequiresAccess,
@@ -55,6 +61,134 @@ function assertNotIncludes(name: string, values: readonly string[], blocked: str
 
   return { name, pass: true as const };
 }
+
+const cohortNow = Date.UTC(2030, 0, 15);
+const futureBoundary = new Date(cohortNow + 60_000);
+const pastBoundary = new Date(cohortNow - 60_000);
+const cohortUserId = "synthetic-learner";
+const personalSubscription = {
+  id: "synthetic-personal",
+  status: "active",
+  fields: { ownerId: cohortUserId, seats: 1, subscriptionKind: "personal" },
+};
+const teamSubscription = {
+  id: "synthetic-team",
+  status: "active",
+  fields: { ownerId: "synthetic-owner", seats: 4, subscriptionKind: "team" },
+};
+const memberSeat = {
+  sourceId: teamSubscription.id,
+  sourceType: "stripe_subscription",
+  entitlementType: "egghead_all_access_subscription",
+  userId: cohortUserId,
+  deletedAt: null,
+  expiresAt: futureBoundary,
+  metadata: { status: "active" },
+};
+
+function cohortEntitlement(overrides: Partial<AccessEntitlement> = {}): AccessEntitlement {
+  return {
+    entitlementType: "egghead_all_access_subscription",
+    sourceType: "stripe_subscription",
+    status: "active",
+    sellableId: null,
+    sellableType: null,
+    restrictedToCountry: null,
+    expiresAt: futureBoundary,
+    deletedAt: null,
+    isDirectGrant: 1,
+    ...overrides,
+  };
+}
+
+const entitlementCohorts = [
+  { name: "personal subscriber", rows: [cohortEntitlement()], granted: true },
+  { name: "unseated team owner", rows: [], granted: false },
+  { name: "seated team member", rows: [cohortEntitlement({ hasMembership: 1 })], granted: true },
+  {
+    name: "removed member",
+    rows: [cohortEntitlement({ deletedAt: pastBoundary })],
+    granted: false,
+  },
+  {
+    name: "expired member",
+    rows: [cohortEntitlement({ expiresAt: pastBoundary })],
+    granted: false,
+  },
+  {
+    name: "boundary-expired member",
+    rows: [cohortEntitlement({ expiresAt: new Date(cohortNow) })],
+    granted: false,
+  },
+  { name: "org-only member", rows: [cohortEntitlement({ isDirectGrant: 0 })], granted: false },
+  {
+    name: "seat without paid-through proof",
+    rows: [cohortEntitlement({ expiresAt: null })],
+    granted: false,
+  },
+  {
+    name: "failed payment retains proven boundary",
+    rows: [cohortEntitlement({ status: "past_due" })],
+    granted: true,
+  },
+  {
+    name: "failed payment past proven boundary",
+    rows: [cohortEntitlement({ status: "past_due", expiresAt: pastBoundary })],
+    granted: false,
+  },
+  {
+    name: "terminal canceled legacy",
+    rows: [cohortEntitlement({ sourceType: "rails_account_subscription", status: "canceled" })],
+    granted: false,
+  },
+  {
+    name: "terminal cancelled legacy alias",
+    rows: [cohortEntitlement({ sourceType: "rails_account_subscription", status: " Cancelled " })],
+    granted: false,
+  },
+  {
+    name: "legacy importer expiry contract",
+    rows: [
+      cohortEntitlement({ sourceType: "rails_account_subscription", expiresAt: pastBoundary }),
+    ],
+    granted: true,
+  },
+  {
+    name: "legacy importer missing status contract",
+    rows: [
+      cohortEntitlement({
+        sourceType: "rails_account_subscription",
+        status: null,
+        expiresAt: pastBoundary,
+      }),
+    ],
+    granted: true,
+  },
+  {
+    name: "lifetime",
+    rows: [
+      cohortEntitlement({
+        entitlementType: "egghead_lifetime_access",
+        sourceType: "synthetic_lifetime",
+        status: null,
+        expiresAt: null,
+      }),
+    ],
+    granted: true,
+  },
+  {
+    name: "quarantine",
+    rows: [
+      cohortEntitlement({
+        entitlementType: "egghead_legacy_pro_quarantine",
+        sourceType: "synthetic_legacy",
+        status: null,
+        expiresAt: null,
+      }),
+    ],
+    granted: false,
+  },
+];
 
 const checks = [
   assertEqual(
@@ -350,6 +484,272 @@ const checks = [
   ),
 ];
 
+for (const cohort of entitlementCohorts) {
+  const context = { now: cohortNow };
+  const access = evaluateAccessEntitlementRows(cohort.rows, context);
+  const support = supportAccessReadbackFromRows(cohort.rows, context);
+  checks.push(
+    assertEqual(`${cohort.name}: effective access`, access.granted, cohort.granted),
+    assertEqual(`${cohort.name}: support agrees`, support.access.granted, access.granted),
+    assertEqual(`${cohort.name}: support reason agrees`, support.access.reason, access.reason),
+    assertEqual(
+      `${cohort.name}: support granting sources agree`,
+      JSON.stringify(support.sourceFamilies.grantSourceTypes),
+      JSON.stringify(access.sourceTypes),
+    ),
+  );
+}
+
+const playlistGrant = cohortEntitlement({
+  entitlementType: "egghead_playlist_access",
+  sourceType: "synthetic_purchase",
+  status: null,
+  expiresAt: null,
+  sellableType: "Playlist",
+  sellableId: "synthetic-playlist",
+  restrictedToCountry: "IN",
+});
+for (const country of ["IN", "US", null]) {
+  const context = {
+    legacyRailsPlaylistId: "synthetic-playlist",
+    requestCountry: country,
+    now: cohortNow,
+  };
+  const access = evaluateAccessEntitlementRows([playlistGrant], context);
+  const support = supportAccessReadbackFromRows([playlistGrant], context);
+  checks.push(
+    assertEqual(
+      `playlist country ${country ?? "unknown"}: access`,
+      access.granted,
+      country === "IN",
+    ),
+    assertEqual(
+      `playlist country ${country ?? "unknown"}: support agrees`,
+      support.access.granted,
+      access.granted,
+    ),
+  );
+}
+
+const mixedReadback = supportAccessReadbackFromRows(
+  [
+    cohortEntitlement({
+      entitlementType: "egghead_legacy_pro_quarantine",
+      sourceType: "a_quarantine",
+    }),
+    cohortEntitlement({
+      entitlementType: "egghead_lifetime_access",
+      sourceType: "z_lifetime",
+      status: null,
+      expiresAt: null,
+    }),
+    cohortEntitlement({ sourceType: "rails_account_subscription", status: "canceled" }),
+  ],
+  { now: cohortNow },
+);
+checks.push(
+  assertEqual(
+    "support names the actual granting source, not the first unrelated source",
+    mixedReadback.explanation.summary,
+    "Access granted by egghead_lifetime_access from z_lifetime.",
+  ),
+  assertNotIncludes(
+    "support excludes terminal canceled source from effective reasoning",
+    mixedReadback.sourceFamilies.allSourceTypes,
+    "rails_account_subscription",
+  ),
+  assertEqual(
+    "personal subscription requires actual owner",
+    selectCurrentSubscriptionForUser([personalSubscription], [], cohortUserId, cohortNow)?.id ??
+      "none",
+    personalSubscription.id,
+  ),
+  assertEqual(
+    "org-only member does not own another personal subscription",
+    selectCurrentSubscriptionForUser(
+      [personalSubscription],
+      [],
+      "synthetic-org-member",
+      cohortNow,
+    ) === null,
+    true,
+  ),
+  assertEqual(
+    "unseated team owner can still manage subscription",
+    selectCurrentSubscriptionForUser([teamSubscription], [], "synthetic-owner", cohortNow)?.id ??
+      "none",
+    teamSubscription.id,
+  ),
+  assertEqual(
+    "direct unexpired seat classifies member without org membership",
+    selectCurrentSubscriptionForUser([teamSubscription], [memberSeat], cohortUserId, cohortNow)
+      ?.id ?? "none",
+    teamSubscription.id,
+  ),
+  assertEqual(
+    "member classification does not fabricate ownership",
+    selectCurrentSubscriptionForUser([teamSubscription], [memberSeat], cohortUserId, cohortNow)
+      ?.fields.ownerId ?? "none",
+    "synthetic-owner",
+  ),
+  assertEqual(
+    "removed direct seat cannot classify member",
+    selectCurrentSubscriptionForUser(
+      [teamSubscription],
+      [{ ...memberSeat, deletedAt: pastBoundary }],
+      cohortUserId,
+      cohortNow,
+    ) === null,
+    true,
+  ),
+  assertEqual(
+    "expired direct seat cannot classify member",
+    selectCurrentSubscriptionForUser(
+      [teamSubscription],
+      [{ ...memberSeat, expiresAt: pastBoundary }],
+      cohortUserId,
+      cohortNow,
+    ) === null,
+    true,
+  ),
+  assertEqual(
+    "null-expiry direct seat cannot classify member",
+    selectCurrentSubscriptionForUser(
+      [teamSubscription],
+      [{ ...memberSeat, expiresAt: null }],
+      cohortUserId,
+      cohortNow,
+    ) === null,
+    true,
+  ),
+  assertEqual(
+    "terminal subscription cannot classify member",
+    selectCurrentSubscriptionForUser(
+      [{ ...teamSubscription, status: "canceled" }],
+      [memberSeat],
+      cohortUserId,
+      cohortNow,
+    ) === null,
+    true,
+  ),
+);
+
+for (const fields of [
+  { isProContent: true },
+  { is_pro_content: true },
+  { freeAccess: false },
+  { access: "pro" },
+  { freeForever: false },
+]) {
+  checks.push(
+    assertEqual(
+      `known paid ${JSON.stringify(fields)} without parent remains gated`,
+      lessonRequiresAccess(lessonAccessFromFields(fields, { hasParentCourseEvidence: false })),
+      true,
+    ),
+  );
+}
+checks.push(
+  assertEqual(
+    "missing parent slug does not erase existing parent evidence",
+    lessonRequiresAccess(lessonAccessFromFields({}, { hasParentCourseEvidence: true })),
+    true,
+  ),
+  assertEqual(
+    "intentionally standalone lesson without paid metadata remains ungated",
+    lessonRequiresAccess(lessonAccessFromFields({}, { hasParentCourseEvidence: false })),
+    false,
+  ),
+  assertEqual(
+    "explicit free standalone lesson remains ungated",
+    lessonRequiresAccess(
+      lessonAccessFromFields(
+        { isProContent: false, freeAccess: false },
+        { hasParentCourseEvidence: false },
+      ),
+    ),
+    false,
+  ),
+  assertEqual(
+    "free lesson with unresolved parent remains ungated",
+    lessonRequiresAccess(
+      lessonAccessFromFields({ freeAccess: true }, { hasParentCourseEvidence: true }),
+    ),
+    false,
+  ),
+  assertEqual(
+    "same-slug paid evidence survives missing parent",
+    lessonRequiresAccess(
+      lessonAccessFromFields({}, { hasParentCourseEvidence: false, freeForeverOverride: false }),
+    ),
+    true,
+  ),
+  assertEqual(
+    "same-slug authoritative free marking wins",
+    lessonRequiresAccess(
+      lessonAccessFromFields(
+        { freeAccess: false },
+        { hasParentCourseEvidence: true, freeForeverOverride: true },
+      ),
+    ),
+    false,
+  ),
+  assertEqual(
+    "denied playback returns no media and performs no DB read",
+    (await getLessonPlaybackForAccess("synthetic-denied-lesson", false)) === null,
+    true,
+  ),
+);
+
+const publicPaidLesson = lessonForPageFromRows({
+  lesson: {
+    id: "synthetic-public-lesson",
+    fields: {
+      title: "Synthetic paid lesson",
+      slug: "synthetic-paid-lesson",
+      isProContent: true,
+      muxPlaybackId: "synthetic-private-playback",
+      currentVideoHlsUrl: "https://media.example.invalid/synthetic-private-hls.m3u8",
+      currentVideoDashUrl: "https://media.example.invalid/synthetic-private-dash.mpd",
+      thumbnailUrl: "https://image.mux.com/synthetic-private-poster/thumbnail.webp",
+    },
+  },
+  parentCourse: { id: "synthetic-missing-slug-course", fields: { title: "Synthetic course" } },
+  videoResource: { id: "synthetic-private-video-resource", fields: {} },
+  requestedSlug: "synthetic-paid-lesson",
+  hasParentCourseEvidence: true,
+});
+const publicLessonPayload = JSON.stringify(publicPaidLesson);
+for (const privateMarker of [
+  "synthetic-private",
+  "videoHlsUrl",
+  "videoDashUrl",
+  "videoPosterUrl",
+  "videoMuxPlaybackId",
+  "videoResourceId",
+]) {
+  checks.push(
+    assertEqual(
+      `public page/RSC/embed projection omits ${privateMarker}`,
+      publicLessonPayload.includes(privateMarker),
+      false,
+    ),
+  );
+}
+checks.push(
+  assertEqual("public lesson retains only video availability", publicPaidLesson.hasVideo, true),
+  assertEqual(
+    "paid lesson with missing parent slug remains gated in actual page projection",
+    lessonRequiresAccess(publicPaidLesson),
+    true,
+  ),
+  assertEqual(
+    "missing parent slug uses standalone route without downgrading access",
+    publicPaidLesson.canonicalPath,
+    "/synthetic-paid-lesson",
+  ),
+);
+
 console.log(
   JSON.stringify({
     ok: true,
@@ -362,7 +762,8 @@ console.log(
       legacyUrlsPreserved: true,
       lessonStaticParamLimit: LESSON_STATIC_PARAM_LIMIT,
       lessonLevelFreeMarkingWinsOverCourseGating: true,
-      onlyCourseLinkedLessonsMayGate: true,
+      knownPaidLessonsRemainGatedWithoutParentRouting: true,
+      deniedLessonsNeverLoadPlaybackProjection: true,
     },
   }),
 );

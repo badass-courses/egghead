@@ -10,7 +10,14 @@ import { getSiteUrl } from "../../coursebuilder/stripe-provider";
 import { commerceWritesAreAllowed } from "../../db/local-docker";
 import { getOwnedTeamSubscription } from "../../subscriptions/team";
 import { createTeamInviteToken } from "../../subscriptions/team-invite-token";
-import { claimTeamSeat, inviteTeamMember, removeTeamMember } from "./actions";
+import { listOwnedTeamInvitations } from "../../subscriptions/team-invitations";
+import { teamInvitationStatus } from "../../subscriptions/team-invitation-state";
+import {
+  claimTeamSeat,
+  inviteTeamMember,
+  removeTeamMember,
+  revokeTeamMemberInvitation,
+} from "./actions";
 import { TeamInviteLink } from "./team-invite-link";
 
 export const metadata: Metadata = {
@@ -29,9 +36,12 @@ function firstParam(value: string | string[] | undefined) {
 
 function teamErrorMessage(error: string | undefined) {
   if (error === "invalid-invite") return "Enter a valid teammate email address.";
-  if (error === "invite-email-failed") return "We could not send that invitation. Try again.";
+  if (error === "invite-email-failed")
+    return "Email delivery failed. Copy the saved invitation below or revoke it.";
   if (error === "already-assigned") return "That person already has a seat on this team.";
   if (error === "team-full") return "Every team seat is currently assigned.";
+  if (error === "invitation-unavailable")
+    return "That invitation has expired, was accepted, or was revoked.";
   if (error) return "We could not update this team membership. Please try again.";
   return null;
 }
@@ -40,6 +50,8 @@ function teamNoticeMessage(notice: string | undefined) {
   if (notice === "seat-claimed") return "Your seat is active. Welcome to the team.";
   if (notice === "seat-removed") return "The seat is available for someone new.";
   if (notice === "invite-sent") return "Invitation sent. The seat is claimed when they accept.";
+  if (notice === "invite-revoked")
+    return "Invitation revoked. Its link can no longer claim a seat.";
   return null;
 }
 
@@ -115,8 +127,10 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
     );
   }
 
-  const inviteToken = createTeamInviteToken(team.id);
-  const inviteUrl = new URL(`/team/invite/${inviteToken}`, getSiteUrl()).toString();
+  const invitations = await listOwnedTeamInvitations({
+    subscriptionId: team.id,
+    ownerId: currentUser.id,
+  });
 
   return (
     <main>
@@ -248,12 +262,8 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
             <section className="rounded-2xl border border-border-strong bg-surface-grad p-5 shadow-card sm:p-6">
               <h2 className="text-xl font-black">Invite teammates</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Share this link. Each person signs in and accepts their own seat.
+                Each invitation is email-scoped, expires in 7 days, and can be accepted once.
               </p>
-              <TeamInviteLink
-                disabled={!writesAllowed || team.availableSeats === 0}
-                url={inviteUrl}
-              />
 
               <form
                 action={inviteTeamMember}
@@ -261,7 +271,7 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
               >
                 <input name="subscriptionId" type="hidden" value={team.id} />
                 <label className="grid gap-1.5" htmlFor="team-email">
-                  <span className="text-sm font-extrabold">Send to a specific email</span>
+                  <span className="text-sm font-extrabold">Teammate email address</span>
                   <input
                     aria-label="Teammate email address"
                     autoComplete="email"
@@ -288,6 +298,55 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
                 <p className="mt-3 text-xs font-bold text-rust">
                   Your team is full. Remove a teammate before sending another invite.
                 </p>
+              ) : null}
+              {invitations.length > 0 ? (
+                <ul
+                  className="mt-6 grid gap-5 border-t border-border pt-5"
+                  aria-label="Team invitations"
+                >
+                  {invitations.map((invitation) => {
+                    const status = teamInvitationStatus(invitation);
+                    return (
+                      <li className="min-w-0" key={invitation.invitationId}>
+                        <p className="break-all text-sm font-extrabold">{invitation.email}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {status === "pending"
+                            ? `Expires ${formatJoinDate(new Date(invitation.expiresAt))}`
+                            : status}
+                        </p>
+                        {status === "pending" ? (
+                          <>
+                            <TeamInviteLink
+                              disabled={!writesAllowed}
+                              email={invitation.email}
+                              url={new URL(
+                                `/team/invite/${createTeamInviteToken(invitation)}`,
+                                getSiteUrl(),
+                              ).toString()}
+                            />
+                            <form action={revokeTeamMemberInvitation} className="mt-2">
+                              <input name="subscriptionId" type="hidden" value={team.id} />
+                              <input
+                                name="invitationId"
+                                type="hidden"
+                                value={invitation.invitationId}
+                              />
+                              <Button
+                                aria-label={`Revoke invitation for ${invitation.email}`}
+                                disabled={!writesAllowed}
+                                size="sm"
+                                type="submit"
+                                variant="ghost"
+                              >
+                                Revoke invitation
+                              </Button>
+                            </form>
+                          </>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
               ) : null}
             </section>
           </aside>

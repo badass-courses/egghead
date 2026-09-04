@@ -1,6 +1,7 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 
-import { createLocalMysqlConnection } from "../db/local-docker";
+import { assertProgressWritesAllowed } from "../db/local-docker";
+import { withProgressTransaction, type ProgressConnection } from "./progress-transaction";
 
 type CompletedLessonCountRow = RowDataPacket & {
   completedCount: number | string;
@@ -21,6 +22,7 @@ export type CourseProgressSyncState = {
   completed: boolean;
   completedAt: string | null;
   reviewSubmitted: boolean;
+  emptyCourse: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -62,7 +64,7 @@ function courseReviewFromFields(value: unknown): CourseReview | null {
 }
 
 async function readCourseProgressRow(
-  connection: Awaited<ReturnType<typeof createLocalMysqlConnection>>,
+  connection: ProgressConnection,
   input: { userId: string; courseId: string },
 ) {
   const [rows] = await connection.execute<CourseProgressRow[]>(
@@ -79,23 +81,29 @@ async function readCourseProgressRow(
   return rows[0] ?? null;
 }
 
-export async function syncCourseProgressForUser(input: {
-  userId: string;
-  courseId: string;
-  lessonIds: readonly string[];
-}): Promise<CourseProgressSyncState> {
+export async function syncCourseProgressForUser(
+  input: {
+    userId: string;
+    courseId: string;
+    lessonIds: readonly string[];
+  },
+  sharedConnection?: ProgressConnection,
+): Promise<CourseProgressSyncState> {
+  const safety = assertProgressWritesAllowed();
+  if (!sharedConnection) {
+    return withProgressTransaction(input.userId, (connection) =>
+      syncCourseProgressForUser(input, connection),
+    );
+  }
   const lessonIds = [...new Set(input.lessonIds.filter(Boolean))];
-  const connection = await createLocalMysqlConnection();
+  const connection = sharedConnection;
 
-  try {
-    await connection.beginTransaction();
+  let completedCount = 0;
 
-    let completedCount = 0;
-
-    if (lessonIds.length > 0) {
-      const placeholders = lessonIds.map(() => "?").join(", ");
-      const [countRows] = await connection.execute<CompletedLessonCountRow[]>(
-        `
+  if (lessonIds.length > 0) {
+    const placeholders = lessonIds.map(() => "?").join(", ");
+    const [countRows] = await connection.execute<CompletedLessonCountRow[]>(
+      `
           SELECT COUNT(DISTINCT resourceId) AS completedCount
           FROM egghead_ResourceProgress
           WHERE userId = ?
@@ -103,19 +111,19 @@ export async function syncCourseProgressForUser(input: {
             AND resourceId IN (${placeholders})
           FOR SHARE
         `,
-        [input.userId, ...lessonIds],
-      );
-      completedCount = Number(countRows[0]?.completedCount ?? 0);
-    }
-    const completed = lessonIds.length > 0 && completedCount === lessonIds.length;
-    const progressFields = JSON.stringify({
-      source: completed ? "all_lessons_completed" : "course_lessons_incomplete",
-      localOnly: true,
-    });
+      [input.userId, ...lessonIds],
+    );
+    completedCount = Number(countRows[0]?.completedCount ?? 0);
+  }
+  const completed = lessonIds.length > 0 && completedCount === lessonIds.length;
+  const progressFields = JSON.stringify({
+    source: completed ? "all_lessons_completed" : "course_lessons_incomplete",
+    localOnly: safety.localDockerOnly,
+  });
 
-    if (lessonIds.length > 0 && completed) {
-      await connection.execute<ResultSetHeader>(
-        `
+  if (completed) {
+    await connection.execute<ResultSetHeader>(
+      `
           INSERT INTO egghead_ResourceProgress
             (userId, resourceId, completedAt, fields, createdAt, updatedAt)
           VALUES (?, ?, CURRENT_TIMESTAMP(3), CAST(? AS JSON), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
@@ -124,11 +132,11 @@ export async function syncCourseProgressForUser(input: {
             fields = JSON_MERGE_PATCH(COALESCE(fields, JSON_OBJECT()), VALUES(fields)),
             updatedAt = CURRENT_TIMESTAMP(3)
         `,
-        [input.userId, input.courseId, progressFields],
-      );
-    } else if (lessonIds.length > 0) {
-      await connection.execute<ResultSetHeader>(
-        `
+      [input.userId, input.courseId, progressFields],
+    );
+  } else {
+    await connection.execute<ResultSetHeader>(
+      `
           UPDATE egghead_ResourceProgress
           SET completedAt = NULL,
               fields = JSON_MERGE_PATCH(COALESCE(fields, JSON_OBJECT()), CAST(? AS JSON)),
@@ -136,33 +144,40 @@ export async function syncCourseProgressForUser(input: {
           WHERE userId = ?
             AND resourceId = ?
         `,
-        [progressFields, input.userId, input.courseId],
-      );
-    }
-
-    const row = await readCourseProgressRow(connection, input);
-    await connection.commit();
-
-    return {
-      completed: row?.completedAt !== null && row?.completedAt !== undefined,
-      completedAt: row?.completedAt ? row.completedAt.toISOString() : null,
-      reviewSubmitted: courseReviewFromFields(row?.fields) !== null,
-    };
-  } catch (error) {
-    await connection.rollback().catch(() => undefined);
-    throw error;
-  } finally {
-    await connection.end();
+      [progressFields, input.userId, input.courseId],
+    );
   }
+
+  const row = await readCourseProgressRow(connection, input);
+
+  return {
+    completed: row?.completedAt !== null && row?.completedAt !== undefined,
+    completedAt: row?.completedAt ? row.completedAt.toISOString() : null,
+    reviewSubmitted: courseReviewFromFields(row?.fields) !== null,
+    emptyCourse: lessonIds.length === 0,
+  };
 }
 
-export async function saveCourseReviewForUser(input: {
-  userId: string;
-  courseId: string;
-  rating: number;
-  comment: string;
-}) {
-  const connection = await createLocalMysqlConnection();
+export type CourseReviewWriteResult =
+  | { status: "saved"; review: CourseReview }
+  | { status: "course_incomplete" | "missing_progress"; review: null };
+
+export async function saveCourseReviewForUser(
+  input: {
+    userId: string;
+    courseId: string;
+    rating: number;
+    comment: string;
+  },
+  sharedConnection?: ProgressConnection,
+): Promise<CourseReviewWriteResult> {
+  const safety = assertProgressWritesAllowed();
+  if (!sharedConnection) {
+    return withProgressTransaction(input.userId, (connection) =>
+      saveCourseReviewForUser(input, connection),
+    );
+  }
+  const connection = sharedConnection;
   const review: CourseReview = {
     rating: input.rating,
     comment: input.comment,
@@ -170,13 +185,12 @@ export async function saveCourseReviewForUser(input: {
   };
   const fields = JSON.stringify({
     source: "course_review_submission",
-    localOnly: true,
+    localOnly: safety.localDockerOnly,
     review,
   });
 
-  try {
-    const [result] = await connection.execute<ResultSetHeader>(
-      `
+  const [result] = await connection.execute<ResultSetHeader>(
+    `
         UPDATE egghead_ResourceProgress
         SET fields = JSON_MERGE_PATCH(COALESCE(fields, JSON_OBJECT()), CAST(? AS JSON)),
             updatedAt = CURRENT_TIMESTAMP(3)
@@ -184,18 +198,15 @@ export async function saveCourseReviewForUser(input: {
           AND resourceId = ?
           AND completedAt IS NOT NULL
       `,
-      [fields, input.userId, input.courseId],
-    );
+    [fields, input.userId, input.courseId],
+  );
 
-    if (result.affectedRows > 0) {
-      return { status: "saved" as const, review };
-    }
-
-    const progress = await readCourseProgressRow(connection, input);
-    return progress
-      ? { status: "course_incomplete" as const, review: null }
-      : { status: "missing_progress" as const, review: null };
-  } finally {
-    await connection.end();
+  if (result.affectedRows > 0) {
+    return { status: "saved" as const, review };
   }
+
+  const progress = await readCourseProgressRow(connection, input);
+  return progress
+    ? { status: "course_incomplete" as const, review: null }
+    : { status: "missing_progress" as const, review: null };
 }
