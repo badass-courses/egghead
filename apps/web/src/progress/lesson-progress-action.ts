@@ -5,7 +5,12 @@ import { logger } from "@coursebuilder/core/utils/logger";
 import { getLessonById } from "../content/lesson";
 import { getCurrentUser } from "../coursebuilder/current-user";
 import { recordAnonymousLessonCompletion } from "./anonymous-lesson-progress";
-import { completeResourceForUser, uncompleteResourceForUser } from "./resource-progress";
+import type { CourseProgressSyncState } from "./course-progress";
+import {
+  resolveLessonProgressCourses,
+  writeLessonProgressForUser,
+  type ProgressCourseReference,
+} from "./lesson-progress";
 
 export type LessonProgressSource = "lesson_player_ended" | "lesson_progress_control";
 
@@ -14,6 +19,7 @@ export type CompleteLessonProgressResult =
       status: "completed";
       resourceId: string;
       completedAt: string;
+      course: CourseProgressSyncState | null;
     }
   | {
       status: "anonymous_completed";
@@ -41,6 +47,7 @@ export type UncompleteLessonProgressResult =
 export async function completeLessonProgress(input: {
   resourceId: string;
   source: LessonProgressSource;
+  course?: ProgressCourseReference;
 }): Promise<CompleteLessonProgressResult> {
   const resourceId = typeof input?.resourceId === "string" ? input.resourceId : "";
   const source =
@@ -91,10 +98,13 @@ export async function completeLessonProgress(input: {
       };
     }
 
-    const progress = await completeResourceForUser({
+    const courses = await resolveLessonProgressCourses(lesson, input.course);
+    const progress = await writeLessonProgressForUser({
       userId: user.id,
       resourceId: lesson.id,
       source,
+      completed: true,
+      courses,
     });
 
     if (!progress.state.completedAt) {
@@ -109,6 +119,7 @@ export async function completeLessonProgress(input: {
       status: "completed",
       resourceId: lesson.id,
       completedAt: progress.state.completedAt,
+      course: progress.course,
     };
   } catch (error) {
     logger.error(
@@ -126,6 +137,7 @@ export async function completeLessonProgress(input: {
 
 export async function uncompleteLessonProgress(input: {
   resourceId: string;
+  course?: ProgressCourseReference;
 }): Promise<UncompleteLessonProgressResult> {
   const resourceId = typeof input?.resourceId === "string" ? input.resourceId : "";
   const user = await getCurrentUser();
@@ -157,10 +169,13 @@ export async function uncompleteLessonProgress(input: {
       };
     }
 
-    const progress = await uncompleteResourceForUser({
+    const courses = await resolveLessonProgressCourses(lesson, input.course);
+    const progress = await writeLessonProgressForUser({
       userId: user.id,
       resourceId: lesson.id,
       source: "lesson_progress_control",
+      completed: false,
+      courses,
     });
 
     if (progress.state.completed) {

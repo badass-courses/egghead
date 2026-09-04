@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
@@ -12,6 +11,7 @@ import {
   teamInviteMatchesEmail,
   verifyTeamInviteToken,
 } from "../../../../subscriptions/team-invite-token";
+import { isPersistedTeamInvitationPending } from "../../../../subscriptions/team-invitations";
 import { acceptTeamInvite } from "../../actions";
 
 export const metadata: Metadata = {
@@ -114,7 +114,14 @@ async function TeamInviteContent({
     getCurrentUser(),
   ]);
   const payload = verifyTeamInviteToken(token);
-  if (!payload) notFound();
+  if (!payload || !(await isPersistedTeamInvitationPending(payload))) {
+    return (
+      <InviteMessage
+        description="This invitation has expired, was accepted, was revoked, or is invalid. Ask the team owner for a new invitation."
+        title="This invite is no longer available"
+      />
+    );
+  }
 
   const [inviteDetails, currentMembership] = await Promise.all([
     getTeamInviteDetails(payload.subscriptionId),
@@ -135,7 +142,7 @@ async function TeamInviteContent({
     );
   }
 
-  if (!inviteDetails || error === "unavailable") {
+  if (!inviteDetails || error === "unavailable" || error === "invalid-invite") {
     return (
       <InviteMessage
         description="Reach out to the team owner for a new invitation."

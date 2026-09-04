@@ -1,6 +1,12 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 
-import { createLocalMysqlConnection, getEggheadMysqlPool } from "../db/local-docker";
+import {
+  assertLocalDockerDatabaseUrl,
+  assertProgressWritesAllowed,
+  createLocalMysqlConnection,
+  getEggheadMysqlPool,
+} from "../db/local-docker";
+import { withProgressTransaction, type ProgressConnection } from "./progress-transaction";
 
 type ResourceProgressRow = RowDataPacket & {
   userId: string;
@@ -70,6 +76,7 @@ function progressState(row: ResourceProgressRow | null): ResourceProgressState {
 }
 
 export async function ensureLocalResourceProgressTable() {
+  assertLocalDockerDatabaseUrl();
   const connection = await createLocalMysqlConnection();
 
   try {
@@ -98,11 +105,14 @@ export async function ensureLocalResourceProgressTable() {
   }
 }
 
-export async function readResourceProgress(input: {
-  userId: string;
-  resourceId: string;
-}): Promise<ResourceProgressState> {
-  const connection = await createLocalMysqlConnection();
+export async function readResourceProgress(
+  input: {
+    userId: string;
+    resourceId: string;
+  },
+  sharedConnection?: ProgressConnection,
+): Promise<ResourceProgressState> {
+  const connection = sharedConnection ?? (await createLocalMysqlConnection());
 
   try {
     const [rows] = await connection.execute<ResourceProgressRow[]>(
@@ -118,7 +128,7 @@ export async function readResourceProgress(input: {
 
     return progressState(rows[0] ?? null);
   } finally {
-    await connection.end();
+    if (!sharedConnection) await connection.end();
   }
 }
 
@@ -145,17 +155,29 @@ export async function readCompletedResourceIdsForUser(input: {
   return rows.map((row) => row.resourceId);
 }
 
-export async function seedResourceProgress(input: {
-  userId: string;
-  resourceId: string;
-  completedAt: Date | null;
-  source: string;
-}) {
-  const connection = await createLocalMysqlConnection();
+export type ResourceProgressWriteResult = {
+  affectedRows: number;
+  state: ResourceProgressState;
+};
 
-  try {
-    const [result] = await connection.execute<ResultSetHeader>(
-      `
+export async function seedResourceProgress(
+  input: {
+    userId: string;
+    resourceId: string;
+    completedAt: Date | null;
+    source: string;
+  },
+  sharedConnection?: ProgressConnection,
+): Promise<ResourceProgressWriteResult> {
+  const safety = assertProgressWritesAllowed();
+  if (!sharedConnection) {
+    return withProgressTransaction(input.userId, (connection) =>
+      seedResourceProgress(input, connection),
+    );
+  }
+  const connection = sharedConnection;
+  const [result] = await connection.execute<ResultSetHeader>(
+    `
         INSERT INTO egghead_ResourceProgress
           (userId, resourceId, completedAt, fields, createdAt, updatedAt)
         VALUES (?, ?, ?, CAST(? AS JSON), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
@@ -164,37 +186,42 @@ export async function seedResourceProgress(input: {
           fields = VALUES(fields),
           updatedAt = CURRENT_TIMESTAMP(3)
       `,
-      [
-        input.userId,
-        input.resourceId,
-        input.completedAt,
-        JSON.stringify({
-          source: input.source,
-          localOnly: true,
-        }),
-      ],
-    );
+    [
+      input.userId,
+      input.resourceId,
+      input.completedAt,
+      JSON.stringify({
+        source: input.source,
+        localOnly: safety.localDockerOnly,
+      }),
+    ],
+  );
 
-    return {
-      affectedRows: result.affectedRows,
-      state: await readResourceProgress(input),
-    };
-  } finally {
-    await connection.end();
-  }
+  return {
+    affectedRows: result.affectedRows,
+    state: await readResourceProgress(input, connection),
+  };
 }
 
-export async function completeResourceForUser(input: {
-  userId: string;
-  resourceId: string;
-  source: string;
-}) {
-  const connection = await createLocalMysqlConnection();
+export async function completeResourceForUser(
+  input: {
+    userId: string;
+    resourceId: string;
+    source: string;
+  },
+  sharedConnection?: ProgressConnection,
+): Promise<ResourceProgressWriteResult> {
+  const safety = assertProgressWritesAllowed();
+  if (!sharedConnection) {
+    return withProgressTransaction(input.userId, (connection) =>
+      completeResourceForUser(input, connection),
+    );
+  }
+  const connection = sharedConnection;
   const completedAt = new Date();
 
-  try {
-    const [result] = await connection.execute<ResultSetHeader>(
-      `
+  const [result] = await connection.execute<ResultSetHeader>(
+    `
         INSERT INTO egghead_ResourceProgress
           (userId, resourceId, completedAt, fields, createdAt, updatedAt)
         VALUES (?, ?, ?, CAST(? AS JSON), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
@@ -203,38 +230,44 @@ export async function completeResourceForUser(input: {
           fields = JSON_MERGE_PATCH(COALESCE(fields, JSON_OBJECT()), VALUES(fields)),
           updatedAt = CURRENT_TIMESTAMP(3)
       `,
-      [
-        input.userId,
-        input.resourceId,
-        completedAt,
-        JSON.stringify({
-          source: input.source,
-          localOnly: true,
-        }),
-      ],
-    );
+    [
+      input.userId,
+      input.resourceId,
+      completedAt,
+      JSON.stringify({
+        source: input.source,
+        localOnly: safety.localDockerOnly,
+      }),
+    ],
+  );
 
-    return {
-      affectedRows: result.affectedRows,
-      state: await readResourceProgress(input),
-    };
-  } finally {
-    await connection.end();
-  }
+  return {
+    affectedRows: result.affectedRows,
+    state: await readResourceProgress(input, connection),
+  };
 }
 
-export async function completeResourcesForUser(input: {
-  userId: string;
-  resourceIds: readonly string[];
-  source: string;
-}) {
+export async function completeResourcesForUser(
+  input: {
+    userId: string;
+    resourceIds: readonly string[];
+    source: string;
+  },
+  sharedConnection?: ProgressConnection,
+): Promise<{ affectedRows: number }> {
+  const safety = assertProgressWritesAllowed();
   const resourceIds = [...new Set(input.resourceIds.filter(Boolean))];
   if (resourceIds.length === 0) return { affectedRows: 0 };
 
-  const connection = await createLocalMysqlConnection();
+  if (!sharedConnection) {
+    return withProgressTransaction(input.userId, (connection) =>
+      completeResourcesForUser(input, connection),
+    );
+  }
+  const connection = sharedConnection;
   const fields = JSON.stringify({
     source: input.source,
-    localOnly: true,
+    localOnly: safety.localDockerOnly,
   });
   const values = resourceIds
     .map(
@@ -244,9 +277,8 @@ export async function completeResourcesForUser(input: {
     .join(", ");
   const parameters = resourceIds.flatMap((resourceId) => [input.userId, resourceId, fields]);
 
-  try {
-    const [result] = await connection.execute<ResultSetHeader>(
-      `
+  const [result] = await connection.execute<ResultSetHeader>(
+    `
         INSERT INTO egghead_ResourceProgress
           (userId, resourceId, completedAt, fields, createdAt, updatedAt)
         VALUES ${values}
@@ -255,25 +287,29 @@ export async function completeResourcesForUser(input: {
           fields = JSON_MERGE_PATCH(COALESCE(fields, JSON_OBJECT()), VALUES(fields)),
           updatedAt = CURRENT_TIMESTAMP(3)
       `,
-      parameters,
-    );
+    parameters,
+  );
 
-    return { affectedRows: result.affectedRows };
-  } finally {
-    await connection.end();
-  }
+  return { affectedRows: result.affectedRows };
 }
 
-export async function uncompleteResourceForUser(input: {
-  userId: string;
-  resourceId: string;
-  source: string;
-}) {
-  const connection = await createLocalMysqlConnection();
-
-  try {
-    const [result] = await connection.execute<ResultSetHeader>(
-      `
+export async function uncompleteResourceForUser(
+  input: {
+    userId: string;
+    resourceId: string;
+    source: string;
+  },
+  sharedConnection?: ProgressConnection,
+): Promise<ResourceProgressWriteResult> {
+  const safety = assertProgressWritesAllowed();
+  if (!sharedConnection) {
+    return withProgressTransaction(input.userId, (connection) =>
+      uncompleteResourceForUser(input, connection),
+    );
+  }
+  const connection = sharedConnection;
+  const [result] = await connection.execute<ResultSetHeader>(
+    `
         UPDATE egghead_ResourceProgress
         SET completedAt = NULL,
             fields = JSON_MERGE_PATCH(COALESCE(fields, JSON_OBJECT()), CAST(? AS JSON)),
@@ -281,23 +317,20 @@ export async function uncompleteResourceForUser(input: {
         WHERE userId = ?
           AND resourceId = ?
       `,
-      [
-        JSON.stringify({
-          source: input.source,
-          localOnly: true,
-        }),
-        input.userId,
-        input.resourceId,
-      ],
-    );
+    [
+      JSON.stringify({
+        source: input.source,
+        localOnly: safety.localDockerOnly,
+      }),
+      input.userId,
+      input.resourceId,
+    ],
+  );
 
-    return {
-      affectedRows: result.affectedRows,
-      state: await readResourceProgress(input),
-    };
-  } finally {
-    await connection.end();
-  }
+  return {
+    affectedRows: result.affectedRows,
+    state: await readResourceProgress(input, connection),
+  };
 }
 
 export function anonymousProgressState(): AnonymousProgressState {

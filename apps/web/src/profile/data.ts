@@ -19,7 +19,7 @@ import {
   STANDALONE_PUBLIC_CONTENT_FAMILIES,
   type PublicContentFamily,
 } from "../content/routes";
-import { createLocalMysqlConnection } from "../db/local-docker";
+import { assertAccountWritesAllowed, createLocalMysqlConnection } from "../db/local-docker";
 import { gravatarUrlForEmail } from "./gravatar";
 import {
   currentLearningStreakDays,
@@ -27,6 +27,7 @@ import {
   parsePublicProfileId,
   projectPublicLearnerProfile,
   requireProfileOwner,
+  PUBLIC_PROFILE_SHARING_ENABLED,
   type ProfileCompletion,
   type ProfileCompletionFamily,
   type ProfileCompletionFilter,
@@ -95,7 +96,6 @@ export type PrivateAccountProfile = {
   name: string | null;
   email: string;
   memberSince: Date | null;
-  publicProfilePath: string;
   githubConnection: GithubConnectionState;
   learningAccess: {
     libraryWide: boolean;
@@ -550,7 +550,6 @@ export async function getPrivateAccountProfile(input: {
     name: identity.user.name,
     email: identity.user.email,
     memberSince: identity.user.createdAt,
-    publicProfilePath: `/profile/${encodeURIComponent(identity.user.id)}`,
     githubConnection: summarizeGithubConnection(
       identity.accounts,
       input.emailAuthConfigured && Boolean(identity.user.email.trim()),
@@ -603,6 +602,7 @@ export async function getPrivateLearningProgress(input: {
 export async function getPublicLearnerProfile(
   candidatePublicId: string,
 ): Promise<PublicLearnerProfile | null> {
+  if (!PUBLIC_PROFILE_SHARING_ENABLED) return null;
   const publicId = parsePublicProfileId(candidatePublicId);
   if (!publicId) return null;
 
@@ -629,6 +629,7 @@ export async function getPublicLearnerProfile(
 export async function getPublicProfileGravatarUrl(
   candidatePublicId: string,
 ): Promise<string | null> {
+  if (!PUBLIC_PROFILE_SHARING_ENABLED) return null;
   const publicId = parsePublicProfileId(candidatePublicId);
   if (!publicId) return null;
 
@@ -659,6 +660,7 @@ export async function updatePrivateProfileName(input: {
   name: unknown;
 }) {
   const update = ownerScopedNameUpdate(input);
+  assertAccountWritesAllowed();
   const connection = await createLocalMysqlConnection();
 
   try {

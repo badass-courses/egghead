@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { subscriptionCheckoutIdempotencyKey } from "../apps/web/src/coursebuilder/stripe-provider";
 import {
@@ -135,25 +136,35 @@ try {
       assert.equal(isTeamSubscription({ ownerId: "owner_1", seats: 1 }), false);
       assert.deepEqual(
         mergeTeamSubscriptionFields({ preserved: true }, { ownerId: "owner_1", seats: 6 }),
-        { ownerId: "owner_1", preserved: true, seats: 6 },
+        { ownerId: "owner_1", preserved: true, seats: 6, subscriptionKind: "team" },
       );
     }),
-    check("team invite links are signed and optionally email-scoped", () => {
-      const genericToken = createTeamInviteToken("subscription_contract_fixture");
-      const genericPayload = verifyTeamInviteToken(genericToken);
-      assert.ok(genericPayload);
-      assert.equal(genericPayload.subscriptionId, "subscription_contract_fixture");
-      assert.equal(teamInviteMatchesEmail(genericPayload, "anyone@example.test"), true);
-
-      const scopedToken = createTeamInviteToken(
-        "subscription_contract_fixture",
-        "invitee@example.test",
-      );
-      const scopedPayload = verifyTeamInviteToken(scopedToken);
-      assert.ok(scopedPayload);
-      assert.equal(teamInviteMatchesEmail(scopedPayload, "INVITEE@example.test"), true);
-      assert.equal(teamInviteMatchesEmail(scopedPayload, "someone-else@example.test"), false);
-      assert.equal(verifyTeamInviteToken(`${scopedToken}tampered`), null);
+    check("team invite links are signed, expiring and always email-scoped", () => {
+      const originalSecret = process.env["AUTH_SECRET"];
+      process.env["AUTH_SECRET"] = randomBytes(32).toString("hex");
+      try {
+        const scopedToken = createTeamInviteToken({
+          invitationId: randomUUID(),
+          subscriptionId: "subscription_contract_fixture",
+          email: "invitee@example.test",
+          expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        });
+        const scopedPayload = verifyTeamInviteToken(scopedToken);
+        assert.ok(scopedPayload);
+        assert.equal(scopedPayload.subscriptionId, "subscription_contract_fixture");
+        assert.equal(teamInviteMatchesEmail(scopedPayload, "INVITEE@example.test"), true);
+        assert.equal(teamInviteMatchesEmail(scopedPayload, "someone-else@example.test"), false);
+        assert.equal(verifyTeamInviteToken(`${scopedToken}tampered`), null);
+        assert.equal(
+          verifyTeamInviteToken(
+            createTeamInviteToken({ ...scopedPayload, expiresAt: Date.now() - 1 }),
+          ),
+          null,
+        );
+      } finally {
+        if (originalSecret === undefined) delete process.env["AUTH_SECRET"];
+        else process.env["AUTH_SECRET"] = originalSecret;
+      }
     }),
     check("membership billing details are customer-readable", () => {
       assert.equal(membershipIntervalLabel("month", 1), "Monthly");

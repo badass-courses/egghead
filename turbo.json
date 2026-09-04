@@ -1,5 +1,27 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [".env*", "apps/*/.env*"],
+  "globalEnv": [
+    "AUTH_SECRET",
+    "COURSEBUILDER_APP_URL",
+    "COURSEBUILDER_URL",
+    "DATABASE_URL",
+    "EGGHEAD_BETA_ACCOUNT_WRITES_APPROVED",
+    "EGGHEAD_BETA_DB_APPROVED",
+    "EGGHEAD_BETA_PROGRESS_WRITES_APPROVED",
+    "EGGHEAD_RUNTIME",
+    "GITHUB_CLIENT_ID",
+    "GITHUB_CLIENT_SECRET",
+    "INNGEST_EVENT_KEY",
+    "INNGEST_SIGNING_KEY",
+    "NEXT_PUBLIC_APP_URL",
+    "POSTMARK_API_KEY",
+    "POSTMARK_FROM_EMAIL",
+    "SEND_EMAILS",
+    "STRIPE_SECRET_TOKEN",
+    "STRIPE_WEBHOOK_SECRET",
+    "URL"
+  ],
   "tasks": {
     "dev": {
       "cache": false,

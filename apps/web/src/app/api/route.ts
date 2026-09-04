@@ -1,4 +1,9 @@
-import { getEggheadRuntime, isBetaDatabaseApproved } from "../../db/local-docker";
+import {
+  getEggheadRuntime,
+  getRuntimeOperationPermissions,
+  isBetaDatabaseApproved,
+} from "../../db/local-docker";
+import { courseBuilderHttpOperations } from "../../coursebuilder/http-policy";
 
 export function GET() {
   const runtime = getEggheadRuntime();
@@ -33,15 +38,20 @@ export function GET() {
         localDevOnly: runtime === "local",
         betaRuntime: runtime === "beta",
         betaDatabaseApproved: isBetaDatabaseApproved(),
+        operationPermissions: getRuntimeOperationPermissions(),
+        permissionEvidence: "application policy; database privileges not probed",
+        courseBuilderHttpOperations,
+        betaAccountWritesRequireSeparateApproval: true,
+        betaProgressWritesRequireSeparateApproval: true,
         commerceWritesLocalOnly: true,
-        subscriptionManagementExcluded: true,
+        subscriptionManagementLocalOnly: true,
         noReadFlip: true,
-        noPlanetScaleWrites: true,
+        indexingRequiresSeparateApproval: true,
       },
     },
     {
       headers: {
-        "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
+        "Cache-Control": "no-store",
       },
     },
   );

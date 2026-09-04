@@ -23,7 +23,6 @@ import {
 import { GithubAccountControl } from "./github-account-control";
 import { ManageMembershipButton } from "./manage-membership-button";
 import { ProfileAvatar } from "./profile-avatar";
-import { ShareProfileButton } from "./share-profile-button";
 import { SignOutButton } from "./sign-out-button";
 
 export const metadata: Metadata = {
@@ -185,19 +184,18 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
 
             <div className="grid gap-3 lg:justify-items-start">
               <div>
-                <h2 className="text-lg font-black">Public learning profile</h2>
+                <h2 className="text-lg font-black">Your private learning progress</h2>
                 <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-                  Preview and share the learning activity other people can see.
+                  Your progress is private. Public profiles and activity sharing are not available.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Link
                   className="press inline-flex items-center justify-center rounded-lg border border-border-strong bg-surface-grad px-4 py-2 text-sm font-extrabold text-foreground shadow-btn-ghost"
-                  href={profile.publicProfilePath}
+                  href="/profile/progress"
                 >
-                  View public profile
+                  View your progress
                 </Link>
-                <ShareProfileButton path={profile.publicProfilePath} />
               </div>
             </div>
           </div>

@@ -1,6 +1,6 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 
-import { createLocalMysqlConnection } from "../db/local-docker";
+import { assertAccountWritesAllowed, createLocalMysqlConnection } from "../db/local-docker";
 import { requireProfileOwner } from "./contracts";
 
 const GITHUB_PROVIDER = "github";
@@ -127,6 +127,7 @@ export async function disconnectPrivateGithubAccount(input: {
   emailSignInAvailable: boolean;
 }): Promise<GithubDisconnectResult> {
   const userId = requireProfileOwner(input.actorUserId, input.profileUserId);
+  assertAccountWritesAllowed();
   const connection = await createLocalMysqlConnection();
 
   try {

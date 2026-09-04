@@ -27,29 +27,24 @@ import { LessonProgressStatus } from "./lesson-progress-status";
 import { MuxPlayerProvider } from "./mux-player-context";
 import { getLessonVideoTranscript } from "./lesson-transcript";
 import { LessonTranscriptBody } from "./lesson-transcript-renderer";
-import type { LessonForPage } from "./lesson";
+import { getLessonPlaybackForAccess, type LessonForPage } from "./lesson";
 import { MarkdownContent } from "./markdown-content";
 
 function LessonVideoPlaceholder({
   accessState = "pending",
   children,
-  lesson,
   videoState = "pending",
 }: {
   accessState?: string;
   children?: ReactNode;
-  lesson: LessonForPage;
   videoState?: string;
 }) {
   return (
     <div
       className="egghead-video-placeholder"
       data-access-state={accessState}
-      data-video-poster={lesson.videoPosterUrl ? "static" : "none"}
+      data-video-poster="none"
       data-video-state={videoState}
-      style={
-        lesson.videoPosterUrl ? { backgroundImage: `url(${lesson.videoPosterUrl})` } : undefined
-      }
     >
       {children}
     </div>
@@ -97,7 +92,7 @@ function LessonFacts({
 function LessonAccessFallback({ lesson }: { lesson: LessonForPage }) {
   return (
     <>
-      <LessonVideoPlaceholder lesson={lesson} />
+      <LessonVideoPlaceholder />
 
       <LessonFacts
         accessReason="pending"
@@ -144,9 +139,10 @@ const resolveLessonAccess = cache(async (lesson: LessonForPage) => {
 export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage }) {
   const { accessGranted, accessRequired, anonymousLimitReached } =
     await resolveLessonAccess(lesson);
-  const videoUrl = lesson.videoHlsUrl ?? lesson.videoDashUrl;
-  const playbackId = lesson.videoMuxPlaybackId;
-  const hasVideo = Boolean(playbackId || videoUrl);
+  const playback = await getLessonPlaybackForAccess(lesson.id, accessGranted);
+  const videoUrl = playback?.videoHlsUrl ?? playback?.videoDashUrl;
+  const playbackId = playback?.videoMuxPlaybackId;
+  const hasVideo = accessGranted ? Boolean(playbackId || videoUrl) : lesson.hasVideo;
   const canWatch = hasVideo && accessGranted;
   const videoState = canWatch ? "allowed" : hasVideo ? "gated" : "unavailable";
 
@@ -156,22 +152,21 @@ export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage
         <LessonMuxPlayer
           lessonResourceId={lesson.id}
           playbackId={playbackId}
-          poster={lesson.videoPosterUrl}
+          poster={playback?.videoPosterUrl ?? null}
           title={lesson.title}
-          videoId={lesson.videoResourceId ?? lesson.id}
+          videoId={playback?.videoResourceId ?? lesson.id}
         />
       ) : canWatch && videoUrl ? (
         <LessonHtmlVideo
           accessState={accessRequired ? "granted" : "free"}
           lessonResourceId={lesson.id}
-          poster={lesson.videoPosterUrl ?? undefined}
+          poster={playback?.videoPosterUrl ?? undefined}
           src={videoUrl}
           title={lesson.title}
         />
       ) : (
         <LessonVideoPlaceholder
           accessState={accessGranted ? "granted" : "denied"}
-          lesson={lesson}
           videoState={videoState}
         >
           {videoState === "gated" ? (
@@ -375,7 +370,7 @@ export async function CourseLessonPageStatic({
                 navigation={
                   <CourseLessonNavigation activeLessonSlug={lesson.slug} course={course} />
                 }
-                player={<LessonVideoPlaceholder lesson={lesson} />}
+                player={<LessonVideoPlaceholder />}
               />
             }
           >
