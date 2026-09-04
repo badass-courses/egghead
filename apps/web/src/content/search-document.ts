@@ -60,6 +60,45 @@ export type SearchIndexDocument = {
   visibility: string;
 };
 
+// Read-only shape of content_production; it is not the migration write schema.
+export type LegacySearchIndexDocument = {
+  description?: string;
+  id: string;
+  instructor_name?: string;
+  path: string;
+  slug: string;
+  summary?: string;
+  title: string;
+  type: string;
+};
+
+export const LEGACY_SEARCH_DOCUMENT_TYPES = [
+  "article",
+  "campaign",
+  "case-study",
+  "lesson",
+  "playlist",
+  "podcast",
+  "post",
+  "success-story",
+  "talk",
+] as const;
+
+export function legacySearchDocumentType(type: string): SearchDocumentType | null {
+  if (type === "playlist") return "course";
+  return type !== "course" && isSearchDocumentType(type) ? type : null;
+}
+
+export function pathForLegacySearchDocument(document: LegacySearchIndexDocument) {
+  const type = legacySearchDocumentType(document.type);
+  if (!type) return null;
+  const legacyPaths = legacyPathsForSearchDocument(type, document.slug);
+  if (type === "course") legacyPaths.push(`/playlists/${document.slug}`);
+  return legacyPaths.includes(document.path)
+    ? canonicalPathForSearchDocument(type, document.slug)
+    : document.path;
+}
+
 export type ContentResourceForSearch = {
   createdAt?: Date | string | null;
   fields: unknown;

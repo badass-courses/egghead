@@ -59,12 +59,10 @@ function instructorsFromResponse(value: unknown): SearchInstructor[] {
 
 export function SearchInstructorFilter({
   contentType,
-  defaultInstructors,
   instructor,
   term,
 }: {
   contentType?: string | undefined;
-  defaultInstructors: SearchInstructor[];
   instructor?: string | undefined;
   term?: string | undefined;
 }) {
@@ -74,7 +72,8 @@ export function SearchInstructorFilter({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [filterTerm, setFilterTerm] = useState("");
-  const [matches, setMatches] = useState<SearchInstructor[]>(defaultInstructors);
+  const [matches, setMatches] = useState<SearchInstructor[]>([]);
+  const [lookupState, setLookupState] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
     if (!open) return () => {};
@@ -101,35 +100,42 @@ export function SearchInstructorFilter({
   }, [open]);
 
   useEffect(() => {
+    if (!open) return () => {};
     const query = filterTerm.trim();
-    if (!query) {
-      setMatches(defaultInstructors);
-      return () => {};
-    }
+    setMatches([]);
+    setLookupState("loading");
 
     const controller = new AbortController();
-    const timeout = setTimeout(async () => {
-      try {
-        const response = await fetch(`/api/instructors?q=${encodeURIComponent(query)}`, {
-          signal: controller.signal,
-        });
-        setMatches(instructorsFromResponse(await response.json()));
-      } catch {
-        // Aborted or failed lookups keep the current list.
-      }
-    }, 200);
+    const timeout = setTimeout(
+      async () => {
+        try {
+          const response = await fetch(`/api/instructors?q=${encodeURIComponent(query)}`, {
+            signal: controller.signal,
+          });
+          if (!response.ok) throw new Error("Instructor lookup failed.");
+          const instructors = instructorsFromResponse(await response.json());
+          if (controller.signal.aborted) return;
+          setMatches(instructors);
+          setLookupState("ready");
+        } catch {
+          if (!controller.signal.aborted) setLookupState("error");
+        }
+      },
+      query ? 200 : 0,
+    );
 
     return () => {
       controller.abort();
       clearTimeout(timeout);
     };
-  }, [filterTerm, defaultInstructors]);
+  }, [filterTerm, open]);
 
   function toggleOpen() {
     setOpen((wasOpen) => {
       if (wasOpen) return false;
       setFilterTerm("");
-      setMatches(defaultInstructors);
+      setMatches([]);
+      setLookupState("loading");
       return true;
     });
   }
@@ -206,8 +212,14 @@ export function SearchInstructorFilter({
                 </button>
               </li>
             ))}
-            {matches.length === 0 ? (
-              <li className="egghead-search-filter-empty">No instructors found.</li>
+            {lookupState !== "ready" || matches.length === 0 ? (
+              <li className="egghead-search-filter-empty">
+                {lookupState === "loading"
+                  ? "Loading instructors."
+                  : lookupState === "error"
+                    ? "Unable to load instructors."
+                    : "No instructors found."}
+              </li>
             ) : null}
           </ul>
         </div>

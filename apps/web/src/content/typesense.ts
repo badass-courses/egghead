@@ -3,6 +3,7 @@ import Typesense from "typesense";
 import {
   EGGHEAD_TYPESENSE_COLLECTION_NAME,
   EGGHEAD_TYPESENSE_COLLECTION_SCHEMA,
+  LEGACY_SEARCH_DOCUMENT_TYPES,
   type SearchIndexDocument,
 } from "./search-document";
 
@@ -14,6 +15,7 @@ type TypesenseNode = {
 
 type TypesenseRuntimeConfig = {
   collectionName: string;
+  searchSchema: "canonical" | "legacy";
   host: string | null;
   hostHash: string | null;
   port: number;
@@ -47,12 +49,15 @@ export function resolveTypesenseHostHash(host: string | null | undefined) {
 
 export function getEggheadTypesenseConfig(): TypesenseRuntimeConfig {
   const host = env("NEXT_PUBLIC_TYPESENSE_HOST");
+  const collectionName =
+    env("TYPESENSE_COLLECTION_NAME") ??
+    env("NEXT_PUBLIC_TYPESENSE_COLLECTION_NAME") ??
+    EGGHEAD_TYPESENSE_COLLECTION_NAME;
 
   return {
-    collectionName:
-      env("TYPESENSE_COLLECTION_NAME") ??
-      env("NEXT_PUBLIC_TYPESENSE_COLLECTION_NAME") ??
-      EGGHEAD_TYPESENSE_COLLECTION_NAME,
+    collectionName,
+    // Only this supplied collection uses the Rails-era read contract.
+    searchSchema: collectionName === "content_production" ? "legacy" : "canonical",
     host,
     hostHash: env("NEXT_PUBLIC_TYPESENSE_HOST_HASH") ?? resolveTypesenseHostHash(host),
     port: envNumber("NEXT_PUBLIC_TYPESENSE_PORT", 443),
@@ -60,6 +65,19 @@ export function getEggheadTypesenseConfig(): TypesenseRuntimeConfig {
     searchApiKey: env("NEXT_PUBLIC_TYPESENSE_API_KEY"),
     writeApiKey: env("TYPESENSE_WRITE_API_KEY"),
   };
+}
+
+export function legacyTypesenseContentFilter(typeFilter?: string | null) {
+  const type = typeFilter?.trim();
+  const legacyType = type === "course" ? "playlist" : type;
+  // content_production is publisher-scoped: it has no state/visibility fields.
+  // Publication timestamps are absent on some published courses, so they
+  // cannot be used as a lifecycle filter. Facets and hits share this scope.
+  return legacyType
+    ? LEGACY_SEARCH_DOCUMENT_TYPES.some((value) => value === legacyType)
+      ? `type:=${legacyType}`
+      : "type:=__invalid__"
+    : `type:=[${LEGACY_SEARCH_DOCUMENT_TYPES.join(", ")}]`;
 }
 
 export function getEggheadTypesenseNodes(
