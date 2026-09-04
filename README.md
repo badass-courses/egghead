@@ -103,14 +103,38 @@ bun tools/me.ts egghead standalone check --url http://localhost:3008 --json | jq
 
 ## Typesense search index
 
-Search documents include every content contributor in `instructorNames` and a normalized
-`instructorKeys` facet. Text queries search instructor display names, while the instructor filter
-uses the normalized key so `q`, `type`, and `instructor` combinations share the same Typesense
-query path. SQL remains an availability fallback when Typesense is not configured or errors.
+The configured collection selects the read contract explicitly: `TYPESENSE_COLLECTION_NAME`
+takes precedence over `NEXT_PUBLIC_TYPESENSE_COLLECTION_NAME`, with
+`egghead_content_migration_v1` as the default. There is no schema guessing or field-name retry.
 
-Adding these fields changes the collection schema and existing documents do not contain contributor
-data, so the collection must be recreated and fully reindexed before this behavior is available in
-an existing environment. The guarded command is:
+- **`content_production` uses the existing legacy index without rewriting it.** Queries search
+  `title`, `description`, `summary`, and `instructor_name`; exact instructor filters use indexed
+  `instructor_name` values. App course filters select `type=playlist`, and playlist hits render as
+  courses. IDs are preserved, recognized legacy paths such as `/playlists/<slug>` become app
+  paths, and already-modern root/nested paths are retained. Results and instructor facets share
+  the app-supported content-type scope. Publication eligibility relies on publisher-controlled
+  index inclusion, not timestamp filtering: some published courses have zero publication
+  timestamps. Legacy read errors propagate rather than silently switching to SQL
+  or returning an unrelated catalog. No legacy reindex is required.
+- **All other collection names use the canonical migration contract.** Search documents include
+  `body`, every content contributor in `instructorNames`, and a normalized `instructorKeys`
+  facet. Text queries search instructor display names, while instructor filters use normalized
+  keys. SQL remains a search availability fallback when Typesense is not configured or a
+  canonical Typesense read errors; it is not a fallback for configured legacy read errors.
+
+Both default and typed dropdown suggestions use `GET /api/instructors`, which returns
+`{ "instructors": [{ "name": "John Lindquist", "resourceCount": 33 }] }` (illustrative count).
+With configured `content_production`, discovery reads instructor facets from that same index;
+canonical and no-Typesense configurations retain SQL instructor discovery. Names are normalized,
+encoding variants are merged, and name searches fold accents. The operation returns up to six
+default suggestions, or up to eight matching suggestions for `?q=<name>`. Unknown names return
+an empty list. Lookup failures propagate as errors, not successful empty results; the dropdown
+shows "Unable to load instructors." rather than retaining stale suggestions.
+
+Existing canonical collections missing `instructorNames`/`instructorKeys` need schema provisioning
+and a full reindex before indexed instructor search is available. Deploying source alone does
+not create those fields or contributor data. For the guarded migration collection, recreation
+and reindexing use:
 
 ```bash
 EGGHEAD_TYPESENSE_INDEX_APPROVED=true pnpm search:typesense-index --recreate
