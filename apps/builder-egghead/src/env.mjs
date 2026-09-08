@@ -68,6 +68,9 @@ export const env = createEnv({
 		STRIPE_WEBHOOK_SECRET: z.string(),
 		GOOG_CALENDAR_IMPERSONATE_USER: z.string().optional(),
 		GOOG_CREDENTIALS_JSON: z.string().optional(),
+		VERCEL_API_TOKEN: z.string().optional(),
+		VERCEL_TEAM_ID: z.string().optional(),
+		EGGHEAD_EDGE_CONFIG_ID: z.string().optional(),
 	},
 
 	/**
@@ -136,6 +139,9 @@ export const env = createEnv({
 		STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
 		GOOG_CALENDAR_IMPERSONATE_USER: process.env.GOOG_CALENDAR_IMPERSONATE_USER,
 		GOOG_CREDENTIALS_JSON: process.env.GOOG_CREDENTIALS_JSON,
+		VERCEL_API_TOKEN: process.env.VERCEL_API_TOKEN,
+		VERCEL_TEAM_ID: process.env.VERCEL_TEAM_ID,
+		EGGHEAD_EDGE_CONFIG_ID: process.env.EGGHEAD_EDGE_CONFIG_ID,
 	},
 	/**
 	 * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially

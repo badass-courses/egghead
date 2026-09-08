@@ -30,6 +30,42 @@ export const EventFieldsSchema = z.object({
 })
 
 /**
+ * @description One Stripe promo code created for the egghead.io sale
+ */
+export const EggheadPromoCodeSchema = z.object({
+	id: z.string(),
+	code: z.string(),
+	couponId: z.string(),
+	amountOff: z.number().int().nonnegative(),
+	expiresAt: z.string().datetime().nullish(),
+})
+
+/**
+ * @description Everything the live egghead.io site needs to sell this event.
+ * Written by the MCP sale tools; read by the review page and drift check.
+ */
+export const EggheadSaleSchema = z.object({
+	flagKey: z.string().min(1),
+	stripeProductId: z.string().min(1),
+	stripePriceId: z.string().min(1),
+	paymentLinkId: z.string().min(1),
+	paymentLinkUrl: z.string().url(),
+	promoCodes: z.object({
+		member: EggheadPromoCodeSchema,
+		earlyBird: EggheadPromoCodeSchema,
+		earlyBirdMember: EggheadPromoCodeSchema,
+	}),
+	earlyBirdEndDate: z.string().nullish(),
+	isEuFriendly: z.boolean().default(false),
+	bannerMessage: z.string().nullish(),
+	earlyBirdBannerMessage: z.string().nullish(),
+	approvedBy: z.string().nullish(),
+	approvedAt: z.string().datetime().nullish(),
+})
+
+export type EggheadSale = z.infer<typeof EggheadSaleSchema>
+
+/**
  * @description Schema for time-bound events like workshops, webinars, and live sessions
  */
 export const EventSchema = ContentResourceSchema.merge(
@@ -59,6 +95,7 @@ export const EventSchema = ContentResourceSchema.merge(
 			calendarId: z.string().optional(),
 			thumbnailTime: z.number().nullish(),
 			featured: z.boolean().default(false).optional(),
+			eggheadSale: EggheadSaleSchema.optional(),
 		}),
 	}),
 )

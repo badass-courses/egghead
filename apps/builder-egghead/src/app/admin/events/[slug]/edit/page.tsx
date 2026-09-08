@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 import { courseBuilderAdapter } from '@/db'
 import { getCachedEventOrEventSeries } from '@/lib/events-query'
@@ -47,7 +48,20 @@ export default async function EditEventPage({ params }: EditEventPageProps) {
 
 	return (
 		<div className="">
-			<h1 className="mb-8 text-3xl font-bold">Edit Event</h1>
+			<div className="mb-8 flex flex-wrap items-baseline justify-between gap-3">
+				<h1 className="text-3xl font-bold">Edit Event</h1>
+				{event.type === 'event' && (
+					<Link
+						href={`/admin/events/${event.fields.slug}/egghead-sale`}
+						className="text-sm underline"
+					>
+						egghead.io sale
+						{'eggheadSale' in event.fields && event.fields.eggheadSale
+							? ''
+							: ' (not set up)'}
+					</Link>
+				)}
+			</div>
 			{event.type === 'event' && (
 				<EditEventForm
 					key={event.fields.slug}
