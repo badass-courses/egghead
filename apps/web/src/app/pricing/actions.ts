@@ -1,262 +1,111 @@
 "use server";
 
-import { createHash, randomUUID } from "node:crypto";
-
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { z } from "zod";
 
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import {
-  expireStripeSubscriptionCheckoutSession,
   getSiteUrl,
   getStripeProvider,
   isStripeConfigured,
-  takeCreatedStripeSubscriptionCheckout,
+  stripeMembershipCatalogProvider,
+  stripeSubscriptionCheckoutProvider,
 } from "../../coursebuilder/stripe-provider";
-import { getCourseBuilderAdapter, getEggheadDatabase } from "../../db/adapter";
-import { organization as organizationTable } from "../../db/schema";
+import { getEggheadDatabase } from "../../db/adapter";
+import { merchantCustomer } from "../../db/schema";
 import { assertCommerceWritesAllowed } from "../../db/local-docker";
-import { getActiveMembershipProduct } from "../../subscriptions/catalog";
+import { getActiveMembershipProducts } from "../../subscriptions/catalog";
+import { validateStripeMembershipMapping } from "../../subscriptions/catalog-contracts";
+import { startReservedSubscriptionCheckout } from "../../subscriptions/checkout-state";
+import { organizationCheckoutStore } from "../../subscriptions/checkout-store";
 import { ensurePersonalOrganization } from "../../subscriptions/personal-organization";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { subscriptionCheckoutQuantitySchema } from "../../subscriptions/team-contracts";
 
-const CHECKOUT_RESERVATION_FIELD = "stripeSubscriptionCheckout";
-const CHECKOUT_RESERVATION_PENDING_TTL_SECONDS = 2 * 60;
-const organizationFieldsSchema = z.record(z.string(), z.unknown());
-const checkoutReservationSchema = z.object({
-  country: z.string(),
-  pendingUntil: z.number().int(),
-  productId: z.string(),
-  quantity: subscriptionCheckoutQuantitySchema.default(1),
-  sessionExpiresAt: z.number().int().optional(),
-  sessionId: z.string().optional(),
-  token: z.string(),
-});
-
-async function reserveSubscriptionCheckout(
-  organizationId: string,
-  productId: string,
-  quantity: number,
-  country: string,
-) {
-  const db = getEggheadDatabase();
-  const { reservation, staleSessionId } = await db.transaction(async (transaction) => {
-    const [storedOrganization] = await transaction
-      .select({ fields: organizationTable.fields })
-      .from(organizationTable)
-      .where(eq(organizationTable.id, organizationId))
-      .for("update");
-    if (!storedOrganization) {
-      throw new Error("Unable to reserve subscription checkout for the organization.");
-    }
-
-    const parsedFields = organizationFieldsSchema.safeParse(storedOrganization.fields ?? {});
-    const fields = parsedFields.success ? parsedFields.data : {};
-    const parsedReservation = checkoutReservationSchema.safeParse(
-      fields[CHECKOUT_RESERVATION_FIELD],
-    );
-    const currentReservation = parsedReservation.success ? parsedReservation.data : null;
-    const now = Math.floor(Date.now() / 1000);
-    const currentReservationExpiresAt =
-      currentReservation?.sessionExpiresAt ?? currentReservation?.pendingUntil ?? 0;
-    const currentReservationIsActive = currentReservationExpiresAt > now;
-
-    if (
-      currentReservation &&
-      currentReservationIsActive &&
-      currentReservation.productId === productId &&
-      currentReservation.quantity === quantity
-    ) {
-      return { reservation: currentReservation, staleSessionId: null };
-    }
-    if (currentReservation && currentReservationIsActive && !currentReservation.sessionId) {
-      return { reservation: currentReservation, staleSessionId: null };
-    }
-
-    const newReservation = {
-      country,
-      pendingUntil: now + CHECKOUT_RESERVATION_PENDING_TTL_SECONDS,
-      productId,
-      quantity,
-      token: randomUUID(),
-    };
-    await transaction
-      .update(organizationTable)
-      .set({
-        fields: {
-          ...fields,
-          [CHECKOUT_RESERVATION_FIELD]: newReservation,
-        },
-      })
-      .where(eq(organizationTable.id, organizationId));
-
-    return {
-      reservation: newReservation,
-      staleSessionId:
-        currentReservation && currentReservationIsActive ? currentReservation.sessionId : null,
-    };
-  });
-
-  if (staleSessionId) {
-    try {
-      await expireStripeSubscriptionCheckoutSession(staleSessionId);
-    } catch (error) {
-      console.warn("Unable to expire replaced Stripe checkout session", {
-        error,
-        organizationId,
-        productId,
-        sessionFingerprint: createHash("sha256").update(staleSessionId).digest("hex").slice(0, 12),
-      });
-    }
-  }
-
-  return reservation;
-}
-
-async function storeSubscriptionCheckoutSession(
-  organizationId: string,
-  reservationToken: string,
-  session: { expiresAt: number; id: string },
-) {
-  const db = getEggheadDatabase();
-
-  await db.transaction(async (transaction) => {
-    const [storedOrganization] = await transaction
-      .select({ fields: organizationTable.fields })
-      .from(organizationTable)
-      .where(eq(organizationTable.id, organizationId))
-      .for("update");
-    if (!storedOrganization) {
-      throw new Error("Unable to store subscription checkout for the organization.");
-    }
-
-    const parsedFields = organizationFieldsSchema.safeParse(storedOrganization.fields ?? {});
-    const fields = parsedFields.success ? parsedFields.data : {};
-    const parsedReservation = checkoutReservationSchema.safeParse(
-      fields[CHECKOUT_RESERVATION_FIELD],
-    );
-    if (!parsedReservation.success || parsedReservation.data.token !== reservationToken) {
-      throw new Error("Subscription checkout reservation changed before the session was stored.");
-    }
-
-    await transaction
-      .update(organizationTable)
-      .set({
-        fields: {
-          ...fields,
-          [CHECKOUT_RESERVATION_FIELD]: {
-            ...parsedReservation.data,
-            sessionExpiresAt: session.expiresAt,
-            sessionId: session.id,
-          },
-        },
-      })
-      .where(eq(organizationTable.id, organizationId));
-  });
-}
-
-/** Validates a selected active membership and starts its hosted Stripe Checkout session. */
+/** Validate the exact mapped membership, then serialize checkout against its durable intent. */
 export async function startSubscriptionCheckout(formData: FormData) {
   assertCommerceWritesAllowed();
-
   const user = await getCurrentUser();
+  if (!user?.id) redirect("/login?callbackUrl=/pricing");
+  if (!user.email) redirect("/pricing?error=missing-email");
+  if (await getCurrentSubscriptionForUser(user.id)) redirect("/thanks/subscription?existing=true");
 
-  if (!user?.id) {
-    redirect("/login?callbackUrl=/pricing");
-  }
-  if (!user.email) {
-    redirect("/pricing?error=missing-email");
-  }
-
-  const currentSubscription = await getCurrentSubscriptionForUser(user.id);
-  if (currentSubscription) {
-    redirect("/thanks/subscription?existing=true");
-  }
-
-  const requestedProductId = formData.get("productId");
-  const requestedQuantity = subscriptionCheckoutQuantitySchema.safeParse(formData.get("quantity"));
-
-  if (typeof requestedProductId !== "string") {
-    redirect("/pricing?error=invalid-product");
-  }
-  if (!requestedQuantity.success) {
-    redirect("/pricing?error=invalid-seats");
-  }
-
-  const productId = requestedProductId;
-  const quantity = requestedQuantity.data;
-  const adapter = getCourseBuilderAdapter();
-  const product = await getActiveMembershipProduct(productId);
-
-  if (!product) {
-    redirect("/pricing?error=invalid-product");
-  }
-  if (!isStripeConfigured()) {
-    redirect("/pricing?error=not-configured");
-  }
-
-  const requestHeaders = await headers();
-  const country =
-    requestHeaders.get("x-vercel-ip-country") ?? requestHeaders.get("cf-ipcountry") ?? "US";
-
-  const { organization } = await ensurePersonalOrganization({
-    id: user.id,
-    email: user.email,
-  });
-  const checkoutReservation = await reserveSubscriptionCheckout(
-    organization.id,
-    productId,
-    quantity,
-    country,
-  );
-  if (checkoutReservation.productId !== productId || checkoutReservation.quantity !== quantity) {
-    redirect("/pricing?error=checkout-pending");
-  }
-  const stripeProvider = getStripeProvider(checkoutReservation.token);
-  if (!stripeProvider) {
-    redirect("/pricing?error=not-configured");
-  }
+  const productId = formData.get("productId");
+  const parsedQuantity = subscriptionCheckoutQuantitySchema.safeParse(formData.get("quantity"));
+  if (typeof productId !== "string") redirect("/pricing?error=invalid-product");
+  if (!parsedQuantity.success) redirect("/pricing?error=invalid-seats");
+  if (!isStripeConfigured()) redirect("/pricing?error=not-configured");
+  const quantity = parsedQuantity.data;
   let checkoutRedirect: string;
 
   try {
-    const checkout = await stripeProvider.createCheckoutSession(
+    // Resolving the full catalog also rejects duplicate monthly/yearly selections.
+    const product = (await getActiveMembershipProducts()).find(
+      (candidate) => candidate.id === productId,
+    );
+    if (!product) throw new Error("Membership product is not active.");
+    const provider = getStripeProvider();
+    if (!provider) throw new Error("Stripe is not configured.");
+    await validateStripeMembershipMapping(
+      product.checkoutMapping,
+      quantity,
+      stripeMembershipCatalogProvider(provider),
+    );
+
+    const customers = await getEggheadDatabase()
+      .select()
+      .from(merchantCustomer)
+      .where(eq(merchantCustomer.userId, user.id));
+    if (customers.length > 1)
+      throw new Error("Ambiguous Stripe customer mapping; reconciliation required.");
+    const [customer] = customers;
+    if (
+      customer &&
+      (customer.status !== 1 ||
+        customer.merchantAccountId !== product.checkoutMapping.merchantAccountId ||
+        !customer.identifier)
+    ) {
+      throw new Error("Existing Stripe customer mapping does not match the checkout account.");
+    }
+    if (customer) {
+      const stripeCustomer = await provider.getCustomer(customer.identifier);
+      if (stripeCustomer.livemode || ("deleted" in stripeCustomer && stripeCustomer.deleted)) {
+        throw new Error("Existing Stripe customer is not an active test-mode customer.");
+      }
+    }
+
+    const requestHeaders = await headers();
+    const country =
+      requestHeaders.get("x-vercel-ip-country") ?? requestHeaders.get("cf-ipcountry") ?? "US";
+    const { organization } = await ensurePersonalOrganization({ id: user.id, email: user.email });
+    checkoutRedirect = await startReservedSubscriptionCheckout(
       {
-        productId,
+        mapping: product.checkoutMapping,
+        productName: product.name,
+        quantity,
+        country,
+        siteUrl: getSiteUrl(),
         userId: user.id,
         organizationId: organization.id,
-        quantity,
-        bulk: quantity > 1,
-        country: checkoutReservation.country,
-        cancelUrl: `${getSiteUrl()}/pricing`,
+        email: user.email,
+        ...(customer ? { customerId: customer.identifier } : {}),
       },
-      adapter,
+      organizationCheckoutStore(organization.id),
+      stripeSubscriptionCheckoutProvider(provider),
     );
-    const createdCheckout = takeCreatedStripeSubscriptionCheckout(stripeProvider);
-    if (!createdCheckout) {
-      throw new Error("Stripe did not create a subscription checkout session.");
-    }
-    await storeSubscriptionCheckoutSession(
-      organization.id,
-      checkoutReservation.token,
-      createdCheckout,
-    );
-    checkoutRedirect = checkout.redirect;
+    console.info("Subscription checkout ready", {
+      productId,
+      interval: product.checkoutMapping.interval,
+      quantity,
+    });
   } catch (error) {
-    console.error("Subscription checkout failed", {
-      error,
-      organizationId: organization.id,
+    console.error("Subscription checkout blocked; reservation retained", {
+      reason: error instanceof Error ? error.message : "Unknown checkout failure",
       productId,
       quantity,
-      reservationFingerprint: createHash("sha256")
-        .update(checkoutReservation.token)
-        .digest("hex")
-        .slice(0, 12),
     });
     redirect("/pricing?error=checkout");
   }
-
   redirect(checkoutRedirect);
 }

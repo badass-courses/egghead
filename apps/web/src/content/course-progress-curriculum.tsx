@@ -23,11 +23,12 @@ function useCourseProgress(course: CourseForPage) {
 }
 
 export function CoursePageProgressCurriculum({ course }: { course: CourseForPage }) {
-  const { completedCount, completedLessonIds, isAuthenticated } = useCourseProgress(course);
+  const { completedCount, completedLessonIds, isAuthenticated, readStatus } =
+    useCourseProgress(course);
 
   return (
     <>
-      {isAuthenticated ? (
+      {isAuthenticated && readStatus === "available" ? (
         <p
           aria-live="polite"
           className="m-0 text-xs font-extrabold text-muted-foreground"
@@ -39,7 +40,7 @@ export function CoursePageProgressCurriculum({ course }: { course: CourseForPage
       <CourseCurriculum
         completedLessonIds={completedLessonIds}
         course={course}
-        showProgress={isAuthenticated}
+        showProgress={isAuthenticated && readStatus === "available"}
       />
     </>
   );
@@ -52,7 +53,8 @@ export function CourseLessonProgressNavigation({
   activeLessonSlug: string;
   course: CourseForPage;
 }) {
-  const { completedCount, completedLessonIds, isAuthenticated } = useCourseProgress(course);
+  const { completedCount, completedLessonIds, isAuthenticated, readStatus } =
+    useCourseProgress(course);
   const duration = courseDurationLabel(course.lessons);
 
   return (
@@ -77,14 +79,16 @@ export function CourseLessonProgressNavigation({
               {course.title}
             </ResourceListHeaderTitle>
             <ResourceListHeaderMeta aria-live="polite">
-              {isAuthenticated
-                ? `${completedCount}/${course.lessons.length} watched`
-                : `${course.lessonCount} ${course.lessonCount === 1 ? "lesson" : "lessons"}`}
+              {readStatus === "unavailable"
+                ? "Saved progress unavailable"
+                : isAuthenticated
+                  ? `${completedCount}/${course.lessons.length} watched`
+                  : `${course.lessonCount} ${course.lessonCount === 1 ? "lesson" : "lessons"}`}
               {duration ? ` · ${duration}` : null}
             </ResourceListHeaderMeta>
           </ResourceListHeader>
         }
-        showProgress={isAuthenticated}
+        showProgress={isAuthenticated && readStatus === "available"}
       />
     </aside>
   );

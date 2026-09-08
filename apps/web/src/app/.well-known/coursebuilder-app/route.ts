@@ -1,5 +1,10 @@
 import { getBaseUrl } from "../../../coursebuilder/url";
-import { getEggheadRuntime, isBetaDatabaseApproved } from "../../../db/local-docker";
+import {
+  getEggheadRuntime,
+  getRuntimeOperationPermissions,
+  isBetaDatabaseApproved,
+} from "../../../db/local-docker";
+import { courseBuilderHttpOperations } from "../../../coursebuilder/http-policy";
 
 export function GET(request: Request) {
   const baseUrl = getBaseUrl(request);
@@ -22,9 +27,13 @@ export function GET(request: Request) {
         localOnly: runtime === "local",
         betaRuntime: runtime === "beta",
         betaDatabaseApproved: isBetaDatabaseApproved(),
-        commerceExcluded: true,
-        stripeWriterUnchanged: true,
-        inngestWriterUnchanged: true,
+        operationPermissions: getRuntimeOperationPermissions(),
+        permissionEvidence: "application policy; database privileges not probed",
+        courseBuilderHttpOperations,
+        commerceWritesLocalOnly: true,
+        betaAccountWritesRequireSeparateApproval: true,
+        betaProgressWritesRequireSeparateApproval: true,
+        indexingRequiresSeparateApproval: true,
         readFlipBlocked: true,
       },
     },

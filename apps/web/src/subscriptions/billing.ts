@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { getStripeProvider, getSiteUrl } from "../coursebuilder/stripe-provider";
 import { getEggheadDatabase } from "../db/adapter";
 import { merchantCustomer, merchantSubscription } from "../db/schema";
+import { assertCommerceWritesAllowed } from "../db/local-docker";
 import { getCurrentSubscriptionForUser } from "./status";
 
 export type MembershipBillingSummary = {
@@ -172,6 +173,7 @@ export async function getMembershipBillingSummary(
 }
 
 export async function getMembershipBillingPortalUrl(userId: string) {
+  assertCommerceWritesAllowed();
   try {
     const membership = await getStripeMembershipForUser(userId);
     if (!membership) return null;

@@ -38,6 +38,18 @@ export function lessonFreeForeverFromFields(fields: JsonFields): boolean {
   return fields["freeForever"] === true;
 }
 
+/** Absence of metadata is different from a resolved, explicit paid marker. */
+export function lessonHasPaidAccessSignal(fields: JsonFields): boolean {
+  if (lessonFreeForeverFromFields(fields)) return false;
+  return (
+    lessonHasRailsProContentSignal(fields) ||
+    booleanOrNull(fields["freeAccess"]) !== null ||
+    booleanOrNull(fields["free_forever"]) !== null ||
+    lowerTextOrNull(fields["access"]) === "pro" ||
+    fields["freeForever"] === false
+  );
+}
+
 export function lessonHasRailsProContentSignal(fields: JsonFields): boolean {
   return (
     booleanOrNull(fields["isProContent"]) !== null ||
@@ -70,12 +82,28 @@ export function lessonFreeForeverSql(alias: string) {
   `;
 }
 
-/**
- * Access law: only course-linked lessons may gate, and a lesson-level free
- * marking always wins over course-level gating (Rails `free_forever` truth).
- */
-export function lessonRequiresAccess(input: { courseLinked: boolean; freeForever: boolean }) {
-  return input.courseLinked && !input.freeForever;
+export function lessonAccessFromFields(
+  fields: JsonFields,
+  input: { hasParentCourseEvidence: boolean; freeForeverOverride?: boolean | null },
+) {
+  return {
+    freeForever: input.freeForeverOverride ?? lessonFreeForeverFromFields(fields),
+    isProContent:
+      input.freeForeverOverride == null
+        ? lessonHasPaidAccessSignal(fields)
+        : !input.freeForeverOverride,
+    courseLinked: input.hasParentCourseEvidence,
+  };
+}
+
+/** Explicit free markings win; missing routing metadata must not erase paid
+ * evidence. Truly standalone lessons with no paid evidence remain ungated. */
+export function lessonRequiresAccess(input: {
+  courseLinked: boolean;
+  freeForever: boolean;
+  isProContent?: boolean;
+}) {
+  return !input.freeForever && (input.courseLinked || input.isProContent === true);
 }
 
 function booleanOrNull(value: unknown): boolean | null {

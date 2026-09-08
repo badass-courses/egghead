@@ -7,6 +7,9 @@ const LEADING_SLASH = /^\//;
 export type EggheadRuntime = "beta" | "local" | "production";
 
 let pool: mysql.Pool | null = null;
+let poolUrl: string | null = null;
+
+export class RuntimePolicyError extends Error {}
 
 export type DatabaseSafety = {
   runtime: EggheadRuntime;
@@ -18,10 +21,11 @@ export type DatabaseSafety = {
   betaDatabaseAllowed: boolean;
   productionRuntimeBlocked: boolean;
   readFlipBlocked: true;
+  accountWritesAllowed: boolean;
+  progressWritesAllowed: boolean;
   commerceWritesAllowed: boolean;
   stripeWriterBlocked: boolean;
   inngestWriterBlocked: boolean;
-  planetScaleWritesApproved: false;
 };
 
 export function getDatabaseUrl() {
@@ -78,17 +82,19 @@ export function assertDatabaseUrlForRuntime(rawUrl = getDatabaseUrl()): Database
   const commerceWritesAllowed = runtime === "local" && localDockerOnly;
 
   if (productionRuntimeBlocked) {
-    throw new Error("Refusing production Egghead runtime before explicit read-flip approval.");
+    throw new RuntimePolicyError(
+      "Refusing production Egghead runtime before explicit read-flip approval.",
+    );
   }
 
   if (runtime === "local" && !localDockerOnly) {
-    throw new Error(
+    throw new RuntimePolicyError(
       `Refusing non-local MySQL URL in local runtime: host=${host} database=${database}`,
     );
   }
 
   if (runtime === "beta" && !betaDatabaseAllowed) {
-    throw new Error(
+    throw new RuntimePolicyError(
       `Refusing beta MySQL URL without approved PlanetScale beta runtime: host=${host} database=${database}`,
     );
   }
@@ -103,11 +109,65 @@ export function assertDatabaseUrlForRuntime(rawUrl = getDatabaseUrl()): Database
     betaDatabaseAllowed,
     productionRuntimeBlocked,
     readFlipBlocked: true,
+    accountWritesAllowed:
+      commerceWritesAllowed ||
+      (betaDatabaseAllowed &&
+        getEnv("EGGHEAD_BETA_ACCOUNT_WRITES_APPROVED")?.trim().toLowerCase() === "true"),
+    progressWritesAllowed:
+      commerceWritesAllowed ||
+      (betaDatabaseAllowed &&
+        getEnv("EGGHEAD_BETA_PROGRESS_WRITES_APPROVED")?.trim().toLowerCase() === "true"),
     commerceWritesAllowed,
     stripeWriterBlocked: !commerceWritesAllowed,
     inngestWriterBlocked: !commerceWritesAllowed,
-    planetScaleWritesApproved: false,
   };
+}
+
+export function assertAccountWritesAllowed(rawUrl = getDatabaseUrl()) {
+  const safety = assertDatabaseUrlForRuntime(rawUrl);
+  if (!safety.accountWritesAllowed) {
+    throw new RuntimePolicyError(
+      "Refusing account writes without explicit runtime write approval.",
+    );
+  }
+  return safety;
+}
+
+export function assertProgressWritesAllowed(rawUrl = getDatabaseUrl()) {
+  const safety = assertDatabaseUrlForRuntime(rawUrl);
+  if (!safety.progressWritesAllowed) {
+    throw new RuntimePolicyError(
+      "Refusing progress writes without explicit runtime write approval.",
+    );
+  }
+  return safety;
+}
+
+export function getRuntimeOperationPermissions(rawUrl = getDatabaseUrl()) {
+  try {
+    const safety = assertDatabaseUrlForRuntime(rawUrl);
+    return {
+      databaseConnection: true,
+      accountWrites: safety.accountWritesAllowed,
+      progressWrites: safety.progressWritesAllowed,
+      commerceWrites: safety.commerceWritesAllowed,
+      billingPortal: safety.commerceWritesAllowed,
+      stripeWebhook: safety.commerceWritesAllowed,
+      inngestWrites: safety.commerceWritesAllowed,
+      ddl: safety.localDockerOnly,
+    };
+  } catch {
+    return {
+      databaseConnection: false,
+      accountWrites: false,
+      progressWrites: false,
+      commerceWrites: false,
+      billingPortal: false,
+      stripeWebhook: false,
+      inngestWrites: false,
+      ddl: false,
+    };
+  }
 }
 
 export function commerceWritesAreAllowed(rawUrl = getDatabaseUrl()) {
@@ -122,7 +182,7 @@ export function assertCommerceWritesAllowed(rawUrl = getDatabaseUrl()) {
   const safety = assertDatabaseUrlForRuntime(rawUrl);
 
   if (!safety.commerceWritesAllowed) {
-    throw new Error(
+    throw new RuntimePolicyError(
       `Refusing Egghead commerce writes outside the local Docker runtime: runtime=${safety.runtime} host=${safety.host} database=${safety.database}`,
     );
   }
@@ -134,7 +194,7 @@ export function assertLocalDockerDatabaseUrl(rawUrl = getDatabaseUrl()) {
   const safety = assertDatabaseUrlForRuntime(rawUrl);
 
   if (!safety.localDockerOnly) {
-    throw new Error(
+    throw new RuntimePolicyError(
       `Expected local Docker MySQL URL but got runtime=${safety.runtime} host=${safety.host} database=${safety.database}`,
     );
   }
@@ -159,12 +219,20 @@ export function mysqlConnectionOptionsFromUrl(rawUrl: string) {
 }
 
 export function getEggheadMysqlPool() {
-  if (pool) return pool;
-
   const rawUrl = getDatabaseUrl();
   assertDatabaseUrlForRuntime(rawUrl);
-  pool = mysql.createPool(mysqlConnectionOptionsFromUrl(rawUrl));
+  if (pool) {
+    // A cached pool must never outlive its runtime or target approval.
+    if (poolUrl !== rawUrl) {
+      throw new RuntimePolicyError(
+        "Database target changed after pool initialization; restart required.",
+      );
+    }
+    return pool;
+  }
 
+  pool = mysql.createPool(mysqlConnectionOptionsFromUrl(rawUrl));
+  poolUrl = rawUrl;
   return pool;
 }
 
@@ -180,15 +248,20 @@ export function createLocalMysqlConnection() {
 
 export async function getRuntimeDbProof() {
   let connection: mysql.Connection | null = null;
+  let safety: DatabaseSafety | null = null;
 
   try {
     const rawUrl = getDatabaseUrl();
-    const safety = assertDatabaseUrlForRuntime(rawUrl);
+    safety = assertDatabaseUrlForRuntime(rawUrl);
     connection = await mysql.createConnection(mysqlConnectionOptionsFromUrl(rawUrl));
     const [rows] = await connection.query("SELECT 1 AS ok");
 
     return {
       ok: true,
+      evidence: "connectivity-only",
+      proves: ["SELECT 1 connectivity"],
+      doesNotProve: ["table privileges", "write privileges", "application readiness"],
+      operationPermissions: getRuntimeOperationPermissions(rawUrl),
       runtime: safety.runtime,
       localDockerOnly: safety.localDockerOnly,
       betaDatabaseAllowed: safety.betaDatabaseAllowed,
@@ -196,10 +269,11 @@ export async function getRuntimeDbProof() {
       database: safety.database,
       query: Array.isArray(rows) ? rows[0] : null,
       readFlipBlocked: safety.readFlipBlocked,
+      accountWritesAllowed: safety.accountWritesAllowed,
+      progressWritesAllowed: safety.progressWritesAllowed,
       commerceWritesAllowed: safety.commerceWritesAllowed,
       stripeWriterBlocked: safety.stripeWriterBlocked,
       inngestWriterBlocked: safety.inngestWriterBlocked,
-      planetScaleWritesApproved: false,
     };
   } catch (error) {
     let runtime: EggheadRuntime | "unsupported" = "unsupported";
@@ -212,15 +286,13 @@ export async function getRuntimeDbProof() {
 
     return {
       ok: false,
+      evidence: "connectivity-only",
+      operationPermissions: getRuntimeOperationPermissions(),
       runtime,
-      localDockerOnly: runtime === "local",
-      betaDatabaseAllowed: false,
+      localDockerOnly: safety?.localDockerOnly ?? false,
+      betaDatabaseAllowed: safety?.betaDatabaseAllowed ?? false,
       error: error instanceof Error ? error.message : String(error),
       readFlipBlocked: true,
-      commerceWritesAllowed: false,
-      stripeWriterBlocked: true,
-      inngestWriterBlocked: true,
-      planetScaleWritesApproved: false,
     };
   } finally {
     await connection?.end().catch(() => undefined);

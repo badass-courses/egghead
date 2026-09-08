@@ -4,5 +4,5 @@ export async function GET() {
   const proof = await getRuntimeDbProof();
   const status = proof.ok ? 200 : 503;
 
-  return Response.json(proof, { status });
+  return Response.json(proof, { status, headers: { "Cache-Control": "no-store" } });
 }

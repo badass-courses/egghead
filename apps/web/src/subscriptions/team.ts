@@ -3,19 +3,27 @@ import { randomUUID } from "node:crypto";
 import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
+import { assertAccountWritesAllowed } from "../db/local-docker";
 import {
   entitlements,
   merchantSubscription,
   organizationMemberships,
   products,
   subscription,
+  users,
 } from "../db/schema";
 import {
   EGGHEAD_SUBSCRIPTION_ENTITLEMENT,
   STRIPE_SUBSCRIPTION_SOURCE,
   stripeSubscriptionSeatEntitlementId,
+  subscriptionGrantOccupiesSeat,
+  subscriptionPaidThrough,
+  subscriptionRecord,
+  type SubscriptionGrantState,
 } from "./access";
-import { MIN_TEAM_SEATS, teamSubscriptionFieldsSchema } from "./team-contracts";
+import { isTeamSubscription, teamSubscriptionFieldsSchema } from "./team-contracts";
+import { consumeTeamInvitation } from "./team-invitation-state";
+import type { TeamInvitePayload } from "./team-invite-token";
 
 const CURRENT_SUBSCRIPTION_STATUSES = ["active", "past_due", "trialing"];
 
@@ -78,10 +86,7 @@ export async function getTeamMembershipForUser(
     ),
     with: { product: true },
   });
-  const teamSubscription = subscriptions.find((candidate) => {
-    const fields = teamSubscriptionFieldsSchema.safeParse(candidate.fields);
-    return fields.success && fields.data.seats >= MIN_TEAM_SEATS;
-  });
+  const teamSubscription = subscriptions.find((candidate) => isTeamSubscription(candidate.fields));
   const fields = teamSubscriptionFieldsSchema.safeParse(teamSubscription?.fields);
   if (!teamSubscription || !fields.success) return null;
 
@@ -109,22 +114,24 @@ export async function getTeamInviteDetails(
     with: { product: true },
   });
   const fields = teamSubscriptionFieldsSchema.safeParse(teamSubscription?.fields);
-  if (!teamSubscription || !fields.success || fields.data.seats < MIN_TEAM_SEATS) return null;
+  if (!teamSubscription || !fields.success || !isTeamSubscription(teamSubscription.fields))
+    return null;
 
   const [owner, assignedSeats] = await Promise.all([
     adapter.getUserById(fields.data.ownerId),
     db.query.entitlements.findMany({
-      columns: { id: true },
       where: and(
         eq(entitlements.sourceId, teamSubscription.id),
         eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
-        isNull(entitlements.deletedAt),
       ),
     }),
   ]);
 
   return {
-    availableSeats: Math.max(0, fields.data.seats - assignedSeats.length),
+    availableSeats: Math.max(
+      0,
+      fields.data.seats - assignedSeats.filter(subscriptionGrantOccupiesSeat).length,
+    ),
     ownerEmail: owner?.email ?? null,
     ownerId: fields.data.ownerId,
     ownerName: owner?.name ?? null,
@@ -154,7 +161,11 @@ export async function getOwnedTeamSubscription(
   });
   const ownedCandidates = subscriptions.flatMap((candidate) => {
     const fields = teamSubscriptionFieldsSchema.safeParse(candidate.fields);
-    if (!fields.success || fields.data.ownerId !== userId || fields.data.seats < MIN_TEAM_SEATS) {
+    if (
+      !fields.success ||
+      fields.data.ownerId !== userId ||
+      !isTeamSubscription(candidate.fields)
+    ) {
       return [];
     }
 
@@ -195,12 +206,11 @@ export async function getOwnedTeamSubscription(
     where: and(
       eq(entitlements.sourceId, ownedSubscription.id),
       eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
-      isNull(entitlements.deletedAt),
     ),
     with: { user: true },
   });
   const members = seatEntitlements.flatMap<TeamSubscriptionMember>((entitlement) => {
-    if (!entitlement.user) return [];
+    if (!entitlement.user || !subscriptionGrantOccupiesSeat(entitlement)) return [];
 
     return [
       {
@@ -242,7 +252,7 @@ export async function getOwnedTeamSubscriptionRow(subscriptionId: string, ownerI
     !row ||
     !fields.success ||
     fields.data.ownerId !== ownerId ||
-    fields.data.seats < MIN_TEAM_SEATS ||
+    !isTeamSubscription(row.fields) ||
     !row.organizationId ||
     !row.merchantSubscription?.identifier
   ) {
@@ -256,62 +266,107 @@ export async function getOwnedTeamSubscriptionRow(subscriptionId: string, ownerI
   };
 }
 
-type GrantTeamSeatResult =
-  | { status: "already-assigned" }
-  | { status: "assigned" }
-  | { status: "full" }
-  | { status: "not-found" };
+type GrantTeamSeatResult = {
+  status: "already-assigned" | "assigned" | "full" | "not-found" | "invalid-invite";
+};
+
+export function planTeamSeatGrant(input: {
+  fields: unknown;
+  status: string;
+  subscriptionId: string;
+  ownerId: string;
+  actor: { userId: string; email: string };
+  grants: (SubscriptionGrantState & { userId: string | null })[];
+  invitation?: TeamInvitePayload;
+  now: Date;
+}):
+  | { status: Exclude<GrantTeamSeatResult["status"], "assigned"> }
+  | {
+      status: "ready";
+      fields: Record<string, unknown>;
+      expiresAt: Date;
+    } {
+  const fields = teamSubscriptionFieldsSchema.safeParse(input.fields);
+  const paidThrough = subscriptionPaidThrough(input.fields);
+  if (
+    !fields.success ||
+    fields.data.ownerId !== input.ownerId ||
+    !isTeamSubscription(input.fields) ||
+    !CURRENT_SUBSCRIPTION_STATUSES.includes(input.status) ||
+    !paidThrough ||
+    paidThrough <= input.now
+  ) {
+    return { status: "not-found" };
+  }
+
+  let consumedFields = subscriptionRecord(input.fields);
+  if (input.actor.userId !== fields.data.ownerId || input.invitation) {
+    if (!input.invitation || input.invitation.subscriptionId !== input.subscriptionId)
+      return { status: "invalid-invite" };
+    const consumed = consumeTeamInvitation(
+      input.fields,
+      input.invitation,
+      input.actor,
+      input.now.getTime(),
+    );
+    if (!consumed) return { status: "invalid-invite" };
+    consumedFields = consumed;
+  }
+  const assigned = input.grants.filter(subscriptionGrantOccupiesSeat);
+  if (assigned.some((grant) => grant.userId === input.actor.userId))
+    return { status: "already-assigned" };
+  const lifecycle = subscriptionRecord(subscriptionRecord(input.fields)["stripeLifecycle"]);
+  if (lifecycle["quantityReconciliation"] || assigned.length >= fields.data.seats)
+    return { status: "full" };
+
+  return { status: "ready", fields: consumedFields, expiresAt: paidThrough };
+}
 
 export async function grantTeamSubscriptionSeat(input: {
-  currentPeriodEnd: Date;
   ownerId: string;
   seatUserId: string;
-  status: string;
   stripeSubscriptionId: string;
   subscriptionId: string;
+  invitation?: TeamInvitePayload;
 }): Promise<GrantTeamSeatResult> {
+  assertAccountWritesAllowed();
   const db = getEggheadDatabase();
-
   return db.transaction(async (transaction) => {
     const [storedSubscription] = await transaction
-      .select({
-        fields: subscription.fields,
-        organizationId: subscription.organizationId,
-        productId: subscription.productId,
-        status: subscription.status,
-      })
+      .select()
       .from(subscription)
       .where(eq(subscription.id, input.subscriptionId))
       .for("update");
-    const fields = teamSubscriptionFieldsSchema.safeParse(storedSubscription?.fields);
-
-    if (
-      !storedSubscription?.organizationId ||
-      !fields.success ||
-      fields.data.ownerId !== input.ownerId ||
-      fields.data.seats < MIN_TEAM_SEATS ||
-      !CURRENT_SUBSCRIPTION_STATUSES.includes(storedSubscription.status)
-    ) {
-      return { status: "not-found" };
-    }
-
-    const assignedEntitlements = await transaction
-      .select({ id: entitlements.id, userId: entitlements.userId })
+    if (!storedSubscription?.organizationId) return { status: "not-found" };
+    const storedMerchant = await transaction.query.merchantSubscription.findFirst({
+      where: eq(merchantSubscription.id, storedSubscription.merchantSubscriptionId),
+    });
+    if (storedMerchant?.identifier !== input.stripeSubscriptionId) return { status: "not-found" };
+    const actor = await transaction.query.users.findFirst({
+      where: eq(users.id, input.seatUserId),
+    });
+    if (!actor?.email) return { status: "invalid-invite" };
+    const grants = await transaction
+      .select()
       .from(entitlements)
       .where(
         and(
           eq(entitlements.sourceId, input.subscriptionId),
           eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
-          isNull(entitlements.deletedAt),
         ),
       );
-
-    if (assignedEntitlements.some((entitlement) => entitlement.userId === input.seatUserId)) {
-      return { status: "already-assigned" };
-    }
-    if (assignedEntitlements.length >= fields.data.seats) {
-      return { status: "full" };
-    }
+    const now = new Date();
+    const plan = planTeamSeatGrant({
+      fields: storedSubscription.fields,
+      status: storedSubscription.status,
+      subscriptionId: input.subscriptionId,
+      ownerId: input.ownerId,
+      actor: { userId: actor.id, email: actor.email },
+      grants,
+      ...(input.invitation ? { invitation: input.invitation } : {}),
+      now,
+    });
+    if (plan.status !== "ready") return plan;
 
     let membership = await transaction.query.organizationMemberships.findFirst({
       where: and(
@@ -319,7 +374,6 @@ export async function grantTeamSubscriptionSeat(input: {
         eq(organizationMemberships.userId, input.seatUserId),
       ),
     });
-
     if (!membership) {
       const membershipId = randomUUID();
       await transaction.insert(organizationMemberships).values({
@@ -332,50 +386,47 @@ export async function grantTeamSubscriptionSeat(input: {
         where: eq(organizationMemberships.id, membershipId),
       });
     }
-    if (!membership) return { status: "not-found" };
+    if (!membership) throw new Error("Unable to create team membership.");
 
     const entitlementId = stripeSubscriptionSeatEntitlementId(
       input.stripeSubscriptionId,
       input.seatUserId,
     );
-    const now = new Date();
+    const previousGrant = grants.find((grant) => grant.id === entitlementId);
+    const metadata = {
+      ...subscriptionRecord(previousGrant?.metadata),
+      productId: storedSubscription.productId,
+      status: storedSubscription.status,
+      stripeSubscriptionId: input.stripeSubscriptionId,
+      teamSeat: true,
+      revocationReason: null,
+      paidThrough: plan.expiresAt.getTime(),
+    };
+    const seatValues = {
+      userId: input.seatUserId,
+      organizationId: storedSubscription.organizationId,
+      organizationMembershipId: membership.id,
+      sourceId: input.subscriptionId,
+      metadata,
+      expiresAt: plan.expiresAt,
+      deletedAt: null,
+      updatedAt: now,
+    };
     await transaction
       .insert(entitlements)
       .values({
         id: entitlementId,
         entitlementType: EGGHEAD_SUBSCRIPTION_ENTITLEMENT,
-        userId: input.seatUserId,
-        organizationId: storedSubscription.organizationId,
-        organizationMembershipId: membership.id,
         sourceType: STRIPE_SUBSCRIPTION_SOURCE,
-        sourceId: input.subscriptionId,
-        metadata: {
-          productId: storedSubscription.productId,
-          status: input.status,
-          stripeSubscriptionId: input.stripeSubscriptionId,
-          teamSeat: true,
-        },
-        expiresAt: input.currentPeriodEnd,
-        deletedAt: null,
+        ...seatValues,
       })
-      .onDuplicateKeyUpdate({
-        set: {
-          userId: input.seatUserId,
-          organizationId: storedSubscription.organizationId,
-          organizationMembershipId: membership.id,
-          sourceId: input.subscriptionId,
-          metadata: {
-            productId: storedSubscription.productId,
-            status: input.status,
-            stripeSubscriptionId: input.stripeSubscriptionId,
-            teamSeat: true,
-          },
-          expiresAt: input.currentPeriodEnd,
-          deletedAt: null,
-          updatedAt: now,
-        },
-      });
-
+      .onDuplicateKeyUpdate({ set: seatValues });
+    // Consumed invitation and grant commit or roll back together under this same lock.
+    await transaction
+      .update(subscription)
+      .set({ fields: plan.fields })
+      .where(eq(subscription.id, input.subscriptionId));
+    console.info("subscription.team.seat_assigned", { subscriptionId: input.subscriptionId });
     return { status: "assigned" };
   });
 }
@@ -387,22 +438,53 @@ export async function removeTeamSubscriptionSeat(input: {
   subscriptionId: string;
   userId: string;
 }): Promise<RemoveTeamSeatResult> {
+  assertAccountWritesAllowed();
   if (input.ownerId === input.userId) return { status: "owner" };
-
-  const ownedSubscription = await getOwnedTeamSubscriptionRow(input.subscriptionId, input.ownerId);
-  if (!ownedSubscription) return { status: "not-found" };
-
-  await getEggheadDatabase()
-    .update(entitlements)
-    .set({ deletedAt: new Date(), updatedAt: new Date() })
-    .where(
-      and(
-        eq(entitlements.sourceId, input.subscriptionId),
-        eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
-        eq(entitlements.userId, input.userId),
-        isNull(entitlements.deletedAt),
-      ),
-    );
-
-  return { status: "removed" };
+  return getEggheadDatabase().transaction(async (transaction) => {
+    const [stored] = await transaction
+      .select()
+      .from(subscription)
+      .where(eq(subscription.id, input.subscriptionId))
+      .for("update");
+    const fields = teamSubscriptionFieldsSchema.safeParse(stored?.fields);
+    if (
+      !stored ||
+      !fields.success ||
+      fields.data.ownerId !== input.ownerId ||
+      !isTeamSubscription(stored.fields)
+    ) {
+      return { status: "not-found" };
+    }
+    const grants = await transaction
+      .select()
+      .from(entitlements)
+      .where(
+        and(
+          eq(entitlements.sourceId, input.subscriptionId),
+          eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
+          eq(entitlements.userId, input.userId),
+        ),
+      );
+    const now = new Date();
+    await grants.reduce<Promise<void>>(async (previous, grant) => {
+      await previous;
+      await transaction
+        .update(entitlements)
+        .set({
+          deletedAt: grant.deletedAt ?? now,
+          updatedAt: now,
+          metadata: {
+            ...subscriptionRecord(grant.metadata),
+            revocationReason: "seat_removed",
+            seatRemovedAt: now.toISOString(),
+          },
+        })
+        .where(eq(entitlements.id, grant.id));
+    }, Promise.resolve());
+    console.info("subscription.team.seat_removed", {
+      subscriptionId: input.subscriptionId,
+      grants: grants.length,
+    });
+    return { status: "removed" };
+  });
 }

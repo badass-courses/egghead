@@ -7,6 +7,7 @@ import { readCompletedResourceIdsForUser } from "../progress/resource-progress";
 export type LessonProgressSnapshot = {
   initialCompletedLessonIds: string[];
   isAuthenticated: boolean;
+  readStatus: "available" | "unavailable";
 };
 
 export async function getLessonProgressSnapshot(
@@ -23,6 +24,7 @@ export async function getLessonProgressSnapshot(
         requestedResourceIds.has(resourceId),
       ),
       isAuthenticated: false,
+      readStatus: "available",
     };
   }
 
@@ -33,6 +35,7 @@ export async function getLessonProgressSnapshot(
         resourceIds,
       }),
       isAuthenticated: true,
+      readStatus: "available",
     };
   } catch (error) {
     logger.error(
@@ -43,6 +46,7 @@ export async function getLessonProgressSnapshot(
     return {
       initialCompletedLessonIds: [],
       isAuthenticated: true,
+      readStatus: "unavailable",
     };
   }
 }

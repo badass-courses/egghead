@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@egghead/ui/button";
 
-import type { BillingInterval } from "@coursebuilder/core/schemas";
+import type { MembershipBillingInterval } from "../../subscriptions/catalog-contracts";
 
 import { subscriptionIntervalLabel } from "../../subscriptions/options";
 import { MAX_TEAM_SEATS, MIN_TEAM_SEATS } from "../../subscriptions/team-contracts";
@@ -17,7 +17,7 @@ export type SubscriptionOption = {
   currency: string;
   price: string;
   unitAmount: number;
-  billingInterval: NonNullable<BillingInterval>;
+  billingInterval: MembershipBillingInterval;
 };
 
 type SubscriptionOptionsProps = {

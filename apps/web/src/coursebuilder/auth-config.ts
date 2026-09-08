@@ -6,6 +6,8 @@ import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEggheadRuntime } from "../db/local-docker";
 import { getEnv } from "../env";
 import { claimAnonymousLessonCompletions } from "../progress/anonymous-lesson-progress";
+import { getAuthSecret } from "./auth-secret";
+import { consumeAuthVerificationToken } from "./auth-verification-token";
 import { isEmailAuthEnabled } from "./email-auth";
 import { isEmailDeliveryEnabled } from "./email-delivery";
 import { createPostmarkEmailProvider } from "./email-provider";
@@ -43,7 +45,6 @@ function getAuthProviders(): NextAuthConfig["providers"] {
       GithubProvider({
         clientId: githubClientId,
         clientSecret: githubClientSecret,
-        allowDangerousEmailAccountLinking: true,
       }),
     );
   }
@@ -61,7 +62,10 @@ function getAuthProviders(): NextAuthConfig["providers"] {
 }
 
 export const authConfig = {
-  adapter: getCourseBuilderAdapter(),
+  adapter: {
+    ...getCourseBuilderAdapter(),
+    useVerificationToken: consumeAuthVerificationToken,
+  },
   providers: getAuthProviders(),
   events: {
     signIn: async ({ user }) => {
@@ -95,6 +99,6 @@ export const authConfig = {
     signIn: "/login",
     verifyRequest: "/check-your-email",
   },
-  secret: getEnv("AUTH_SECRET") ?? "local-dev-only-egghead-phase-0",
+  secret: getAuthSecret(),
   trustHost: true,
 } satisfies NextAuthConfig;

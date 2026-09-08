@@ -1,3 +1,4 @@
+import { logger } from "@coursebuilder/core/utils/logger";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -106,7 +107,26 @@ async function ProgressContent({ searchParams }: { searchParams: Promise<Progres
       page: routeState.page,
       ...(routeState.search ? { search: routeState.search } : {}),
     },
+  }).catch((error: unknown) => {
+    logger.error(
+      error instanceof Error ? error : new Error("Unknown private progress read failure"),
+      {
+        operation: "readPrivateLearningProgress",
+      },
+    );
+    return null;
   });
+  if (!progress) {
+    return (
+      <main>
+        <Container as="div" className="gap-y-6" size="wide">
+          <h1 className="text-4xl font-black">Your learning progress</h1>
+          <output>Your saved progress is temporarily unavailable. Reload to try again.</output>
+          <Link href="/profile">Back to profile</Link>
+        </Container>
+      </main>
+    );
+  }
   const viewState = { ...routeState, page: progress.page };
   const months = groupCompletionsByMonth(progress.completions);
   const firstResult = progress.totalCount === 0 ? 0 : (progress.page - 1) * progress.pageSize + 1;

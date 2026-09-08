@@ -1,4 +1,5 @@
 import type { RowDataPacket } from "mysql2";
+import type { Connection } from "mysql2/promise";
 import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
@@ -15,7 +16,7 @@ import {
   publishedResourceSql,
   routeableLessonResourceSql,
 } from "./publication";
-import { lessonFreeForeverFromFields, lessonHasRailsProContentSignal } from "./lesson-access";
+import { lessonAccessFromFields, lessonHasRailsProContentSignal } from "./lesson-access";
 import { canonicalLessonOrderSql } from "./canonical-order";
 import { contentResourceSlugSql } from "./resource-slug";
 import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
@@ -62,11 +63,7 @@ export type LessonForPage = {
   hasSrt: boolean;
   state: string | null;
   visibilityState: string | null;
-  videoHlsUrl: string | null;
-  videoDashUrl: string | null;
-  videoPosterUrl: string | null;
-  videoResourceId: string | null;
-  videoMuxPlaybackId: string | null;
+  hasVideo: boolean;
 };
 
 type LessonStaticParamRow = RowDataPacket & {
@@ -158,6 +155,31 @@ async function parentCoursesForLesson(
   return rows[0] ?? null;
 }
 
+async function hasExistingParentCourseEvidence(
+  connection: Connection,
+  lessonId: string,
+): Promise<boolean> {
+  // Publication and slug filters belong to routing, not authorization. A broken
+  // parent link is unresolved evidence, never proof that a lesson is standalone.
+  const [rows] = await connection.execute<(RowDataPacket & { hasParent: number })[]>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM egghead_ContentResourceResource link
+        LEFT JOIN egghead_ContentResource parent ON parent.id = link.resourceOfId
+        WHERE link.resourceId = ?
+          AND (
+            parent.id IS NULL
+            OR ${courseResourceCondition("parent")}
+            OR parent.type = 'section'
+          )
+      ) AS hasParent
+    `,
+    [lessonId],
+  );
+  return Number(rows[0]?.hasParent) === 1;
+}
+
 async function videoResourceForLesson(
   connection: Awaited<ReturnType<typeof createLocalMysqlConnection>>,
   lessonId: string,
@@ -231,24 +253,18 @@ async function sameSlugRailsTruthFreeForever(
   const freeRows = Number(row?.freeRows ?? 0);
   const proRows = Number(row?.proRows ?? 0);
 
-  if (freeRows > 0 && proRows === 0) return true;
-  if (proRows > 0 && freeRows === 0) return false;
+  if (proRows > 0) return false;
+  if (freeRows > 0) return true;
 
   return null;
 }
 
-function lessonFromRows(input: {
-  freeForeverOverride?: boolean | null;
-  lesson: ContentResourceRow;
-  parentCourse: ParentCourseRow | null;
-  requestedSlug: string;
-  videoResource: VideoResourceRow | null;
-}): LessonForPage {
-  const fields = fieldsFromJson(input.lesson.fields);
-  const parentCourseFields = input.parentCourse ? fieldsFromJson(input.parentCourse.fields) : {};
-  const videoFields = input.videoResource ? fieldsFromJson(input.videoResource.fields) : {};
-  const slug = stringField(fields, "slug") ?? input.requestedSlug;
-  const parentCourseSlug = stringField(parentCourseFields, "slug");
+function lessonPlaybackFromRows(
+  lesson: ContentResourceRow,
+  videoResource: VideoResourceRow | null,
+) {
+  const fields = fieldsFromJson(lesson.fields);
+  const videoFields = videoResource ? fieldsFromJson(videoResource.fields) : {};
   const muxPlaybackId =
     stringField(fields, "muxPlaybackId") ?? stringField(videoFields, "muxPlaybackId");
   const videoHlsUrl =
@@ -270,6 +286,58 @@ function lessonFromRows(input: {
     stringField(videoFields, "imageUrl") ??
     stringField(fields, "ogImage") ??
     stringField(videoFields, "ogImage");
+  return {
+    videoHlsUrl,
+    videoDashUrl,
+    videoPosterUrl: muxThumbnailUrl(muxPlaybackId) ?? fallbackPosterUrl,
+    videoResourceId: videoResource?.id ?? null,
+    videoMuxPlaybackId: muxPlaybackId,
+  };
+}
+
+async function readLessonPlaybackById(id: string) {
+  "use cache";
+  cacheLife("hours");
+  cacheTag("egghead-content");
+  cacheTag(`egghead-lesson-id:${id}`);
+  const connection = await createLocalMysqlConnection();
+  try {
+    const [rows] = await connection.execute<ContentResourceRow[]>(
+      `SELECT lesson.id, lesson.type, lesson.fields, lesson.createdAt, lesson.updatedAt
+       FROM egghead_ContentResource lesson
+       WHERE lesson.id = ? AND lesson.deletedAt IS NULL
+         ${routeableLessonResourceSql("lesson")}
+         AND ${lessonResourceCondition("lesson")}
+       LIMIT 1`,
+      [id],
+    );
+    const lesson = rows[0];
+    if (!lesson) return null;
+    return lessonPlaybackFromRows(lesson, await videoResourceForLesson(connection, id));
+  } finally {
+    await connection.end();
+  }
+}
+
+/** Keep playback entirely out of public page/cache/RSC props, including while
+ * access is pending. Denied reads never even load the playback projection. */
+export async function getLessonPlaybackForAccess(lessonId: string, accessGranted: boolean) {
+  return accessGranted ? readLessonPlaybackById(lessonId) : null;
+}
+
+export function lessonForPageFromRows(input: {
+  freeForeverOverride?: boolean | null;
+  hasParentCourseEvidence: boolean;
+  lesson: Pick<ContentResourceRow, "id" | "fields">;
+  parentCourse: Pick<ParentCourseRow, "id" | "fields"> | null;
+  requestedSlug: string;
+  videoResource: Pick<VideoResourceRow, "id" | "fields"> | null;
+}): LessonForPage {
+  const fields = fieldsFromJson(input.lesson.fields);
+  const parentCourseFields = input.parentCourse ? fieldsFromJson(input.parentCourse.fields) : {};
+  const videoFields = input.videoResource ? fieldsFromJson(input.videoResource.fields) : {};
+  const slug = stringField(fields, "slug") ?? input.requestedSlug;
+  const parentCourseSlug = stringField(parentCourseFields, "slug");
   const canonicalPath = parentCourseSlug
     ? collectionEntryPath(parentCourseSlug, slug)
     : standaloneContentPath(slug);
@@ -281,9 +349,7 @@ function lessonFromRows(input: {
     description: excerptField(fields),
     body: markdownField(fields),
     duration: numberField(fields, "duration") ?? numberField(videoFields, "duration"),
-    freeForever: input.freeForeverOverride ?? lessonFreeForeverFromFields(fields),
-    isProContent: booleanField(fields, "isProContent"),
-    courseLinked: Boolean(parentCourseSlug),
+    ...lessonAccessFromFields(fields, input),
     parentCourseId: input.parentCourse?.id ?? null,
     parentCourseSlug,
     parentCourseTitle: stringField(parentCourseFields, "title"),
@@ -302,11 +368,18 @@ function lessonFromRows(input: {
       Boolean(stringField(videoFields, "srt")),
     state: stringField(fields, "state"),
     visibilityState: stringField(fields, "visibilityState"),
-    videoHlsUrl,
-    videoDashUrl,
-    videoPosterUrl: muxThumbnailUrl(muxPlaybackId) ?? fallbackPosterUrl,
-    videoResourceId: input.videoResource?.id ?? null,
-    videoMuxPlaybackId: muxPlaybackId,
+    hasVideo: Boolean(
+      stringField(fields, "muxPlaybackId") ||
+      stringField(videoFields, "muxPlaybackId") ||
+      stringField(fields, "currentVideoHlsUrl") ||
+      stringField(videoFields, "currentVideoHlsUrl") ||
+      stringField(videoFields, "hlsUrl") ||
+      stringField(fields, "videoUrl") ||
+      stringField(videoFields, "videoUrl") ||
+      stringField(videoFields, "url") ||
+      stringField(fields, "currentVideoDashUrl") ||
+      stringField(videoFields, "currentVideoDashUrl"),
+    ),
   };
 }
 
@@ -338,16 +411,18 @@ async function getLessonByWhereClause(input: {
     if (!lesson) return null;
 
     const parentCourse = await parentCoursesForLesson(connection, lesson.id);
+    const hasParentCourseEvidence =
+      parentCourse !== null || (await hasExistingParentCourseEvidence(connection, lesson.id));
     const fields = fieldsFromJson(lesson.fields);
     const slug = stringField(fields, "slug") ?? input.requestedSlug;
-    const freeForeverOverride =
-      parentCourse && !lessonHasRailsProContentSignal(fields)
-        ? await sameSlugRailsTruthFreeForever(connection, { lessonId: lesson.id, slug })
-        : null;
+    const freeForeverOverride = !lessonHasRailsProContentSignal(fields)
+      ? await sameSlugRailsTruthFreeForever(connection, { lessonId: lesson.id, slug })
+      : null;
     const videoResource = await videoResourceForLesson(connection, lesson.id);
 
-    return lessonFromRows({
+    return lessonForPageFromRows({
       freeForeverOverride,
+      hasParentCourseEvidence,
       lesson,
       parentCourse,
       requestedSlug: input.requestedSlug,

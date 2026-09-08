@@ -1,7 +1,12 @@
+import { logger } from "@coursebuilder/core/utils/logger";
 import { cookies } from "next/headers";
 
 import { getLessonById } from "../content/lesson";
 import { completeResourcesForUser } from "./resource-progress";
+import { syncCourseProgressForUser } from "./course-progress";
+import { resolveLessonProgressCourses } from "./lesson-progress";
+import { withProgressTransaction } from "./progress-transaction";
+import { claimProgressAfterAuthentication } from "./authenticated-progress-claim";
 
 export const ANONYMOUS_LESSON_LIMIT = 3;
 
@@ -77,32 +82,59 @@ export async function anonymousLessonAccess(resourceId: string) {
 }
 
 export async function claimAnonymousLessonCompletions(userId: string) {
-  const cookieStore = await cookies();
-  const completedLessonIds = parseAnonymousLessonIds(
-    cookieStore.get(ANONYMOUS_LESSON_COOKIE)?.value,
-  );
+  return claimProgressAfterAuthentication(async () => {
+    const cookieStore = await cookies();
+    const completedLessonIds = parseAnonymousLessonIds(
+      cookieStore.get(ANONYMOUS_LESSON_COOKIE)?.value,
+    );
 
-  if (completedLessonIds.length === 0) {
-    return { claimedLessonIds: [] };
-  }
+    if (completedLessonIds.length === 0) {
+      return { status: "empty", claimedLessonIds: [] };
+    }
 
-  const lessons = await Promise.all(
-    completedLessonIds.map((resourceId) => getLessonById(resourceId)),
-  );
-  const validLessonIds = lessons.flatMap((lesson, index) => {
-    const resourceId = completedLessonIds[index];
-    return lesson && resourceId && lesson.id === resourceId ? [resourceId] : [];
-  });
-
-  if (validLessonIds.length > 0) {
-    await completeResourcesForUser({
-      userId,
-      resourceIds: validLessonIds,
-      source: "anonymous_cookie_claim",
+    const lessons = await Promise.all(
+      completedLessonIds.map((resourceId) => getLessonById(resourceId)),
+    );
+    const validLessons = lessons.flatMap((lesson, index) => {
+      const resourceId = completedLessonIds[index];
+      return lesson && resourceId && lesson.id === resourceId ? [lesson] : [];
     });
-  }
+    const validLessonIds = validLessons.map((lesson) => lesson.id);
 
-  cookieStore.delete(ANONYMOUS_LESSON_COOKIE);
+    if (validLessonIds.length > 0) {
+      const curricula = (
+        await Promise.all(validLessons.map((lesson) => resolveLessonProgressCourses(lesson)))
+      ).flat();
+      const courses = new Map(curricula.map((course) => [course.courseId, course]));
+      await withProgressTransaction(userId, async (connection) => {
+        await completeResourcesForUser(
+          {
+            userId,
+            resourceIds: validLessonIds,
+            source: "anonymous_cookie_claim",
+          },
+          connection,
+        );
+        await [...courses.values()].reduce(async (previous, course) => {
+          await previous;
+          await syncCourseProgressForUser({ userId, ...course }, connection);
+        }, Promise.resolve());
+      });
+    }
 
-  return { claimedLessonIds: validLessonIds };
+    try {
+      cookieStore.delete(ANONYMOUS_LESSON_COOKIE);
+    } catch (error) {
+      logger.error(
+        error instanceof Error ? error : new Error("Anonymous progress cookie cleanup failed"),
+        {
+          operation: "clearClaimedAnonymousProgressCookie",
+          authenticationContinues: true,
+          progressCommitted: true,
+        },
+      );
+      return { status: "claimed_cookie_retained", claimedLessonIds: validLessonIds };
+    }
+    return { status: "claimed", claimedLessonIds: validLessonIds };
+  });
 }

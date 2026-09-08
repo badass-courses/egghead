@@ -6,11 +6,9 @@ import { z } from "zod";
 
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { sendEmail } from "../../coursebuilder/email-delivery";
-import { getSiteUrl, getStripeProvider } from "../../coursebuilder/stripe-provider";
+import { getSiteUrl } from "../../coursebuilder/stripe-provider";
 import { assertCommerceWritesAllowed } from "../../db/local-docker";
 import { getEnv } from "../../env";
-import { stripeSubscriptionGrantsAccess } from "../../subscriptions/access";
-import { getStripeSubscriptionCurrentPeriodEnd } from "../../subscriptions/stripe";
 import {
   getOwnedTeamSubscriptionRow,
   getTeamInviteDetails,
@@ -18,10 +16,13 @@ import {
   removeTeamSubscriptionSeat,
 } from "../../subscriptions/team";
 import {
-  createTeamInviteToken,
   teamInviteMatchesEmail,
   verifyTeamInviteToken,
 } from "../../subscriptions/team-invite-token";
+import {
+  issueOwnedTeamInvitation,
+  revokeOwnedTeamInvitation,
+} from "../../subscriptions/team-invitations";
 
 const subscriptionIdSchema = z.string().min(1).max(191);
 const userIdSchema = z.string().min(1).max(255);
@@ -32,31 +33,13 @@ const inviteEmailSchema = z
   .max(255)
   .transform((email) => email.toLowerCase());
 
-async function getTeamStripeState(subscriptionId: string, ownerId: string) {
-  const ownedSubscription = await getOwnedTeamSubscriptionRow(subscriptionId, ownerId);
-  const stripeProvider = getStripeProvider();
-  if (!ownedSubscription || !stripeProvider) return null;
-
-  const stripeSubscription = await stripeProvider.options.paymentsAdapter.getSubscription(
-    ownedSubscription.stripeSubscriptionId,
-  );
-  const currentPeriodEnd = getStripeSubscriptionCurrentPeriodEnd(stripeSubscription);
-  if (!currentPeriodEnd || !stripeSubscriptionGrantsAccess(stripeSubscription.status)) return null;
-
-  return {
-    currentPeriodEnd: new Date(currentPeriodEnd * 1000),
-    ownedSubscription,
-    status: stripeSubscription.status,
-  };
-}
-
 function refreshTeamPages() {
   revalidatePath("/profile");
   revalidatePath("/team");
   revalidatePath("/thanks/subscription");
 }
 
-function teamActionError(status: "already-assigned" | "full" | "not-found") {
+function teamActionError(status: "already-assigned" | "full" | "not-found" | "invalid-invite") {
   if (status === "already-assigned") return "already-assigned";
   if (status === "full") return "team-full";
   return "team-unavailable";
@@ -90,21 +73,24 @@ export async function acceptTeamInvite(formData: FormData) {
   if (!inviteDetails) redirect(`${invitePath}?error=unavailable`);
   if (inviteDetails.availableSeats === 0) redirect(`${invitePath}?status=claimed`);
 
-  const teamState = await getTeamStripeState(payload.subscriptionId, inviteDetails.ownerId);
-  if (!teamState) redirect(`${invitePath}?error=unavailable`);
+  const ownedSubscription = await getOwnedTeamSubscriptionRow(
+    payload.subscriptionId,
+    inviteDetails.ownerId,
+  );
+  if (!ownedSubscription) redirect(`${invitePath}?error=unavailable`);
 
   const result = await grantTeamSubscriptionSeat({
-    currentPeriodEnd: teamState.currentPeriodEnd,
+    invitation: payload,
     ownerId: inviteDetails.ownerId,
     seatUserId: currentUser.id,
-    status: teamState.status,
-    stripeSubscriptionId: teamState.ownedSubscription.stripeSubscriptionId,
+    stripeSubscriptionId: ownedSubscription.stripeSubscriptionId,
     subscriptionId: payload.subscriptionId,
   });
 
   if (result.status === "already-assigned") redirect("/profile?team=already-member");
   if (result.status === "full") redirect(`${invitePath}?status=claimed`);
   if (result.status === "not-found") redirect(`${invitePath}?error=unavailable`);
+  if (result.status === "invalid-invite") redirect(`${invitePath}?error=invalid-invite`);
 
   refreshTeamPages();
   redirect("/profile?team=joined");
@@ -119,15 +105,13 @@ export async function claimTeamSeat(formData: FormData) {
   const subscriptionId = subscriptionIdSchema.safeParse(formData.get("subscriptionId"));
   if (!subscriptionId.success) redirect("/team?error=team-unavailable");
 
-  const teamState = await getTeamStripeState(subscriptionId.data, currentUser.id);
-  if (!teamState) redirect("/team?error=team-unavailable");
+  const ownedSubscription = await getOwnedTeamSubscriptionRow(subscriptionId.data, currentUser.id);
+  if (!ownedSubscription) redirect("/team?error=team-unavailable");
 
   const result = await grantTeamSubscriptionSeat({
-    currentPeriodEnd: teamState.currentPeriodEnd,
     ownerId: currentUser.id,
     seatUserId: currentUser.id,
-    status: teamState.status,
-    stripeSubscriptionId: teamState.ownedSubscription.stripeSubscriptionId,
+    stripeSubscriptionId: ownedSubscription.stripeSubscriptionId,
     subscriptionId: subscriptionId.data,
   });
   if (result.status !== "assigned") {
@@ -148,15 +132,20 @@ export async function inviteTeamMember(formData: FormData) {
   const email = inviteEmailSchema.safeParse(formData.get("email"));
   if (!subscriptionId.success || !email.success) redirect("/team?error=invalid-invite");
 
-  const [teamState, inviteDetails] = await Promise.all([
-    getTeamStripeState(subscriptionId.data, currentUser.id),
+  const [ownedSubscription, inviteDetails] = await Promise.all([
+    getOwnedTeamSubscriptionRow(subscriptionId.data, currentUser.id),
     getTeamInviteDetails(subscriptionId.data),
   ]);
-  if (!teamState || !inviteDetails) redirect("/team?error=team-unavailable");
+  if (!ownedSubscription || !inviteDetails) redirect("/team?error=team-unavailable");
   if (inviteDetails.availableSeats === 0) redirect("/team?error=team-full");
 
-  const token = createTeamInviteToken(subscriptionId.data, email.data);
-  const inviteUrl = new URL(`/team/invite/${token}`, getSiteUrl()).toString();
+  const invitation = await issueOwnedTeamInvitation({
+    subscriptionId: subscriptionId.data,
+    ownerId: currentUser.id,
+    email: email.data,
+  });
+  if (!invitation) redirect("/team?error=team-unavailable");
+  const inviteUrl = new URL(`/team/invite/${invitation.token}`, getSiteUrl()).toString();
 
   try {
     await sendEmail(
@@ -164,8 +153,8 @@ export async function inviteTeamMember(formData: FormData) {
         from: getEnv("POSTMARK_FROM_EMAIL") ?? "egghead development <no-reply@egghead.local>",
         to: email.data,
         subject: "Join your egghead team",
-        text: `You've been invited to an egghead team membership. Sign in with this email address and accept your seat: ${inviteUrl}`,
-        html: `<p>You've been invited to an egghead team membership.</p><p><a href="${inviteUrl}">Accept your team seat</a></p><p>Sign in with the email address that received this invitation.</p>`,
+        text: `You've been invited to an egghead team membership. This email-scoped invitation expires in 7 days and can be used once. Sign in with this email address and accept your seat: ${inviteUrl}`,
+        html: `<p>You've been invited to an egghead team membership.</p><p><a href="${inviteUrl}">Accept your team seat</a></p><p>Sign in with the email address that received this invitation. It expires in 7 days and can be used once.</p>`,
       },
       { apiKey: getEnv("POSTMARK_API_KEY") },
     );
@@ -173,6 +162,7 @@ export async function inviteTeamMember(formData: FormData) {
     redirect("/team?error=invite-email-failed");
   }
 
+  refreshTeamPages();
   redirect("/team?notice=invite-sent");
 }
 
@@ -195,4 +185,21 @@ export async function removeTeamMember(formData: FormData) {
 
   refreshTeamPages();
   redirect("/team?notice=seat-removed");
+}
+
+export async function revokeTeamMemberInvitation(formData: FormData) {
+  assertCommerceWritesAllowed();
+  const currentUser = await getCurrentUser();
+  if (!currentUser?.id) redirect("/login?callbackUrl=%2Fteam");
+  const subscriptionId = subscriptionIdSchema.safeParse(formData.get("subscriptionId"));
+  const invitationId = z.string().min(1).max(191).safeParse(formData.get("invitationId"));
+  if (!subscriptionId.success || !invitationId.success) redirect("/team?error=invalid-invite");
+  const revoked = await revokeOwnedTeamInvitation({
+    subscriptionId: subscriptionId.data,
+    invitationId: invitationId.data,
+    ownerId: currentUser.id,
+  });
+  if (!revoked) redirect("/team?error=invitation-unavailable");
+  refreshTeamPages();
+  redirect("/team?notice=invite-revoked");
 }

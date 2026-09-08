@@ -1,15 +1,10 @@
-import type { RowDataPacket } from "mysql2";
-
-import { evaluateContentAccessForUser } from "../access/evaluate";
-import { createLocalMysqlConnection } from "../db/local-docker";
-
-type SupportEntitlementRow = RowDataPacket & {
-  entitlementType: string;
-  sourceType: string;
-  membershipRole: string | null;
-  hasOrganization: 0 | 1;
-  hasMembership: 0 | 1;
-};
+import {
+  effectiveAccessEntitlementRows,
+  entitlementGrantsAccess,
+  evaluateAccessEntitlementRows,
+  readAccessEntitlementsForUser,
+  type AccessEntitlement,
+} from "../access/evaluate";
 
 export type SupportAccessReadback = {
   access: {
@@ -61,12 +56,12 @@ function supportSummary(input: {
   granted: boolean;
   reason: string;
   entitlementTypes: string[];
-  allSourceTypes: string[];
+  grantingSourceType: string | undefined;
   quarantineVisible: boolean;
 }) {
   if (input.granted) {
     const type = input.entitlementTypes[0] ?? "projected entitlement";
-    const source = input.allSourceTypes[0] ?? "projected source";
+    const source = input.grantingSourceType ?? "projected source";
     return `Access granted by ${type} from ${source}.`;
   }
 
@@ -97,95 +92,76 @@ function nextSupportAction(input: {
   return "check for missing entitlement source before routing to cold archive";
 }
 
-export async function readSupportAccessForUser(input: {
-  userId: string;
-}): Promise<SupportAccessReadback> {
-  const connection = await createLocalMysqlConnection();
+export function supportAccessReadbackFromRows(
+  candidates: readonly AccessEntitlement[],
+  input: {
+    legacyRailsPlaylistId?: number | string | null;
+    requestCountry?: string | null;
+    now?: number;
+  } = {},
+): SupportAccessReadback {
+  const context = { ...input, now: input.now ?? Date.now() };
+  const rows = effectiveAccessEntitlementRows(candidates, context.now);
+  const access = evaluateAccessEntitlementRows(rows, context);
+  const grantingRow = rows.find(
+    (row) =>
+      row.entitlementType === access.entitlementTypes[0] && entitlementGrantsAccess(row, context),
+  );
+  const allSourceTypes = sortedUnique(rows.map((row) => row.sourceType));
+  const membershipRoles = sortedUnique(
+    rows.flatMap((row) => (row.membershipRole ? [row.membershipRole] : [])),
+  );
+  const teamRows = rows.filter(
+    (row) =>
+      (row.sourceType === "rails_account_subscription" ||
+        row.sourceType === "stripe_subscription") &&
+      (row.hasOrganization === 1 || row.hasMembership === 1),
+  );
+  const teamSeatVisible = teamRows.length > 0;
+  const quarantineVisible = access.ignored.quarantineEntitlements > 0;
+  const bucket = access.granted
+    ? "grant"
+    : quarantineVisible
+      ? "legacy_pro_quarantine"
+      : "no_granting_entitlement";
 
-  try {
-    const access = await evaluateContentAccessForUser({ userId: input.userId });
-    const [rows] = await connection.execute<SupportEntitlementRow[]>(
-      `
-        SELECT
-          entitlement.entitlementType,
-          entitlement.sourceType,
-          membership.role AS membershipRole,
-          entitlement.organizationId IS NOT NULL AS hasOrganization,
-          entitlement.organizationMembershipId IS NOT NULL AS hasMembership
-        FROM egghead_Entitlement entitlement
-        LEFT JOIN egghead_OrganizationMembership membership
-          ON membership.organizationId = entitlement.organizationId
-         AND membership.userId = ?
-        WHERE entitlement.deletedAt IS NULL
-          AND (entitlement.expiresAt IS NULL OR entitlement.expiresAt > CURRENT_TIMESTAMP(3))
-          AND (
-            entitlement.userId = ?
-            OR membership.userId = ?
-          )
-        ORDER BY entitlement.entitlementType ASC, entitlement.sourceType ASC
-      `,
-      [input.userId, input.userId, input.userId],
-    );
-
-    const allSourceTypes = sortedUnique(rows.map((row) => row.sourceType));
-    const membershipRoles = sortedUnique(
-      rows.flatMap((row) => (row.membershipRole ? [row.membershipRole] : [])),
-    );
-    const teamSeatVisible = rows.some(
-      (row) =>
-        row.sourceType === "rails_account_subscription" &&
-        (row.hasOrganization === 1 || row.hasMembership === 1 || row.membershipRole !== null),
-    );
-    const quarantineVisible = access.ignored.quarantineEntitlements > 0;
-    const bucket = access.granted
-      ? "grant"
-      : quarantineVisible
-        ? "legacy_pro_quarantine"
-        : "no_granting_entitlement";
-    const summary = supportSummary({
-      granted: access.granted,
-      reason: access.reason,
+  return {
+    access: { granted: access.granted, reason: access.reason, bucket },
+    sourceFamilies: {
       entitlementTypes: access.entitlementTypes,
+      grantSourceTypes: access.sourceTypes,
       allSourceTypes,
-      quarantineVisible,
-    });
-
-    return {
-      access: {
+    },
+    explanation: {
+      summary: supportSummary({
         granted: access.granted,
         reason: access.reason,
-        bucket,
-      },
-      sourceFamilies: {
         entitlementTypes: access.entitlementTypes,
-        grantSourceTypes: access.sourceTypes,
-        allSourceTypes,
-      },
-      explanation: {
-        summary,
-        nextAction: nextSupportAction({
-          granted: access.granted,
-          quarantineVisible,
-          teamSeatVisible,
-        }),
+        grantingSourceType: grantingRow?.sourceType,
+        quarantineVisible,
+      }),
+      nextAction: nextSupportAction({
+        granted: access.granted,
         quarantineVisible,
         teamSeatVisible,
-      },
-      teamSeat: {
-        organizationSourceVisible: teamSeatVisible,
-        membershipSourceVisible: teamSeatVisible,
-        membershipRoles,
-        seatDriftBucket: teamSeatVisible
-          ? "not_observed_in_projection_fixture"
-          : "not_team_fixture",
-      },
-      privacy: {
-        redactedOutputOnly: true,
-        rawUserIdReturned: false,
-        privateRowsReturned: false,
-      },
-    };
-  } finally {
-    await connection.end();
-  }
+      }),
+      quarantineVisible,
+      teamSeatVisible,
+    },
+    teamSeat: {
+      organizationSourceVisible: teamRows.some((row) => row.hasOrganization === 1),
+      membershipSourceVisible: teamRows.some((row) => row.hasMembership === 1),
+      membershipRoles,
+      seatDriftBucket: teamSeatVisible ? "not_observed_in_projection_fixture" : "not_team_fixture",
+    },
+    privacy: { redactedOutputOnly: true, rawUserIdReturned: false, privateRowsReturned: false },
+  };
+}
+
+export async function readSupportAccessForUser(input: {
+  userId: string;
+  legacyRailsPlaylistId?: number | string | null;
+  requestCountry?: string | null;
+}): Promise<SupportAccessReadback> {
+  return supportAccessReadbackFromRows(await readAccessEntitlementsForUser(input.userId), input);
 }

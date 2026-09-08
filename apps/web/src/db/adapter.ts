@@ -4,29 +4,31 @@ import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import { getEggheadMysqlPool } from "./local-docker";
 import { mysqlTable } from "./mysql-table";
 import * as schema from "./schema";
+import { withAdapterRuntimePolicy, type PublishedAdapter } from "./adapter-policy";
 
-type CourseBuilderAuthAdapter = ReturnType<typeof mySqlDrizzleAdapter>;
 type EggheadDatabase = MySql2Database<typeof schema>;
 
-let adapter: CourseBuilderAuthAdapter | null = null;
+let adapter: PublishedAdapter | null = null;
 let database: EggheadDatabase | null = null;
 
 export function getEggheadDatabase() {
+  const pool = getEggheadMysqlPool();
   if (database) {
     return database;
   }
 
-  database = drizzle(getEggheadMysqlPool(), { mode: "default", schema });
+  database = drizzle(pool, { mode: "default", schema });
 
   return database;
 }
 
 export function getCourseBuilderAdapter() {
+  const db = getEggheadDatabase();
   if (adapter) {
     return adapter;
   }
 
-  adapter = mySqlDrizzleAdapter(getEggheadDatabase(), mysqlTable);
+  adapter = withAdapterRuntimePolicy(mySqlDrizzleAdapter(db, mysqlTable));
 
   return adapter;
 }

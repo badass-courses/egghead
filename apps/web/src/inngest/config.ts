@@ -1,10 +1,10 @@
 import { inngest } from "./client";
 import {
-  stripeCustomerSubscriptionUpdated,
+  stripeCustomerSubscriptionLifecycle,
   stripeSubscriptionCheckoutSessionComplete,
 } from "./stripe-subscription";
 
 export const inngestConfig = {
   client: inngest,
-  functions: [stripeSubscriptionCheckoutSessionComplete, stripeCustomerSubscriptionUpdated],
+  functions: [stripeSubscriptionCheckoutSessionComplete, stripeCustomerSubscriptionLifecycle],
 };

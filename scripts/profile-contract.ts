@@ -4,6 +4,7 @@ import {
   parsePublicProfileId,
   projectPublicLearnerProfile,
   requireProfileOwner,
+  PUBLIC_PROFILE_SHARING_ENABLED,
   safePublicAvatarUrl,
 } from "../apps/web/src/profile/contracts";
 import {
@@ -164,6 +165,11 @@ const instructorAccount = staffAccountPresentation("contributor");
 const adminAccount = staffAccountPresentation("admin");
 
 const checks = [
+  assertEqual(
+    "public profile and activity sharing is deferred",
+    PUBLIC_PROFILE_SHARING_ENABLED,
+    false,
+  ),
   assertEqual(
     "instructor activity uses the canonical egghead builder URL",
     EGGHEAD_BUILDER_URL,
@@ -621,6 +627,7 @@ console.log(
       githubDisconnectProtectsLastSignInMethod: true,
       publicExactIdentifier: true,
       publicProjectionAllowlisted: true,
+      publicSharingDeferred: true,
       emptyAndPopulatedLearningStates: true,
     },
   }),

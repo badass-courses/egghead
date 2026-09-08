@@ -1,10 +1,12 @@
 import NextCourseBuilder, { type NextCourseBuilderConfig } from "@coursebuilder/next";
+import type { NextRequest } from "next/server";
 import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEnv } from "../env";
 import { authConfig } from "./auth-config";
 import { getCurrentUser } from "./current-user";
 import { inngest } from "../inngest/client";
 import { getStripeProvider } from "./stripe-provider";
+import { createCourseBuilderHttpHandler } from "./http-policy";
 
 const stripeProvider = getStripeProvider();
 
@@ -34,4 +36,13 @@ export const courseBuilderConfig = {
   },
 } satisfies NextCourseBuilderConfig;
 
-export const { handlers, coursebuilder } = NextCourseBuilder(courseBuilderConfig);
+const configuredCourseBuilder = NextCourseBuilder(courseBuilderConfig);
+export const coursebuilder = configuredCourseBuilder.coursebuilder;
+const guardedHandler = createCourseBuilderHttpHandler<NextRequest>(
+  async () => ({
+    GET: (request) => configuredCourseBuilder.handlers.GET(request),
+  }),
+  // Load the mutation provider only after the HTTP runtime boundary allows it.
+  async (request) => (await import("./stripe-webhook")).handleStripeWebhook(request),
+);
+export const handlers = { GET: guardedHandler, POST: guardedHandler };

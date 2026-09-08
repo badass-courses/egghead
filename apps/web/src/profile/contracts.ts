@@ -2,6 +2,9 @@ import { z } from "zod";
 
 import type { PublicContentFamily } from "../content/routes";
 
+// Public activity sharing is deferred. This is not a runtime approval flag.
+export const PUBLIC_PROFILE_SHARING_ENABLED = false;
+
 const PUBLIC_PROFILE_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 const PUBLIC_AVATAR_PATH_PREFIX_BY_HOST: Record<string, string | null> = {
   "avatars.githubusercontent.com": null,
