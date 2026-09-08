@@ -7,6 +7,13 @@ import {
   normalizeInstructorDisplayName,
 } from "./encoding";
 import { publishedResourceSql } from "./publication";
+import type { LegacySearchIndexDocument } from "./search-document";
+import {
+  createEggheadTypesenseSearchClient,
+  getEggheadTypesenseConfig,
+  isEggheadTypesenseSearchConfigured,
+  legacyTypesenseContentFilter,
+} from "./typesense";
 
 type ContributorRow = RowDataPacket & {
   name: string;
@@ -90,9 +97,73 @@ function withoutUserIds({ name, resourceCount }: ResolvedInstructor): SearchInst
   return { name, resourceCount };
 }
 
+type LegacySearchInstructor = SearchInstructor & { indexedNames: string[] };
+
+async function legacySearchInstructors(): Promise<LegacySearchInstructor[]> {
+  const config = getEggheadTypesenseConfig();
+  const client = createEggheadTypesenseSearchClient();
+  // Read the small instructor vocabulary before folding names in JS. A
+  // facet_query would miss accent/mojibake variants that the SQL path repairs.
+  const maxFacetValues = 1_000;
+  const response = await client
+    .collections<LegacySearchIndexDocument>(config.collectionName)
+    .documents()
+    .search({
+      q: "*",
+      query_by: "title,description,summary",
+      filter_by: legacyTypesenseContentFilter(),
+      facet_by: "instructor_name",
+      max_facet_values: maxFacetValues,
+      per_page: 0,
+    });
+  const facet = response.facet_counts?.find((entry) => entry.field_name === "instructor_name");
+  if (!facet) throw new Error("Legacy Typesense search did not return instructor_name facets.");
+  if (facet.counts.length >= maxFacetValues) {
+    throw new Error("Legacy Typesense instructor vocabulary exceeds the facet read limit.");
+  }
+
+  const byKey = new Map<string, LegacySearchInstructor>();
+  for (const { value, count } of facet.counts) {
+    const name = normalizeInstructorDisplayName(value);
+    const key = instructorMatchKey(name);
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.resourceCount += count;
+      existing.indexedNames.push(value);
+    } else {
+      byKey.set(key, { name, resourceCount: count, indexedNames: [value] });
+    }
+  }
+  return [...byKey.values()].toSorted(
+    (a, b) => b.resourceCount - a.resourceCount || a.name.localeCompare(b.name),
+  );
+}
+
+export async function legacyInstructorNamesForFilter(name: string): Promise<string[]> {
+  const key = instructorMatchKey(name);
+  if (!key) return [];
+  const instructors = await legacySearchInstructors();
+  return (
+    instructors.find((instructor) => instructorMatchKey(instructor.name) === key)?.indexedNames ??
+    []
+  );
+}
+
+async function searchInstructors(): Promise<SearchInstructor[]> {
+  if (
+    isEggheadTypesenseSearchConfigured() &&
+    getEggheadTypesenseConfig().searchSchema === "legacy"
+  ) {
+    const instructors = await legacySearchInstructors();
+    return instructors.map(({ name, resourceCount }) => ({ name, resourceCount }));
+  }
+  return (await allInstructors()).map(withoutUserIds);
+}
+
 export async function topSearchInstructors(limit = 6): Promise<SearchInstructor[]> {
-  const instructors = await allInstructors();
-  return instructors.slice(0, limit).map(withoutUserIds);
+  const instructors = await searchInstructors();
+  return instructors.slice(0, limit);
 }
 
 export async function searchInstructorsByName(
@@ -102,11 +173,10 @@ export async function searchInstructorsByName(
   const normalized = comparableName(term.trim());
   if (!normalized) return topSearchInstructors(limit);
 
-  const instructors = await allInstructors();
+  const instructors = await searchInstructors();
   return instructors
     .filter((instructor) => comparableName(instructor.name).includes(normalized))
-    .slice(0, limit)
-    .map(withoutUserIds);
+    .slice(0, limit);
 }
 
 export async function instructorUserIdsForName(name: string): Promise<string[]> {
