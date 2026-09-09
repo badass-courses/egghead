@@ -11,6 +11,7 @@ import { ImageResourceUploader } from '@/components/image-uploader/image-resourc
 import { env } from '@/env.mjs'
 import { sendResourceChatMessage } from '@/lib/ai-chat-query'
 import { Post, PostSchema } from '@/lib/posts'
+import { EditPostSchema } from '@/lib/posts/schemas'
 import { updatePost } from '@/lib/posts-query'
 import { EggheadTag } from '@/lib/tags'
 import { CompactInstructor } from '@/lib/users'
@@ -63,10 +64,12 @@ export function EditPostForm({
 	const { theme } = useTheme()
 	const session = useSession()
 	const form = useForm<z.infer<typeof PostSchema>>({
-		resolver: zodResolver(PostSchema),
+		resolver: zodResolver(EditPostSchema),
 		defaultValues: {
+			...post,
 			id: post.id,
 			fields: {
+				...post.fields,
 				image: post.fields?.image ?? '',
 				title: post.fields?.title,
 				postType: post.fields?.postType || 'lesson',
