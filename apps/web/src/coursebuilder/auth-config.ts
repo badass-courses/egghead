@@ -1,6 +1,7 @@
+import { createAuthJsAdapter } from "../server/auth-js-adapter";
 import type { NextAuthConfig } from "next-auth";
 import GithubProvider from "@auth/core/providers/github";
-import { logger } from "@coursebuilder/core/utils/logger";
+import { logger } from "@coursebuilder/utils/logger";
 
 import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEggheadRuntime } from "../db/local-docker";
@@ -58,7 +59,7 @@ function getAuthProviders(): NextAuthConfig["providers"] {
 }
 
 export const authConfig = {
-  adapter: getCourseBuilderAdapter(),
+  adapter: createAuthJsAdapter(getCourseBuilderAdapter()),
   providers: getAuthProviders(),
   events: {
     signIn: async ({ user }) => {

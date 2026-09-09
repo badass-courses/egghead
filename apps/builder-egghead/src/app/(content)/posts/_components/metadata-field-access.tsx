@@ -35,7 +35,7 @@ export function MetadataFieldAccess({ form }: { form: UseFormReturn<any> }) {
 						</FormControl>
 						<SelectContent className="">
 							{PostAccessSchema.options.map((option) => {
-								const value = option._def.value
+								const value = option.value
 								return (
 									<SelectItem key={value} value={value}>
 										{value}

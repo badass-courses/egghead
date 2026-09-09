@@ -22,19 +22,37 @@
     "builder:smoke": "tsx --tsconfig apps/builder-egghead/tsconfig.json scripts/builder-smoke.ts",
     "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm search:typesense-contract && pnpm sitemap:contract && pnpm profile:contract && pnpm email:contract && pnpm beta:runtime-guard && pnpm builder:smoke",
     "hooks:install": "lefthook install",
-    "hooks:pre-commit": "lefthook run pre-commit --all-files"
+    "hooks:pre-commit": "lefthook run pre-commit --all-files",
+    "coursebuilder:prices:smoke": "node --import tsx scripts/coursebuilder-prices-smoke.ts",
+    "coursebuilder:local": "node scripts/coursebuilder-local.mjs",
+    "coursebuilder:v3:smoke": "node --import tsx scripts/coursebuilder-v3-smoke.ts",
+    "membership:setup": "EGGHEAD_LOCAL_MEMBERSHIP=true node --env-file=apps/web/.env --import tsx scripts/local-membership-setup.ts",
+    "membership:dev": "EGGHEAD_LOCAL_MEMBERSHIP=true pnpm --filter @egghead/web dev --hostname 127.0.0.1"
+  },
+  "dependencies": {
+    "@coursebuilder/adapter-drizzle": "link:.local/course-builder/packages/adapter-drizzle",
+    "@coursebuilder/commerce": "link:.local/course-builder/packages/commerce",
+    "@coursebuilder/core": "link:.local/course-builder/packages/core",
+    "@coursebuilder/email": "link:.local/course-builder/packages/email",
+    "@coursebuilder/next": "link:.local/course-builder/packages/next",
+    "@coursebuilder/server": "link:.local/course-builder/packages/server",
+    "@coursebuilder/ui": "link:.local/course-builder/packages/ui",
+    "@coursebuilder/utils": "link:.local/course-builder/packages/coursebuilder-utils",
+    "@coursebuilder/video-processing": "link:.local/course-builder/packages/video-processing"
   },
   "devDependencies": {
     "@total-typescript/tsconfig": "1.0.4",
     "@types/node": "^20.19.25",
     "@typescript/native-preview": "7.0.0-dev.20260607.1",
+    "drizzle-orm": "0.36.0",
     "lefthook": "2.1.9",
     "oxfmt": "0.53.0",
     "oxlint": "1.68.0",
     "oxlint-tsgolint": "0.23.0",
     "tsx": "^4.21.0",
     "turbo": "^2.6.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "zod": "^4.4.3"
   },
   "packageManager": "pnpm@11.3.0"
 }

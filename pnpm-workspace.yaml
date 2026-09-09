@@ -3,6 +3,15 @@ packages:
   - "packages/*"
 
 overrides:
+  "@coursebuilder/adapter-drizzle": link:.local/course-builder/packages/adapter-drizzle
+  "@coursebuilder/commerce": link:.local/course-builder/packages/commerce
+  "@coursebuilder/core": link:.local/course-builder/packages/core
+  "@coursebuilder/email": link:.local/course-builder/packages/email
+  "@coursebuilder/next": link:.local/course-builder/packages/next
+  "@coursebuilder/server": link:.local/course-builder/packages/server
+  "@coursebuilder/ui": link:.local/course-builder/packages/ui
+  "@coursebuilder/utils": link:.local/course-builder/packages/coursebuilder-utils
+  "@coursebuilder/video-processing": link:.local/course-builder/packages/video-processing
   "@internationalized/date": "3.12.2"
 
 onlyBuiltDependencies:

@@ -4,8 +4,8 @@ import { revalidateTag } from 'next/cache'
 import { courseBuilderAdapter, db } from '@/db'
 import { inngest } from '@/inngest/inngest.server'
 
-import { VIDEO_SRT_READY_EVENT } from '@coursebuilder/core/inngest/video-processing/events/event-video-srt-ready-to-asset'
-import { VIDEO_TRANSCRIPT_READY_EVENT } from '@coursebuilder/core/inngest/video-processing/events/event-video-transcript-ready'
+import { VIDEO_SRT_READY_EVENT } from '@coursebuilder/core/events/video'
+import { VIDEO_TRANSCRIPT_READY_EVENT } from '@coursebuilder/core/events/video'
 import {
 	srtFromTranscriptResult,
 	transcriptAsParagraphsWithTimestamps,

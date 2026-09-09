@@ -213,7 +213,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
               <div className="grid justify-items-stretch gap-3 md:justify-items-center">
                 <Link
                   className="press inline-flex w-full items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] text-base font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover md:min-w-44"
-                  href="https://egghead.io/pricing"
+                  href="/pricing"
                 >
                   Subscribe
                 </Link>

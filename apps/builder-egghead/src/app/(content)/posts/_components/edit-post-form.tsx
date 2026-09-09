@@ -14,7 +14,7 @@ import { Post, PostSchema } from '@/lib/posts'
 import { updatePost } from '@/lib/posts-query'
 import { EggheadTag } from '@/lib/tags'
 import { CompactInstructor } from '@/lib/users'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { formResolver as zodResolver } from '@/utils/form-resolver'
 import {
 	CheckIcon,
 	ImageIcon,
@@ -31,17 +31,6 @@ import { EditResourcesForm } from '@coursebuilder/ui/resources-crud/edit-resourc
 
 import PublishPostChecklist from './publish-post-checklist'
 import { ResourceResourcesList } from './resource-resources-list'
-
-const NewPostFormSchema = z.object({
-	title: z.string().min(2).max(90),
-	postType: z.enum(['lesson', 'article', 'podcast']),
-	body: z.string().nullish(),
-	visibility: z.enum(['public', 'unlisted', 'private']),
-	access: z.enum(['free', 'pro']),
-	description: z.string().nullish(),
-	github: z.string().nullish(),
-	gitpod: z.string().nullish(),
-})
 
 export type EditPostFormProps = {
 	post: Post
@@ -74,7 +63,7 @@ export function EditPostForm({
 	const { theme } = useTheme()
 	const session = useSession()
 	const form = useForm<z.infer<typeof PostSchema>>({
-		resolver: zodResolver(NewPostFormSchema),
+		resolver: zodResolver(PostSchema),
 		defaultValues: {
 			id: post.id,
 			fields: {

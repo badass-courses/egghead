@@ -12,7 +12,7 @@ import { calendar_v3 } from 'googleapis'
 import { GetFunctionInput, NonRetriableError } from 'inngest'
 import { marked } from 'marked'
 
-import { REFUND_PROCESSED_EVENT } from '@coursebuilder/core/inngest/commerce/event-refund-processed'
+import { REFUND_PROCESSED_EVENT } from '@coursebuilder/core/events/commerce'
 
 import {
 	RESOURCE_CREATED_EVENT,

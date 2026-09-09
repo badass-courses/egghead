@@ -32,7 +32,7 @@ import { POST_CREATED_EVENT } from '@/inngest/events/post-created'
 import { inngest } from '@/inngest/inngest.server'
 import { getOGImageUrlForResourceAPI } from '@/utils/get-og-image-url-for-resource'
 
-import { getMuxAsset } from '@coursebuilder/core/lib/mux'
+import { getMuxAsset } from '@coursebuilder/video-processing/mux'
 import { ContentResource } from '@coursebuilder/core/schemas'
 
 import {

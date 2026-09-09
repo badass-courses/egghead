@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { NewPost, PostType, PostTypeSchema } from '@/lib/posts'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { formResolver as zodResolver } from '@/utils/form-resolver'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 

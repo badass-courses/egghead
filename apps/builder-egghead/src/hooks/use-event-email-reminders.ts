@@ -1,6 +1,6 @@
 import { NewEmailSchema, type NewEmail } from '@/lib/emails'
 import { api } from '@/trpc/react'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { formResolver as zodResolver } from '@/utils/form-resolver'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 

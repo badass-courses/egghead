@@ -4,7 +4,7 @@
  * Debug script for event creation
  * Run with: pnpm tsx scripts/debug-event-creation.ts
  */
-import { logger } from '@coursebuilder/core/utils/logger'
+import { logger } from '@coursebuilder/utils/logger'
 
 import { courseBuilderAdapter } from '../src/db'
 
