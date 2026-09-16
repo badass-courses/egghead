@@ -3,11 +3,18 @@ import { cacheLife, cacheTag } from "next/cache";
 
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { doubleEncodedUtf8Variant, instructorMatchKey } from "./encoding";
-import { instructorNamesByContentId, instructorUserIdsForName } from "./instructors";
+import {
+  instructorNamesByContentId,
+  instructorUserIdsForName,
+  legacyInstructorNamesForFilter,
+} from "./instructors";
 import { parentCourseSlugsForLessonIds } from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
 import { contentResourceSlugSql } from "./resource-slug";
 import {
+  type LegacySearchIndexDocument,
+  legacySearchDocumentType,
+  pathForLegacySearchDocument,
   type SearchIndexDocument,
   searchDocumentFromResource,
   searchDocumentTypeFromResource,
@@ -17,6 +24,7 @@ import {
   createEggheadTypesenseSearchClient,
   getEggheadTypesenseConfig,
   isEggheadTypesenseSearchConfigured,
+  legacyTypesenseContentFilter,
 } from "./typesense";
 
 type SearchResourceRow = RowDataPacket & {
@@ -176,6 +184,22 @@ function searchResultFromDocument(document: SearchIndexDocument): SearchResult {
   };
 }
 
+export function searchResultFromLegacyDocument(
+  document: LegacySearchIndexDocument,
+): SearchResult | null {
+  const type = legacySearchDocumentType(document.type);
+  const href = pathForLegacySearchDocument(document);
+  if (!type || !href) return null;
+  return {
+    id: document.id,
+    type,
+    title: document.title,
+    slug: document.slug,
+    description: document.description || document.summary || "",
+    href,
+  };
+}
+
 async function searchSqlContent(
   term: string,
   typeFilter?: string | null,
@@ -223,6 +247,28 @@ export function typesenseSearchParameters(
   };
 }
 
+export function legacyTypesenseSearchParameters(
+  term: string,
+  typeFilter?: string | null,
+  instructorNames: readonly string[] = [],
+) {
+  const normalized = term.trim();
+  const filters = [legacyTypesenseContentFilter(normalizedSearchContentType(typeFilter))];
+  if (instructorNames.length) {
+    const values = instructorNames.map(typesenseFilterValue).join(",");
+    filters.push(`instructor_name:=${instructorNames.length === 1 ? values : `[${values}]`}`);
+  }
+  return {
+    q: normalized || "*",
+    query_by: "title,description,summary,instructor_name",
+    per_page: 24,
+    sort_by: normalized
+      ? "_text_match:desc,updated_at_timestamp:desc"
+      : "updated_at_timestamp:desc",
+    filter_by: filters.join(" && "),
+  };
+}
+
 async function searchTypesenseContent(
   term: string,
   typeFilter?: string | null,
@@ -232,6 +278,20 @@ async function searchTypesenseContent(
 
   const config = getEggheadTypesenseConfig();
   const client = createEggheadTypesenseSearchClient();
+  if (config.searchSchema === "legacy") {
+    const instructor = instructorFilter?.trim();
+    const instructorNames = instructor ? await legacyInstructorNamesForFilter(instructor) : [];
+    if (instructor && instructorNames.length === 0) return [];
+    const response = await client
+      .collections<LegacySearchIndexDocument>(config.collectionName)
+      .documents()
+      .search(legacyTypesenseSearchParameters(term, typeFilter, instructorNames));
+    return (response.hits ?? []).flatMap((hit) => {
+      const result = searchResultFromLegacyDocument(hit.document);
+      return result ? [result] : [];
+    });
+  }
+
   const searchParams = typesenseSearchParameters(term, typeFilter, instructorFilter);
   const response = await client
     .collections<SearchIndexDocument>(config.collectionName)
@@ -266,7 +326,10 @@ export async function searchContent(
   try {
     const typesenseResults = await searchTypesenseContent(term, typeFilter, instructorFilter);
     if (typesenseResults) return typesenseResults;
-  } catch {
+  } catch (error) {
+    // A configured legacy catalog must not silently switch to unrelated SQL
+    // results (or an empty instructor catalog) when its read contract fails.
+    if (getEggheadTypesenseConfig().searchSchema === "legacy") throw error;
     return searchSqlContent(term, typeFilter, instructorFilter);
   }
 

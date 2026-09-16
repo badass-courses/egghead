@@ -10,7 +10,7 @@ export function membershipConfiguration(env: MembershipEnvironment) {
   const productId = localPreview
     ? "local-multiple-price-membership"
     : env["EGGHEAD_SUBSCRIPTION_PRODUCT_ID"]?.trim();
-  if (!token || !productId) return null;
+  if (!token) return null;
   const live = token.startsWith("sk_live_") || token.startsWith("rk_live_");
   const test = token.startsWith("sk_test_") || token.startsWith("rk_test_");
   if (!live && !test) throw new Error("A Stripe secret or restricted key is required");

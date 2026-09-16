@@ -107,7 +107,7 @@ function AccountLink({
           ? "border border-yolk-shadow/40 bg-yolk-grad text-yolk-foreground shadow-btn hover:shadow-btn-hover"
           : "border border-border-strong bg-raised-grad text-foreground shadow-btn-ghost",
       )}
-      href={authenticated ? "/profile" : "/login"}
+      href="/profile"
       aria-label={authenticated ? `Your profile, ${accountName}, ${proLabel} account` : undefined}
       prefetch={false}
     >

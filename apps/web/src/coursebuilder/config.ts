@@ -3,12 +3,17 @@ import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEnv } from "../env";
 import { authConfig } from "./auth-config";
 import { getCurrentUser } from "./current-user";
+import { inngest } from "../inngest/client";
+import { getStripeProvider } from "./stripe-provider";
+
+const stripeProvider = getStripeProvider();
 
 export const courseBuilderConfig = {
   baseUrl: getEnv("COURSEBUILDER_URL") ?? getEnv("NEXT_PUBLIC_APP_URL") ?? "http://localhost:3008",
   basePath: "/api/coursebuilder",
   adapter: getCourseBuilderAdapter(),
-  providers: [],
+  providers: stripeProvider ? [stripeProvider] : [],
+  inngest,
   getCurrentUser: async () => {
     const user = await getCurrentUser();
     if (!user) return null;

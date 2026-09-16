@@ -22,6 +22,10 @@ import {
   planOwnerGithubDisconnect,
   summarizeGithubConnection,
 } from "../apps/web/src/profile/github-disconnect";
+import {
+  EGGHEAD_BUILDER_URL,
+  staffAccountPresentation,
+} from "../apps/web/src/profile/account-role";
 
 type ContractCheck = {
   name: string;
@@ -156,8 +160,35 @@ const readyDisconnect = planOwnerGithubDisconnect({
   accounts: ownerWithTwoGithubAccounts,
   emailSignInAvailable: false,
 });
+const instructorAccount = staffAccountPresentation("contributor");
+const adminAccount = staffAccountPresentation("admin");
 
 const checks = [
+  assertEqual(
+    "instructor activity uses the canonical egghead builder URL",
+    EGGHEAD_BUILDER_URL,
+    "https://builder.egghead.io",
+  ),
+  assertEqual(
+    "contributors are presented as instructor accounts",
+    instructorAccount?.status,
+    "Instructor account",
+  ),
+  assertEqual(
+    "instructor accounts link to their instructor dashboard",
+    instructorAccount?.actionLabel,
+    "Open instructor dashboard",
+  ),
+  assertEqual(
+    "admins are presented as administrator accounts",
+    adminAccount?.status,
+    "Administrator account",
+  ),
+  assertEqual(
+    "ordinary learners do not receive a staff account presentation",
+    staffAccountPresentation("user"),
+    null,
+  ),
   expectThrow("private profile rejects an anonymous actor", () =>
     requireProfileOwner(null, validPublicId),
   ),
@@ -509,6 +540,16 @@ const checks = [
     "public avatar projection normalizes a protocol-relative allowlisted URL",
     safePublicAvatarUrl("//gravatar.com/avatar/public-example"),
     "https://gravatar.com/avatar/public-example",
+  ),
+  assertEqual(
+    "public avatar projection accepts the configured www Gravatar host",
+    safePublicAvatarUrl("https://www.gravatar.com/avatar/public-example"),
+    "https://www.gravatar.com/avatar/public-example",
+  ),
+  assertEqual(
+    "public avatar projection rejects unsupported Gravatar paths",
+    safePublicAvatarUrl("https://gravatar.com/public-example"),
+    null,
   ),
   assertEqual(
     "public avatar projection rejects an insecure URL",

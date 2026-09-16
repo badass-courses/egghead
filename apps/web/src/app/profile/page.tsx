@@ -7,18 +7,24 @@ import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
 
 import { normalizeRequestCountry } from "../../access/evaluate";
-import { isEmailAuthConfigured } from "../../coursebuilder/auth-config";
+import { isEmailAuthConfigured, isGithubAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { getPrivateAccountProfile } from "../../profile/data";
 import { gravatarUrlForEmail } from "../../profile/gravatar";
-import { updateProfileName } from "./actions";
+import { EGGHEAD_BUILDER_URL, staffAccountPresentation } from "../../profile/account-role";
+import { getEnv } from "../../env";
+import { getMembershipBillingSummary } from "../../subscriptions/billing";
+import { getOwnedTeamSubscription, getTeamMembershipForUser } from "../../subscriptions/team";
+import { manageMembership, signOutOfEgghead, updateProfileName } from "./actions";
 import {
   CompletionFilterControls,
   completionFilterFromSearchParam,
 } from "./completion-filter-controls";
 import { GithubAccountControl } from "./github-account-control";
+import { ManageMembershipButton } from "./manage-membership-button";
 import { ProfileAvatar } from "./profile-avatar";
 import { ShareProfileButton } from "./share-profile-button";
+import { SignOutButton } from "./sign-out-button";
 
 export const metadata: Metadata = {
   title: "Your profile | egghead",
@@ -44,8 +50,27 @@ function formatCompletionDate(date: Date) {
   }).format(date);
 }
 
+function formatMembershipDate(date: Date) {
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
 function initialFor(name: string | null) {
   return name?.trim().charAt(0).toUpperCase() || "E";
+}
+
+function teamAccessLabel(productName: string) {
+  return /\bpro\b/i.test(productName) ? "Pro access" : "Membership access";
+}
+
+function getPricingHref() {
+  const siteUrl = getEnv("NEXT_PUBLIC_APP_URL");
+  if (!siteUrl) throw new Error("NEXT_PUBLIC_APP_URL is required for the profile subscribe link.");
+
+  return new URL("/pricing", siteUrl).toString();
 }
 
 function ProfileFallback() {
@@ -75,8 +100,10 @@ function ProfileFallback() {
 }
 
 type ProfileSearchParams = {
+  billing?: string;
   completion?: string;
   error?: string;
+  team?: string;
   updated?: string;
 };
 
@@ -103,24 +130,39 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
       requestHeaders.get("cf-ipcountry") ??
       requestHeaders.get("x-country"),
   );
-  const profile = await getPrivateAccountProfile({
-    actorUserId: currentUser.id,
-    profileUserId: currentUser.id,
-    requestCountry,
-    emailAuthConfigured: isEmailAuthConfigured(),
-    ...(completionFilter === "all" ? {} : { recentCompletionFamily: completionFilter }),
-  });
+  const [profile, teamMembership, teamSubscription] = await Promise.all([
+    getPrivateAccountProfile({
+      actorUserId: currentUser.id,
+      profileUserId: currentUser.id,
+      requestCountry,
+      emailAuthConfigured: isEmailAuthConfigured(),
+      ...(completionFilter === "all" ? {} : { recentCompletionFamily: completionFilter }),
+    }),
+    getTeamMembershipForUser(currentUser.id),
+    getOwnedTeamSubscription(currentUser.id),
+  ]);
 
   if (!profile) notFound();
 
+  const teammateMembership =
+    teamMembership && teamMembership.ownerId !== currentUser.id ? teamMembership : null;
+  const membershipBilling = teammateMembership
+    ? null
+    : await getMembershipBillingSummary(currentUser.id);
   const name = profile.name?.trim() || "egghead learner";
   const hasLibraryMembership = profile.learningAccess.libraryWide;
   const hasIncludedCourses = profile.learningAccess.courseSpecific.length > 0;
-  const membershipDescription = hasLibraryMembership
-    ? "Your membership includes the full egghead library."
-    : hasIncludedCourses
-      ? "Your included courses and free resources remain available. Subscribe for full library access."
-      : "Free resources remain available. Subscribe for full library access.";
+  const staffAccount = staffAccountPresentation(currentUser.role);
+  const membershipDescription =
+    !hasLibraryMembership && staffAccount
+      ? staffAccount.description
+      : teammateMembership
+        ? `You have ${teamAccessLabel(teammateMembership.productName).toLowerCase()} through a team account.`
+        : hasLibraryMembership
+          ? "Your membership includes the full egghead library."
+          : hasIncludedCourses
+            ? "Your included courses and free resources remain available. Subscribe for full library access."
+            : "Free resources remain available. Subscribe for full library access.";
 
   return (
     <main>
@@ -161,6 +203,14 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
           </div>
         </header>
 
+        {notice.team === "joined" || notice.team === "already-member" ? (
+          <output className="rounded-xl border border-sage-line bg-sage-wash px-4 py-3 text-sm font-extrabold text-sage-foreground">
+            {notice.team === "joined"
+              ? "Team invite accepted. Your membership access is active."
+              : "You already have access through this team account."}
+          </output>
+        ) : null}
+
         {notice.updated === "name" ? (
           <output className="rounded-xl border border-sage-line bg-sage-wash px-4 py-3 text-sm font-extrabold text-sage-foreground">
             Display name updated.
@@ -178,6 +228,22 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
           </div>
         ) : null}
 
+        {notice.billing === "unavailable" ? (
+          <div
+            className="rounded-xl border border-rust bg-rust/10 px-4 py-3 text-sm font-extrabold text-rust"
+            role="alert"
+          >
+            We could not open Stripe’s membership portal. Try again or contact{" "}
+            <a
+              className="underline decoration-rust/50 underline-offset-4 hover:decoration-rust"
+              href="mailto:support@egghead.io"
+            >
+              support@egghead.io
+            </a>
+            .
+          </div>
+        ) : null}
+
         <section
           aria-labelledby="membership-heading"
           className={`${profilePanelClassName} overflow-hidden ${hasLibraryMembership ? "" : "shadow-card-deep"}`}
@@ -187,33 +253,115 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
               <p className="flex items-center gap-2 text-sm font-extrabold text-muted-foreground">
                 <span
                   aria-hidden
-                  className={`size-2.5 shrink-0 rounded-full ${hasLibraryMembership ? "bg-sage" : "bg-rust"}`}
+                  className={`size-2.5 shrink-0 rounded-full ${hasLibraryMembership || staffAccount ? "bg-sage" : "bg-rust"}`}
                 />
-                {hasLibraryMembership ? "Membership active" : "No active membership"}
+                {hasLibraryMembership
+                  ? "Membership active"
+                  : staffAccount
+                    ? staffAccount.status
+                    : "No active membership"}
               </p>
               <h2
                 className="mt-3 text-balance text-3xl font-black tracking-tight"
                 id="membership-heading"
               >
-                {hasLibraryMembership ? "Full library access" : "Unlock the full library"}
+                {teammateMembership
+                  ? `${teamAccessLabel(teammateMembership.productName)} through a team account`
+                  : hasLibraryMembership
+                    ? "Full library access"
+                    : staffAccount
+                      ? staffAccount.heading
+                      : "Unlock the full library"}
               </h2>
               <p className="mt-2 max-w-[62ch] text-pretty text-base text-muted-foreground">
                 {membershipDescription}
               </p>
+              {teammateMembership ? (
+                <dl className="mt-5 max-w-2xl border-t border-border pt-4">
+                  <div>
+                    <dt className="text-xs font-extrabold text-muted-foreground">
+                      Team account owner
+                    </dt>
+                    <dd className="mt-1 font-extrabold">
+                      {teammateMembership.ownerName?.trim() ||
+                        teammateMembership.ownerEmail ||
+                        "Team owner"}
+                    </dd>
+                    {teammateMembership.ownerName?.trim() && teammateMembership.ownerEmail ? (
+                      <dd className="mt-0.5 text-sm font-semibold text-muted-foreground">
+                        {teammateMembership.ownerEmail}
+                      </dd>
+                    ) : null}
+                  </div>
+                </dl>
+              ) : hasLibraryMembership ? (
+                <dl className="mt-5 grid max-w-2xl gap-x-8 gap-y-3 border-t border-border pt-4 sm:grid-cols-3">
+                  <div className="min-w-0">
+                    <dt className="text-xs font-extrabold text-muted-foreground">Active plan</dt>
+                    <dd className="mt-1 break-words font-extrabold">
+                      {membershipBilling?.billingInterval ?? "Billing details unavailable"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-extrabold text-muted-foreground">Cost</dt>
+                    <dd className="mt-1 font-extrabold">
+                      {membershipBilling?.cost ?? "Not available"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-extrabold text-muted-foreground">
+                      {membershipBilling?.cancelAtPeriodEnd ? "Access through" : "Renews"}
+                    </dt>
+                    <dd className="mt-1 font-extrabold">
+                      {membershipBilling
+                        ? formatMembershipDate(membershipBilling.renewsAt)
+                        : "Billing details unavailable"}
+                    </dd>
+                  </div>
+                </dl>
+              ) : null}
+              {!teammateMembership && membershipBilling?.cancelAtPeriodEnd ? (
+                <p className="mt-3 text-sm font-bold text-rust">
+                  Your membership is set to end on{" "}
+                  {formatMembershipDate(membershipBilling.renewsAt)} and will not renew.
+                </p>
+              ) : null}
             </div>
 
-            {hasLibraryMembership ? (
-              <Link
-                className="press inline-flex w-full items-center justify-center rounded-xl border border-border-strong bg-surface-grad px-5 py-3 text-sm font-extrabold text-foreground shadow-btn-ghost md:w-auto"
-                href="/courses"
-              >
-                Browse the library
-              </Link>
-            ) : (
+            {hasLibraryMembership && !teammateMembership ? (
+              <div className="grid w-full justify-items-stretch gap-3 md:w-auto md:min-w-48">
+                {teamSubscription ? (
+                  <Link
+                    className="press inline-flex min-h-11 items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-5 py-3 text-sm font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
+                    href="/team"
+                  >
+                    Manage {teamSubscription.totalSeats} team seats
+                  </Link>
+                ) : null}
+                {membershipBilling ? (
+                  <form action={manageMembership}>
+                    <ManageMembershipButton />
+                  </form>
+                ) : (
+                  <p className="max-w-56 text-center text-xs text-muted-foreground">
+                    Contact support to manage this access.
+                  </p>
+                )}
+              </div>
+            ) : !hasLibraryMembership && staffAccount ? (
+              <div className="grid justify-items-stretch gap-3 md:justify-items-center">
+                <a
+                  className="press inline-flex w-full items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] text-base font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover md:min-w-44"
+                  href={EGGHEAD_BUILDER_URL}
+                >
+                  {staffAccount.actionLabel}
+                </a>
+              </div>
+            ) : !hasLibraryMembership ? (
               <div className="grid justify-items-stretch gap-3 md:justify-items-center">
                 <Link
                   className="press inline-flex w-full items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] text-base font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover md:min-w-44"
-                  href="/pricing"
+                  href={getPricingHref()}
                 >
                   Subscribe
                 </Link>
@@ -228,7 +376,7 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                   .
                 </p>
               </div>
-            )}
+            ) : null}
           </div>
         </section>
 
@@ -423,11 +571,24 @@ async function ProfileContent({ searchParams }: { searchParams: Promise<ProfileS
                 </h2>
                 <GithubAccountControl
                   connected={profile.githubConnection.connected}
+                  connectionAvailable={isGithubAuthConfigured()}
                   disconnectAllowed={profile.githubConnection.disconnectAllowed}
                 />
                 <p className="mt-3 text-xs text-muted-foreground">
                   Connection details are private and never appear on your public profile.
                 </p>
+
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-5">
+                  <div>
+                    <h3 className="font-extrabold">Current session</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Sign out of egghead on this device.
+                    </p>
+                  </div>
+                  <form action={signOutOfEgghead}>
+                    <SignOutButton />
+                  </form>
+                </div>
               </div>
             </section>
           </div>

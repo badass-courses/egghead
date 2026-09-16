@@ -6,8 +6,7 @@ import { Button } from "@egghead/ui/button";
 
 import { startSubscriptionCheckout } from "./actions";
 
-const MAX_TEAM_SEATS = 100;
-const MIN_TEAM_SEATS = 2;
+import { MAX_TEAM_SEATS, MIN_TEAM_SEATS } from "../../subscriptions/team-contracts";
 
 export type SubscriptionOption = {
   productId: string;
@@ -28,7 +27,6 @@ type SubscriptionOptionsProps = {
   options: SubscriptionOption[];
   signedIn: boolean;
   defaultPriceId: string | undefined;
-  requestId: string;
 };
 
 function IncludedIcon() {
@@ -56,7 +54,6 @@ export function SubscriptionOptions({
   options,
   signedIn,
   defaultPriceId,
-  requestId,
 }: SubscriptionOptionsProps) {
   const [selectedPriceId, setSelectedPriceId] = useState(
     () => defaultPriceId ?? options.at(0)?.priceId ?? "",
@@ -178,7 +175,6 @@ export function SubscriptionOptions({
           <form action={startSubscriptionCheckout} className="grid gap-3">
             <input name="productId" type="hidden" value={selectedOption.productId} />
             <input name="priceId" type="hidden" value={selectedOption.priceId} />
-            <input name="requestId" type="hidden" value={requestId} />
             <input name="quantity" type="hidden" value={quantity} />
             <Button className="w-full" disabled={!checkoutAvailable} size="lg" type="submit">
               {teamPurchase

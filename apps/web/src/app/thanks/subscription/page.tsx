@@ -6,6 +6,11 @@ import { Container } from "@egghead/ui/container";
 import { getCurrentUser } from "../../../coursebuilder/current-user";
 import { getMembershipServices } from "../../../subscriptions/catalog";
 
+import { getCurrentSubscriptionForUser } from "../../../subscriptions/status";
+import { getOwnedTeamSubscription } from "../../../subscriptions/team";
+import { getMembershipBillingSummary } from "../../../subscriptions/billing";
+import { MembershipStatusRefresh } from "./membership-status-refresh";
+
 export const metadata = { title: "Thanks for subscribing | egghead" };
 const panel =
   "mx-auto grid w-full max-w-[38rem] gap-6 rounded-[1.75rem] border border-border-strong bg-surface-grad p-6 text-center shadow-card-deep sm:p-9";
@@ -24,6 +29,13 @@ async function SubscriptionThanks({ searchParams }: Props) {
     const callbackUrl = `/thanks/subscription?session_id=${encodeURIComponent(sessionId)}`;
     redirect(`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
+  const [subscription, teamCandidate, billing] = await Promise.all([
+    getCurrentSubscriptionForUser(user.id),
+    getOwnedTeamSubscription(user.id),
+    getMembershipBillingSummary(user.id),
+  ]);
+  const teamSubscription =
+    subscription && subscription.id === teamCandidate?.id ? teamCandidate : null;
   const services = getMembershipServices();
   const session =
     services && /^cs_(test_|live_)?[A-Za-z0-9]+$/.test(sessionId)
@@ -36,32 +48,40 @@ async function SubscriptionThanks({ searchParams }: Props) {
     services &&
     session.client_reference_id === user.id &&
     session.metadata?.["userId"] === user.id &&
-    session.metadata["productId"] === services.configuration.productId &&
+    Boolean(session.metadata["productId"]) &&
     session.livemode === services.configuration.live &&
     session.mode === "subscription"
       ? session
       : null;
   const product =
     ownedSession && services
-      ? await services.adapter.getProduct(services.configuration.productId, false)
+      ? await services.adapter.getProduct(ownedSession.metadata?.["productId"] ?? "", false)
       : null;
   const complete = ownedSession?.status === "complete";
   const paid =
     complete &&
     (ownedSession.payment_status === "paid" ||
       ownedSession.payment_status === "no_payment_required");
-  const title = paid
-    ? "Thanks for subscribing."
-    : complete
-      ? "Your payment is processing."
-      : "We couldn’t confirm your checkout.";
+  const title = subscription
+    ? teamSubscription
+      ? "Your team is ready."
+      : "Welcome to egghead."
+    : paid
+      ? "Thanks for subscribing."
+      : complete
+        ? "Your payment is processing."
+        : "We couldn’t confirm your checkout.";
   const invoice =
     ownedSession && typeof ownedSession.invoice === "object" ? ownedSession.invoice : null;
-  const description = paid
-    ? "Your payment is confirmed. Thank you for joining egghead."
-    : complete
-      ? "Stripe is still confirming your payment. Your membership is not active yet."
-      : "Return to pricing to try again, or refresh this page if you just completed checkout.";
+  const description = subscription
+    ? teamSubscription
+      ? `Your team has ${teamSubscription.totalSeats} full-library seats.`
+      : "Your membership is active and the full egghead library is ready for you."
+    : paid
+      ? "Your payment is confirmed. We’re activating your membership."
+      : complete
+        ? "Stripe is still confirming your payment. Your membership is not active yet."
+        : "Return to pricing to try again, or refresh this page if you just completed checkout.";
   return (
     <section aria-labelledby="subscription-thanks-heading" className={panel}>
       <div>
@@ -73,6 +93,17 @@ async function SubscriptionThanks({ searchParams }: Props) {
         </h1>
         <p className="mt-3 text-pretty font-semibold text-muted-foreground">{description}</p>
       </div>
+      {subscription && billing ? (
+        <p className="text-sm font-semibold text-muted-foreground">
+          {billing.cost} · {billing.billingInterval}.{" "}
+          {billing.cancelAtPeriodEnd ? "Access through" : "Renews"}{" "}
+          {new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeZone: "UTC" }).format(
+            billing.renewsAt,
+          )}
+          .
+        </p>
+      ) : null}
+      {paid && !subscription ? <MembershipStatusRefresh /> : null}
       {invoice ? (
         <section
           aria-labelledby="invoice-heading"
@@ -143,6 +174,15 @@ async function SubscriptionThanks({ searchParams }: Props) {
             ) : null}
           </div>
         </section>
+      ) : subscription && billing?.invoicePdfUrl ? (
+        <a
+          href={billing.invoicePdfUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-4"
+        >
+          Download invoice PDF
+        </a>
       ) : complete ? (
         <p className="text-sm font-semibold text-muted-foreground">
           Your invoice is being prepared.{" "}
@@ -162,10 +202,14 @@ async function SubscriptionThanks({ searchParams }: Props) {
           Your account
         </Link>
         <Link
-          href={complete ? "/courses" : "/pricing"}
+          href={teamSubscription ? "/team" : subscription ? "/courses" : "/pricing"}
           className="press inline-flex items-center justify-center rounded-xl border border-yolk-shadow/40 bg-yolk-grad px-7 pt-[15px] pb-[13px] font-extrabold text-yolk-foreground shadow-btn hover:shadow-btn-hover"
         >
-          {complete ? "Browse courses" : "Back to pricing"}
+          {teamSubscription
+            ? "Assign team seats"
+            : subscription
+              ? "Browse courses"
+              : "Back to pricing"}
         </Link>
       </div>
     </section>

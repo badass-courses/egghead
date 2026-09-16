@@ -52,6 +52,7 @@ function alignPeer() {
   const savedPath = join(root, ".local/coursebuilder-shared-peers.json");
   const saved = existsSync(savedPath) ? JSON.parse(readFileSync(savedPath, "utf8")) : {};
   const modules = [
+    join(root, "apps/web/node_modules"),
     ...readdirSync(join(upstream, "packages")).map((pkg) =>
       join(upstream, "packages", pkg, "node_modules"),
     ),
@@ -61,6 +62,7 @@ function alignPeer() {
   ];
   for (const peer of [
     "next",
+    "inngest",
     "react",
     "react-dom",
     "react-hook-form",

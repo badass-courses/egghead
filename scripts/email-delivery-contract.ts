@@ -5,6 +5,7 @@ import {
   sendEmail,
   type OutboundEmail,
 } from "../apps/web/src/coursebuilder/email-delivery";
+import { isEmailAuthEnabled } from "../apps/web/src/coursebuilder/email-auth";
 
 type ContractCheck = {
   name: string;
@@ -69,6 +70,10 @@ const sentResult = await sendEmail(email, {
 });
 const suppressedOutput = formatSuppressedEmail(email);
 const magicOutput = formatMagicSignInLink("http://localhost:3008/api/auth/callback?token=test");
+const postmarkConfiguration = {
+  postmarkApiKey: "test-postmark-key",
+  postmarkFromEmail: "egghead <team@egghead.io>",
+};
 
 const checks = [
   assertEqual(
@@ -82,6 +87,63 @@ const checks = [
     true,
   ),
   assertEqual("email delivery rejects non-true values", isEmailDeliveryEnabled("1"), false),
+  assertEqual(
+    "local email auth supports suppressed delivery",
+    isEmailAuthEnabled({
+      deliveryEnabled: false,
+      postmarkApiKey: undefined,
+      postmarkFromEmail: undefined,
+      runtime: "local",
+    }),
+    true,
+  ),
+  assertEqual(
+    "local email auth requires Postmark configuration when delivery is enabled",
+    isEmailAuthEnabled({
+      deliveryEnabled: true,
+      postmarkApiKey: undefined,
+      postmarkFromEmail: undefined,
+      runtime: "local",
+    }),
+    false,
+  ),
+  assertEqual(
+    "beta email auth requires delivery to be enabled",
+    isEmailAuthEnabled({
+      deliveryEnabled: false,
+      runtime: "beta",
+      ...postmarkConfiguration,
+    }),
+    false,
+  ),
+  assertEqual(
+    "beta email auth requires complete Postmark configuration",
+    isEmailAuthEnabled({
+      deliveryEnabled: true,
+      postmarkApiKey: "test-postmark-key",
+      postmarkFromEmail: undefined,
+      runtime: "beta",
+    }),
+    false,
+  ),
+  assertEqual(
+    "beta email auth is enabled with delivery and Postmark configured",
+    isEmailAuthEnabled({
+      deliveryEnabled: true,
+      runtime: "beta",
+      ...postmarkConfiguration,
+    }),
+    true,
+  ),
+  assertEqual(
+    "production email auth remains disabled",
+    isEmailAuthEnabled({
+      deliveryEnabled: true,
+      runtime: "production",
+      ...postmarkConfiguration,
+    }),
+    false,
+  ),
   assertEqual("suppressed email reports its status", suppressedResult.status, "suppressed"),
   assertEqual("suppressed email does not call Postmark", fetchCallsAfterSuppression, 0),
   assertEqual("suppressed email is logged once", logs.length, 1),

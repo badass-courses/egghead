@@ -4,7 +4,6 @@ import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
-import { type SearchInstructor, topSearchInstructors } from "../../../content/instructors";
 import { searchContent, type SearchResult } from "../../../content/search";
 import {
   contentTypeFromSearchParams,
@@ -107,17 +106,13 @@ function SearchFallback() {
   );
 }
 
-const NO_INSTRUCTORS: SearchInstructor[] = [];
-
 function SearchForm({
   contentType,
   instructor,
-  instructors = NO_INSTRUCTORS,
   term,
 }: {
   contentType?: string | undefined;
   instructor?: string | undefined;
-  instructors?: SearchInstructor[];
   term?: string | undefined;
 }) {
   return (
@@ -140,12 +135,7 @@ function SearchForm({
         <button type="submit">Search</button>
       </Form>
       <SearchTypeFilter contentType={contentType} instructor={instructor} term={term} />
-      <SearchInstructorFilter
-        contentType={contentType}
-        defaultInstructors={instructors}
-        instructor={instructor}
-        term={term}
-      />
+      <SearchInstructorFilter contentType={contentType} instructor={instructor} term={term} />
     </div>
   );
 }
@@ -161,19 +151,13 @@ function SearchContentFallback() {
 
 async function RoutedSearchContent(props: SearchPageProps) {
   const { contentType, instructor, term } = await searchRouteStateFromProps(props);
-  const [results, instructors] = await Promise.all([
-    searchContent(term, contentType, instructor),
-    // The instructor list is a nicety — never let a database outage take
-    // down the whole search page.
-    topSearchInstructors().catch(() => []),
-  ]);
+  const results = await searchContent(term, contentType, instructor);
 
   return (
     <>
       <SearchForm
         contentType={contentType || undefined}
         instructor={instructor || undefined}
-        instructors={instructors}
         term={term || undefined}
       />
       <SearchResults contentType={contentType} results={results} term={term} />

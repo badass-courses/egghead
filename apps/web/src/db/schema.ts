@@ -61,11 +61,15 @@ export const {
   merchantAccount,
   merchantCharge,
   merchantChargeRelations,
+  merchantEvents,
+  merchantEventsRelations,
   merchantCoupon,
   merchantCustomer,
   merchantPrice,
   merchantProduct,
   merchantSession,
+  merchantSubscription,
+  merchantSubscriptionRelations,
   prices,
   products,
   productRelations,
@@ -78,6 +82,8 @@ export const {
   entitlements,
   entitlementsRelations,
   entitlementTypes,
+  subscription,
+  subscriptionRelations,
 } = eggheadCourseBuilderSchema;
 
 export const users = eggheadCourseBuilderSchema.users;

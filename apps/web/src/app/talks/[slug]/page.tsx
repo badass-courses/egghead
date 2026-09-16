@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { getPublicContentStaticParams } from "../../../content/public-resource";
 import { getPublicContentMetadata, renderPublicContentRoute } from "../../../content/public-route";
+import { EMPTY_STATIC_PARAM, withStaticParamFallback } from "../../../content/static-params";
 
 type TalkPageProps = {
   params: Promise<{
@@ -14,8 +15,10 @@ async function slugFromParams(params: TalkPageProps["params"]) {
   return decodeURIComponent(resolved.slug);
 }
 
-export function generateStaticParams() {
-  return getPublicContentStaticParams(["talk"]);
+export async function generateStaticParams() {
+  return withStaticParamFallback(await getPublicContentStaticParams(["talk"]), {
+    slug: EMPTY_STATIC_PARAM,
+  });
 }
 
 export async function generateMetadata({ params }: TalkPageProps): Promise<Metadata> {
