@@ -130,16 +130,19 @@ async function SubscriptionThanks({ searchParams }: Props) {
             </p>
           ) : null}
           <ul className="grid gap-3 border-y border-border py-4">
-            {invoice.lines.data.map((line) => (
-              <li key={line.id} className="flex justify-between gap-4 text-sm font-semibold">
-                <span>
-                  {line.quantity ?? 1} × {product?.name ?? "Egghead membership"}
-                </span>
-                <span className="shrink-0 tabular-nums">
-                  {money(line.amount, invoice.currency)}
-                </span>
-              </li>
-            ))}
+            {invoice.lines.data.map((line) => {
+              const quantity = line.quantity && line.quantity > 0 ? line.quantity : 1;
+              return (
+                <li key={line.id} className="flex justify-between gap-4 text-sm font-semibold">
+                  <span>
+                    {quantity} × {product?.name ?? "Egghead membership"}
+                  </span>
+                  <span className="shrink-0 tabular-nums">
+                    {money(line.amount / quantity, invoice.currency)}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
           <dl className="grid gap-2 text-sm">
             <div className="flex justify-between gap-4">
