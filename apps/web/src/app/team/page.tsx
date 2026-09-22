@@ -172,7 +172,7 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
 
         {!writesAllowed ? (
           <p className="rounded-xl border border-border-strong bg-well px-4 py-3 text-sm font-bold text-muted-foreground shadow-well">
-            Team changes are limited to local Docker during Phase 0.
+            Team changes are unavailable in this environment.
           </p>
         ) : null}
 

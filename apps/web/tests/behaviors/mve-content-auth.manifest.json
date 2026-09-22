@@ -10,10 +10,6 @@
   "privacy": "aggregate/redacted fixtures only; no raw customer rows, emails, tokens, Stripe IDs, or secrets",
   "guardrails": {
     "commerceExcluded": true,
-    "stripeWriterUnchanged": true,
-    "inngestWriterUnchanged": true,
-    "prodDevPlanetScaleWritesBlocked": true,
-    "readFlipBlocked": true,
     "bareLegacyProDoesNotGrantBroadAccess": true
   }
 }

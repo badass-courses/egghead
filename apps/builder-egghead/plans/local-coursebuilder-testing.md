@@ -1,5 +1,10 @@
 # Local CourseBuilder v3 integration
 
+Historical integration receipt from September 2026. The local linking workflow below is retired;
+the current app consumes published CourseBuilder packages. Run `pnpm install` and `pnpm check`
+from the repository root for current verification. The commands and release blockers below record
+the earlier prototype and are not current setup instructions.
+
 Egghead now targets published core 3.0.2, adapter-drizzle 3.0.2, Next bindings 0.0.38, commerce/server/video-processing 0.1.2, UI 2.5.1, and utils 1.1.2. Local overrides currently resolve these packages to `.local/course-builder`, a separate Git checkout on `zac/multiple-membership-prices-v3`, based on upstream main `edbd8e0d0`.
 
 The prior v2 prototype is preserved in the upstream checkout's stash, not applied to v2 releases. Nothing has been published, deployed, or written to live Stripe. Local links are explicitly authorized for testing; app manifests retain released versions and no CourseBuilder `workspace:*` dependencies.

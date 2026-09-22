@@ -61,6 +61,15 @@ function getAuthProviders(): NextAuthConfig["providers"] {
   return providers;
 }
 
+function authSecret() {
+  const secret = getEnv("AUTH_SECRET");
+  if (secret) return secret;
+  if (getEggheadRuntime() === "production") {
+    throw new Error("AUTH_SECRET is required in production.");
+  }
+  return "local-dev-only-egghead-phase-0";
+}
+
 export const authConfig = {
   adapter: createAuthJsAdapter(getCourseBuilderAdapter()),
   providers: getAuthProviders(),
@@ -96,6 +105,6 @@ export const authConfig = {
     signIn: "/login",
     verifyRequest: "/check-your-email",
   },
-  secret: getEnv("AUTH_SECRET") ?? "local-dev-only-egghead-phase-0",
+  secret: authSecret(),
   trustHost: true,
 } satisfies NextAuthConfig;

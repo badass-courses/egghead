@@ -25,7 +25,7 @@ export function getMembershipServices() {
     adapter: mySqlDrizzleAdapter(db, mysqlTable),
     payments: new StripePaymentAdapter({
       stripeToken: configuration.token,
-      stripeWebhookSecret: process.env["STRIPE_WEBHOOK_SECRET"] ?? "",
+      stripeWebhookSecret: configuration.webhookSecret,
     }),
   };
 }
