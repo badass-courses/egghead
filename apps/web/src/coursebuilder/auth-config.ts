@@ -7,6 +7,7 @@ import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEggheadRuntime } from "../db/local-docker";
 import { getEnv } from "../env";
 import { claimAnonymousLessonCompletions } from "../progress/anonymous-lesson-progress";
+import { getAuthSecret } from "./auth-secret";
 import { isEmailAuthEnabled } from "./email-auth";
 import { isEmailDeliveryEnabled } from "./email-delivery";
 import { createPostmarkEmailProvider } from "./email-provider";
@@ -61,15 +62,6 @@ function getAuthProviders(): NextAuthConfig["providers"] {
   return providers;
 }
 
-function authSecret() {
-  const secret = getEnv("AUTH_SECRET");
-  if (secret) return secret;
-  if (getEggheadRuntime() === "production") {
-    throw new Error("AUTH_SECRET is required in production.");
-  }
-  return "local-dev-only-egghead-phase-0";
-}
-
 export const authConfig = {
   adapter: createAuthJsAdapter(getCourseBuilderAdapter()),
   providers: getAuthProviders(),
@@ -105,6 +97,6 @@ export const authConfig = {
     signIn: "/login",
     verifyRequest: "/check-your-email",
   },
-  secret: authSecret(),
+  secret: getAuthSecret(),
   trustHost: true,
 } satisfies NextAuthConfig;

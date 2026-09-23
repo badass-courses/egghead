@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
+import { resolveAuthSecret } from "../apps/web/src/coursebuilder/auth-secret";
 import { createAuthJsAdapter } from "../apps/web/src/server/auth-js-adapter";
 import { formResolver } from "../apps/builder-egghead/src/utils/form-resolver";
 import { z } from "zod";
+
+assert.equal(resolveAuthSecret(undefined, "local"), "local-dev-only-egghead-phase-0");
+assert.equal(resolveAuthSecret("configured-secret", "beta"), "configured-secret");
+assert.throws(() => resolveAuthSecret(undefined, "beta"));
+assert.throws(() => resolveAuthSecret(undefined, "production"));
 
 const operations: string[] = [];
 const adapter = createAuthJsAdapter({
