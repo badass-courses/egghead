@@ -1,0 +1,586 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-19T14:52:59Z",
+  "title": "Design System: egghead",
+  "extensions": {
+    "colorMeta": {
+      "yolk": {
+        "role": "primary",
+        "displayName": "Sunny Yolk",
+        "tonalRamp": [
+          "oklch(20% 0.05 88)",
+          "oklch(30% 0.08 88)",
+          "oklch(40% 0.11 88)",
+          "oklch(52% 0.14 88)",
+          "oklch(64% 0.16 88)",
+          "oklch(76% 0.17 88)",
+          "oklch(86% 0.13 88)",
+          "oklch(95% 0.05 88)"
+        ]
+      },
+      "yolk-deep": {
+        "role": "primary",
+        "displayName": "Deep Yolk",
+        "tonalRamp": [
+          "oklch(18% 0.045 86)",
+          "oklch(28% 0.07 86)",
+          "oklch(38% 0.1 86)",
+          "oklch(49% 0.13 86)",
+          "oklch(60% 0.15 86)",
+          "oklch(72% 0.16 86)",
+          "oklch(84% 0.12 86)",
+          "oklch(95% 0.045 86)"
+        ]
+      },
+      "yolk-shadow": {
+        "role": "primary",
+        "displayName": "Yolk Edge",
+        "tonalRamp": [
+          "oklch(17% 0.04 82)",
+          "oklch(27% 0.065 82)",
+          "oklch(37% 0.09 82)",
+          "oklch(48% 0.11 82)",
+          "oklch(59% 0.13 82)",
+          "oklch(71% 0.14 82)",
+          "oklch(84% 0.1 82)",
+          "oklch(95% 0.04 82)"
+        ]
+      },
+      "yolk-foreground": {
+        "role": "neutral",
+        "displayName": "Yolk Ink",
+        "tonalRamp": [
+          "oklch(15% 0.025 250)",
+          "oklch(26% 0.035 250)",
+          "oklch(38% 0.04 250)",
+          "oklch(50% 0.04 250)",
+          "oklch(62% 0.035 250)",
+          "oklch(74% 0.028 250)",
+          "oklch(85% 0.018 250)",
+          "oklch(95% 0.008 250)"
+        ]
+      },
+      "sky": {
+        "role": "tertiary",
+        "displayName": "Open Sky",
+        "tonalRamp": [
+          "oklch(18% 0.035 225)",
+          "oklch(29% 0.05 225)",
+          "oklch(41% 0.065 225)",
+          "oklch(53% 0.075 225)",
+          "oklch(65% 0.08 225)",
+          "oklch(77% 0.075 225)",
+          "oklch(87% 0.055 225)",
+          "oklch(95% 0.025 225)"
+        ]
+      },
+      "sage": {
+        "role": "tertiary",
+        "displayName": "Learning Sage",
+        "tonalRamp": [
+          "oklch(18% 0.035 135)",
+          "oklch(29% 0.05 135)",
+          "oklch(41% 0.065 135)",
+          "oklch(53% 0.075 135)",
+          "oklch(65% 0.08 135)",
+          "oklch(77% 0.075 135)",
+          "oklch(87% 0.055 135)",
+          "oklch(95% 0.025 135)"
+        ]
+      },
+      "sage-wash": {
+        "role": "tertiary",
+        "displayName": "Sage Wash",
+        "tonalRamp": [
+          "oklch(18% 0.025 135 / 0.3)",
+          "oklch(29% 0.035 135 / 0.3)",
+          "oklch(41% 0.045 135 / 0.3)",
+          "oklch(53% 0.055 135 / 0.3)",
+          "oklch(65% 0.06 135 / 0.3)",
+          "oklch(77% 0.055 135 / 0.3)",
+          "oklch(87% 0.04 135 / 0.3)",
+          "oklch(95% 0.02 135 / 0.3)"
+        ]
+      },
+      "sage-line": {
+        "role": "tertiary",
+        "displayName": "Sage Line",
+        "tonalRamp": [
+          "oklch(18% 0.035 135)",
+          "oklch(29% 0.05 135)",
+          "oklch(41% 0.065 135)",
+          "oklch(53% 0.075 135)",
+          "oklch(65% 0.08 135)",
+          "oklch(77% 0.075 135)",
+          "oklch(87% 0.055 135)",
+          "oklch(95% 0.025 135)"
+        ]
+      },
+      "sage-foreground": {
+        "role": "tertiary",
+        "displayName": "Deep Sage Ink",
+        "tonalRamp": [
+          "oklch(16% 0.03 135)",
+          "oklch(27% 0.045 135)",
+          "oklch(38% 0.06 135)",
+          "oklch(49% 0.07 135)",
+          "oklch(60% 0.075 135)",
+          "oklch(72% 0.065 135)",
+          "oklch(84% 0.045 135)",
+          "oklch(95% 0.02 135)"
+        ]
+      },
+      "rust": {
+        "role": "tertiary",
+        "displayName": "Margin Rust",
+        "tonalRamp": [
+          "oklch(17% 0.04 32)",
+          "oklch(28% 0.065 32)",
+          "oklch(39% 0.09 32)",
+          "oklch(50% 0.11 32)",
+          "oklch(61% 0.115 32)",
+          "oklch(73% 0.1 32)",
+          "oklch(85% 0.065 32)",
+          "oklch(95% 0.025 32)"
+        ]
+      },
+      "rust-deep": {
+        "role": "tertiary",
+        "displayName": "Deep Rust Edge",
+        "tonalRamp": [
+          "oklch(15% 0.035 32)",
+          "oklch(25% 0.055 32)",
+          "oklch(35% 0.075 32)",
+          "oklch(46% 0.095 32)",
+          "oklch(57% 0.1 32)",
+          "oklch(70% 0.085 32)",
+          "oklch(83% 0.055 32)",
+          "oklch(95% 0.02 32)"
+        ]
+      },
+      "background": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "tonalRamp": [
+          "oklch(16% 0.018 82)",
+          "oklch(28% 0.024 82)",
+          "oklch(40% 0.03 82)",
+          "oklch(52% 0.034 82)",
+          "oklch(64% 0.034 82)",
+          "oklch(76% 0.03 82)",
+          "oklch(87% 0.022 82)",
+          "oklch(95% 0.014 82)"
+        ]
+      },
+      "foreground": {
+        "role": "neutral",
+        "displayName": "Navy Ink",
+        "tonalRamp": [
+          "oklch(15% 0.025 250)",
+          "oklch(26% 0.035 250)",
+          "oklch(38% 0.04 250)",
+          "oklch(50% 0.04 250)",
+          "oklch(62% 0.035 250)",
+          "oklch(74% 0.028 250)",
+          "oklch(85% 0.018 250)",
+          "oklch(95% 0.008 250)"
+        ]
+      },
+      "muted-foreground": {
+        "role": "neutral",
+        "displayName": "Slate Annotation",
+        "tonalRamp": [
+          "oklch(16% 0.025 250)",
+          "oklch(28% 0.035 250)",
+          "oklch(40% 0.042 250)",
+          "oklch(52% 0.042 250)",
+          "oklch(64% 0.036 250)",
+          "oklch(76% 0.028 250)",
+          "oklch(87% 0.018 250)",
+          "oklch(95% 0.008 250)"
+        ]
+      },
+      "cream": {
+        "role": "neutral",
+        "displayName": "Cream Sheet",
+        "tonalRamp": [
+          "oklch(16% 0.014 82)",
+          "oklch(28% 0.019 82)",
+          "oklch(40% 0.024 82)",
+          "oklch(52% 0.027 82)",
+          "oklch(64% 0.027 82)",
+          "oklch(76% 0.024 82)",
+          "oklch(87% 0.018 82)",
+          "oklch(95% 0.01 82)"
+        ]
+      },
+      "navy": {
+        "role": "secondary",
+        "displayName": "Workshop Navy",
+        "tonalRamp": [
+          "oklch(14% 0.025 250)",
+          "oklch(25% 0.035 250)",
+          "oklch(37% 0.04 250)",
+          "oklch(49% 0.04 250)",
+          "oklch(61% 0.035 250)",
+          "oklch(73% 0.028 250)",
+          "oklch(85% 0.018 250)",
+          "oklch(95% 0.008 250)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Raised Surface",
+        "tonalRamp": [
+          "oklch(16% 0.015 82)",
+          "oklch(28% 0.02 82)",
+          "oklch(40% 0.025 82)",
+          "oklch(52% 0.028 82)",
+          "oklch(64% 0.028 82)",
+          "oklch(76% 0.024 82)",
+          "oklch(87% 0.017 82)",
+          "oklch(95% 0.009 82)"
+        ]
+      },
+      "well": {
+        "role": "neutral",
+        "displayName": "Inset Well",
+        "tonalRamp": [
+          "oklch(15% 0.016 82)",
+          "oklch(27% 0.021 82)",
+          "oklch(39% 0.027 82)",
+          "oklch(51% 0.03 82)",
+          "oklch(63% 0.03 82)",
+          "oklch(75% 0.026 82)",
+          "oklch(86% 0.019 82)",
+          "oklch(95% 0.01 82)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Paper Rule",
+        "tonalRamp": [
+          "oklch(16% 0.012 82)",
+          "oklch(28% 0.017 82)",
+          "oklch(40% 0.021 82)",
+          "oklch(52% 0.024 82)",
+          "oklch(64% 0.024 82)",
+          "oklch(76% 0.021 82)",
+          "oklch(87% 0.015 82)",
+          "oklch(95% 0.008 82)"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Strong Paper Rule",
+        "tonalRamp": [
+          "oklch(15% 0.014 82)",
+          "oklch(27% 0.019 82)",
+          "oklch(39% 0.024 82)",
+          "oklch(51% 0.027 82)",
+          "oklch(63% 0.027 82)",
+          "oklch(75% 0.023 82)",
+          "oklch(86% 0.017 82)",
+          "oklch(95% 0.009 82)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Page-defining headlines and rare high-impact statements."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Major section titles and important card headlines."
+      },
+      "title": { "displayName": "Title", "purpose": "Repeated card, list, and navigation titles." },
+      "body": { "displayName": "Body", "purpose": "Core explanatory copy and interface text." },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Eyebrows, metadata headers, and status context."
+      },
+      "hand-note": {
+        "displayName": "Hand Note",
+        "purpose": "Short human asides and margin annotations only."
+      }
+    },
+    "themeModes": [
+      {
+        "name": "dark",
+        "media": "(prefers-color-scheme: dark)",
+        "semanticColors": {
+          "background": "#0a101a",
+          "foreground": "#ede4d3",
+          "muted-foreground": "#9aabc0",
+          "cream": "#f2ead8",
+          "navy": "#1e2a38",
+          "rust": "#c2664e",
+          "surface": "#22303f",
+          "well": "#101926",
+          "border": "#2a3a4f",
+          "border-strong": "#36485f",
+          "ring": "#ede4d3",
+          "marker": "#7e3c2e",
+          "sage-wash": "rgba(157, 190, 141, 0.15)",
+          "sage-line": "rgba(157, 190, 141, 0.5)",
+          "sage-foreground": "#9dbe8d"
+        }
+      }
+    ],
+    "gradients": [
+      {
+        "name": "yolk",
+        "value": "linear-gradient(180deg, #ffd968 0%, #f7c948 45%, #efb838 100%)",
+        "purpose": "Primary keys and active learning surfaces."
+      },
+      {
+        "name": "navy",
+        "value": "linear-gradient(180deg, #2b3d52 0%, #1e2a38 55%, #18222e 100%)",
+        "purpose": "Alternate keys, avatars, and high-contrast feature surfaces."
+      },
+      {
+        "name": "surface",
+        "value": "linear-gradient(180deg, #fffdf6 0%, #fbf3e0 100%)",
+        "purpose": "Cards and the main navigation shelf."
+      },
+      {
+        "name": "raised",
+        "value": "linear-gradient(180deg, #fffefc 0%, #fdf8ec 100%)",
+        "purpose": "Raised neutral keys on a surface."
+      },
+      {
+        "name": "well",
+        "value": "linear-gradient(180deg, #fdf8ec 0%, #f3e8ce 100%)",
+        "purpose": "Recessed fields and quiet trays."
+      },
+      {
+        "name": "rust",
+        "value": "linear-gradient(180deg, #b5604e 0%, #a05040 55%, #8f4536 100%)",
+        "purpose": "Explicit warning or destructive keys."
+      },
+      {
+        "name": "sky",
+        "value": "linear-gradient(180deg, #c2e2ee 0%, #a8d4e2 60%, #95c6d7 100%)",
+        "purpose": "Informational feature surfaces."
+      }
+    ],
+    "shadows": [
+      {
+        "name": "primary-key",
+        "value": "0 1px 0 rgba(255, 255, 255, 0.65) inset, 0 3px 0 #c28e12, 0 6px 10px -2px rgba(120, 80, 10, 0.35)",
+        "purpose": "Resting yolk actions."
+      },
+      {
+        "name": "primary-key-hover",
+        "value": "0 1px 0 rgba(255, 255, 255, 0.7) inset, 0 3px 0 #c28e12, 0 9px 16px -3px rgba(120, 80, 10, 0.4)",
+        "purpose": "Hover elevation for yolk actions."
+      },
+      {
+        "name": "pressed-key",
+        "value": "0 2px 4px rgba(120, 80, 10, 0.25) inset, 0 1px 0 rgba(255, 255, 255, 0.2)",
+        "purpose": "Pressed state paired with a 2px downward movement."
+      },
+      {
+        "name": "navy-key",
+        "value": "0 1px 0 rgba(255, 255, 255, 0.14) inset, 0 3px 0 #0a1119, 0 6px 12px -2px rgba(10, 20, 30, 0.5)",
+        "purpose": "Navy buttons and avatar keys."
+      },
+      {
+        "name": "ghost-key",
+        "value": "0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 -2px 0 rgba(120, 90, 30, 0.12) inset, 0 2px 6px -1px rgba(120, 90, 30, 0.22), 0 2px 0 rgba(160, 120, 40, 0.25)",
+        "purpose": "Raised neutral controls and active tabs."
+      },
+      {
+        "name": "card",
+        "value": "0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 1px 2px rgba(120, 90, 30, 0.1), 0 8px 24px -8px rgba(120, 90, 30, 0.28), 0 2px 4px -1px rgba(120, 90, 30, 0.12)",
+        "purpose": "Ordinary raised content surfaces."
+      },
+      {
+        "name": "card-deep",
+        "value": "0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 12px 32px -10px rgba(100, 70, 20, 0.35), 0 4px 8px -2px rgba(100, 70, 20, 0.15)",
+        "purpose": "Large framed surfaces, media, and floating menus."
+      },
+      {
+        "name": "well",
+        "value": "inset 0 2px 6px rgba(120, 90, 30, 0.22), inset 0 1px 2px rgba(120, 90, 30, 0.25), 0 1px 0 rgba(255, 255, 255, 0.7)",
+        "purpose": "Recessed inputs, tracks, and quiet trays."
+      }
+    ],
+    "motion": [
+      {
+        "name": "press-transform",
+        "value": "80ms cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+        "purpose": "Immediate physical movement for pressed controls."
+      },
+      {
+        "name": "press-shadow",
+        "value": "120ms cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+        "purpose": "Shadow response for interactive keys."
+      },
+      {
+        "name": "fast",
+        "value": "200ms",
+        "purpose": "Compact state changes and directional icon movement."
+      },
+      {
+        "name": "standard",
+        "value": "400ms",
+        "purpose": "General-purpose transitions when a slower change is warranted."
+      },
+      { "name": "slow", "value": "800ms", "purpose": "Rare, deliberate ambient transitions." },
+      {
+        "name": "out-expo",
+        "value": "cubic-bezier(0.19, 1, 0.22, 1)",
+        "purpose": "Decelerating motion for chart reveals and small directional feedback."
+      }
+    ],
+    "breakpoints": [
+      { "name": "mobile", "value": "640px" },
+      { "name": "navigation", "value": "768px" },
+      { "name": "content-rail", "value": "960px" },
+      { "name": "search", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single clearest action on a surface.",
+      "html": "<button class=\"ds-btn-primary\" type=\"button\">Start learning</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 10px; padding: 15px 28px 13px; color: var(--color-yolk-foreground); font-family: var(--font-nunito, \"Nunito\"), ui-rounded, system-ui, sans-serif; font-size: 1rem; font-weight: 800; cursor: pointer; background-image: var(--gradient-yolk); border: 1px solid color-mix(in srgb, var(--color-yolk-shadow) 40%, transparent); border-radius: 12px; box-shadow: var(--shadow-btn); transition: transform 80ms var(--ease-out-quad), box-shadow 120ms var(--ease-out-quad), filter 120ms var(--ease-out-quad); } .ds-btn-primary:hover { filter: brightness(var(--press-brightness)); box-shadow: var(--shadow-btn-hover); } .ds-btn-primary:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; } .ds-btn-primary:active { transform: translateY(2px); box-shadow: var(--shadow-btn-press); }"
+    },
+    {
+      "name": "Navy Button",
+      "kind": "button",
+      "refersTo": "button-navy",
+      "description": "A high-contrast alternate action when yolk should remain singular.",
+      "html": "<button class=\"ds-btn-navy\" type=\"button\">Browse lessons <span aria-hidden=\"true\">→</span></button>",
+      "css": ".ds-btn-navy { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 15px 28px 13px; color: var(--color-cream); font-family: var(--font-nunito, \"Nunito\"), ui-rounded, system-ui, sans-serif; font-size: 1rem; font-weight: 800; cursor: pointer; background-image: var(--gradient-navy); border: 1px solid rgba(0, 0, 0, 0.4); border-radius: 12px; box-shadow: var(--shadow-btn-navy); transition: transform 80ms var(--ease-out-quad), box-shadow 120ms var(--ease-out-quad), filter 120ms var(--ease-out-quad); } .ds-btn-navy:hover { filter: brightness(var(--press-brightness)); } .ds-btn-navy:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; } .ds-btn-navy:active { transform: translateY(2px); box-shadow: var(--shadow-btn-press); }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "A neutral raised key for secondary and compact actions.",
+      "html": "<button class=\"ds-btn-ghost\" type=\"button\">View profile</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; color: var(--color-foreground); font-family: var(--font-nunito, \"Nunito\"), ui-rounded, system-ui, sans-serif; font-size: 0.875rem; font-weight: 800; cursor: pointer; background-image: var(--gradient-surface); border: 1px solid var(--color-border-strong); border-radius: 8px; box-shadow: var(--shadow-btn-ghost); transition: transform 80ms var(--ease-out-quad), box-shadow 120ms var(--ease-out-quad), filter 120ms var(--ease-out-quad); } .ds-btn-ghost:hover { filter: brightness(var(--press-brightness)); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; } .ds-btn-ghost:active { transform: translateY(2px); box-shadow: var(--shadow-btn-press); }"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "A pill-shaped recessed field with a tactile submit key.",
+      "html": "<form class=\"ds-search\"><svg aria-hidden=\"true\" viewBox=\"0 0 17 17\"><circle cx=\"7\" cy=\"7\" r=\"5.5\"></circle><path d=\"M11.5 11.5L15.5 15.5\"></path></svg><input aria-label=\"Search egghead\" placeholder=\"Search…\"><button type=\"submit\">Search</button></form>",
+      "css": ".ds-search { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 20px; color: var(--color-muted-foreground); background: var(--color-well); border: 1px solid var(--color-border-strong); border-radius: 9999px; box-shadow: var(--shadow-well); } .ds-search:focus-within { outline: 2px solid var(--color-ring); outline-offset: 3px; } .ds-search svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; } .ds-search input { flex: 1; min-width: 0; color: var(--color-foreground); font-family: var(--font-nunito, \"Nunito\"), ui-rounded, system-ui, sans-serif; font-size: 1rem; font-weight: 600; background: transparent; border: 0; outline: 0; } .ds-search input::placeholder { color: color-mix(in srgb, var(--color-foreground) 40%, transparent); } .ds-search button { padding: 11px 22px 9px; color: var(--color-yolk-foreground); font: inherit; font-weight: 800; cursor: pointer; background-image: var(--gradient-yolk); border: 1px solid color-mix(in srgb, var(--color-yolk-shadow) 40%, transparent); border-radius: 9999px; box-shadow: var(--shadow-btn); transition: transform 80ms var(--ease-out-quad), box-shadow 120ms var(--ease-out-quad); } .ds-search button:hover { box-shadow: var(--shadow-btn-hover); } .ds-search button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; } .ds-search button:active { transform: translateY(2px); box-shadow: var(--shadow-btn-press); }"
+    },
+    {
+      "name": "Primary Navigation Shelf",
+      "kind": "nav",
+      "refersTo": "button-ghost",
+      "description": "The floating brand shelf with quiet links and one raised active key.",
+      "html": "<nav aria-label=\"Primary\" class=\"ds-nav\"><a class=\"ds-nav-brand\" href=\"#\">egghead</a><a class=\"ds-nav-link ds-nav-active\" aria-current=\"page\" href=\"#\">Learn</a><a class=\"ds-nav-link\" href=\"#\">Courses</a><a class=\"ds-nav-link\" href=\"#\">Lessons</a></nav>",
+      "css": ".ds-nav { display: flex; align-items: center; gap: 6px; padding: 12px 12px 12px 16px; color: var(--color-foreground); font-family: var(--font-nunito, \"Nunito\"), ui-rounded, system-ui, sans-serif; background-image: var(--gradient-surface); border: 1px solid var(--color-border); border-radius: 16px; box-shadow: var(--shadow-card); } .ds-nav-brand { margin-right: 10px; color: inherit; font-size: 1.25rem; font-weight: 900; text-decoration: none; } .ds-nav-link { padding: 8px 16px; color: var(--color-muted-foreground); font-size: 0.875rem; font-weight: 700; text-decoration: none; border-radius: 9999px; } .ds-nav-link:hover { color: var(--color-foreground); background: var(--hover-wash); } .ds-nav-link:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; } .ds-nav-active { color: var(--color-foreground); font-weight: 800; background-image: var(--gradient-raised); border: 1px solid var(--color-border-strong); box-shadow: var(--shadow-btn-ghost); }"
+    },
+    {
+      "name": "Raised Card",
+      "kind": "card",
+      "refersTo": "card-raised",
+      "description": "A reusable content frame that carries hierarchy without fragmenting the page.",
+      "html": "<article class=\"ds-card\"><span class=\"ds-card-eyebrow\">Course</span><h3>Practical TypeScript</h3><p>Concise lessons from working engineers.</p></article>",
+      "css": ".ds-card { display: grid; gap: 8px; padding: 20px 22px; color: var(--color-foreground); font-family: var(--font-nunito, \"Nunito\"), ui-rounded, system-ui, sans-serif; background-image: var(--gradient-surface); border: 1px solid var(--color-border); border-radius: 16px; box-shadow: var(--shadow-card); transition: transform 120ms var(--ease-out-quad), box-shadow 120ms var(--ease-out-quad); } .ds-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-card-deep); } .ds-card:focus-within { outline: 2px solid var(--color-ring); outline-offset: 3px; } .ds-card h3, .ds-card p { margin: 0; } .ds-card h3 { font-size: 1.25rem; font-weight: 800; line-height: 1.15; } .ds-card p { max-width: 65ch; color: var(--color-muted-foreground); } .ds-card-eyebrow { color: var(--color-rust); font-size: 0.75rem; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; }"
+    },
+    {
+      "name": "Learning Status Chip",
+      "kind": "chip",
+      "refersTo": "chip-status",
+      "description": "A compact text-backed status signal for completion or healthy activity.",
+      "html": "<span class=\"ds-status\"><span aria-hidden=\"true\" class=\"ds-status-dot\"></span>Learning</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 4px 10px; color: var(--color-sage-foreground); font-family: var(--font-nunito, \"Nunito\"), ui-rounded, system-ui, sans-serif; font-size: 0.75rem; font-weight: 900; background: var(--color-sage-wash); border: 1px solid var(--color-sage-line); border-radius: 9999px; } .ds-status-dot { width: 7px; height: 7px; background: var(--color-sage); border-radius: 50%; box-shadow: 0 0 4px var(--color-sage); }"
+    },
+    {
+      "name": "Avatar Key",
+      "kind": "custom",
+      "refersTo": "button-navy",
+      "description": "A compact square identity marker for lists and account surfaces.",
+      "html": "<span class=\"ds-avatar\" aria-label=\"Maya Chen\">MC</span>",
+      "css": ".ds-avatar { display: inline-grid; place-items: center; width: 44px; height: 44px; color: var(--color-cream); font-family: var(--font-nunito, \"Nunito\"), ui-rounded, system-ui, sans-serif; font-size: 0.75rem; font-weight: 900; background-image: var(--gradient-navy); border: 2px solid var(--color-surface); border-radius: 13px; box-shadow: var(--shadow-btn-navy); } .ds-avatar:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Tactile Learning Desk",
+    "overview": "The Tactile Learning Desk is egghead's incumbent visual world: a warm, slightly imperfect workspace built from paper, trays, wells, and weighty keys. It should feel practical and companionable rather than polished into corporate anonymity—serious enough for working engineers, playful enough to make learning feel human.\n\nBrand expression comes from material relationships more than decoration. Actions rise from the page, inputs and quiet controls sit in wells, cards read as stacked surfaces, and small handwritten notes add a human margin voice. The team-dashboard comparison demonstrates that this world can support dense operational information; its charts, roster patterns, comparison navigation, and management-specific compositions remain local to that surface unless another product flow proves them reusable.",
+    "keyCharacteristics": [
+      "Warm paper and cream surfaces balanced by deep navy ink.",
+      "Yolk yellow used sparingly for action, active learning, and high-value signals.",
+      "Rounded, heavy Nunito typography with brief Caveat annotations.",
+      "Tactile elevation that communicates interaction and hierarchy.",
+      "Dense information organized with generous gutters, short measures, and clear rules.",
+      "Light and dark appearances that preserve the same semantic relationships."
+    ],
+    "rules": [
+      {
+        "name": "The Yolk Has a Job Rule",
+        "body": "Reserve yolk for the primary action, active learning, or a single high-value signal; its scarcity preserves hierarchy.",
+        "section": "colors"
+      },
+      {
+        "name": "The Semantic Swap Rule",
+        "body": "Components consume semantic variables so light and dark appearances preserve relationships instead of merely inverting colors.",
+        "section": "colors"
+      },
+      {
+        "name": "The Working Voice Rule",
+        "body": "Nunito carries interface and content; Caveat appears only as a short human aside, never for controls, dense data, or body copy.",
+        "section": "typography"
+      },
+      {
+        "name": "The Weight Builds Hierarchy Rule",
+        "body": "Prefer changes in weight, size, and measure over adding extra colors or ornamental type styles.",
+        "section": "typography"
+      },
+      {
+        "name": "The Reading Track Rule",
+        "body": "Default content lands on the readable track; only media, dense tools, and intentional compositions earn breakout or wide placement.",
+        "section": "layout"
+      },
+      {
+        "name": "The Reflow Before Squeeze Rule",
+        "body": "Change the composition before labels, controls, or records become cramped, truncated beyond recognition, or horizontally dependent.",
+        "section": "layout"
+      },
+      {
+        "name": "The Physical State Rule",
+        "body": "Raised things invite action, wells receive input or hold quiet data, and flat rules separate information.",
+        "section": "elevation"
+      },
+      {
+        "name": "The One Frame Rule",
+        "body": "Prefer one strong containing surface with internal dividers over a field of independently floating mini-cards.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Useful Curve Rule",
+        "body": "Match radius to function: compact key, card, media frame, or true pill; do not apply maximum rounding indiscriminately.",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "**Do** build hierarchy with surface role, weight, spacing, and readable measure before adding another accent color.",
+      "**Do** use yolk for the screen's clearest action or learning signal and keep its navy foreground.",
+      "**Do** keep components bound to semantic CSS variables so the dark appearance remains intentional.",
+      "**Do** make focus visible, preserve keyboard operation, respect reduced motion, and pair status color with words or icons.",
+      "**Do** use real egghead content and the Eggo identity asset when product evidence calls for them.",
+      "**Do** treat dense operational data as trustworthy records, with tabular numerals, plain labels, and responsive reflow."
+    ],
+    "donts": [
+      "**Don't** replace the incumbent paper, navy, yolk, rounded-type, and tactile-depth world with a generic dashboard aesthetic.",
+      "**Don't** turn every content group into a floating card or every action into a yolk button.",
+      "**Don't** use Caveat for controls, tables, long copy, or essential instructions.",
+      "**Don't** hard-code light-theme neutrals inside adaptive components.",
+      "**Don't** promote the team prototype's analytics structures into global patterns without evidence of reuse.",
+      "**Don't** invent achievement theater, social proof, rankings, unsupported proficiency scores, or surveillance-style engagement metrics."
+    ]
+  }
+}
