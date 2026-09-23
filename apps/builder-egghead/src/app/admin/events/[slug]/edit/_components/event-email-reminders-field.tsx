@@ -12,7 +12,7 @@ import {
 import type { Email } from '@/lib/emails'
 import { updateEmail } from '@/lib/emails-query'
 import { EditorView } from '@codemirror/view'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { formResolver as zodResolver } from '@/utils/form-resolver'
 import MarkdownEditor from '@uiw/react-markdown-editor'
 import { Loader2, Mail, Pencil, Plus } from 'lucide-react'
 import { useTheme } from 'next-themes'

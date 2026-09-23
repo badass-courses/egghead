@@ -1,4 +1,4 @@
-import type { BillingInterval } from "@coursebuilder/core/schemas";
+import type { BillingInterval } from "@coursebuilder/core/schemas/product-schema";
 
 const billingIntervalOrder: Record<NonNullable<BillingInterval>, number> = {
   month: 0,

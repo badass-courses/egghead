@@ -4,28 +4,29 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@egghead/ui/button";
 
-import type { BillingInterval } from "@coursebuilder/core/schemas";
-
-import { subscriptionIntervalLabel } from "../../subscriptions/options";
-import { MAX_TEAM_SEATS, MIN_TEAM_SEATS } from "../../subscriptions/team-contracts";
 import { startSubscriptionCheckout } from "./actions";
+
+import { MAX_TEAM_SEATS, MIN_TEAM_SEATS } from "../../subscriptions/team-contracts";
 
 export type SubscriptionOption = {
   productId: string;
+  priceId: string;
+  label: string;
+  intervalCount: number;
   name: string;
   description: string | null;
   currency: string;
   price: string;
   unitAmount: number;
-  billingInterval: NonNullable<BillingInterval>;
+  billingInterval: "day" | "week" | "month" | "year";
 };
 
 type SubscriptionOptionsProps = {
   checkoutAvailable: boolean;
-  commerceWritesAllowed: boolean;
   configured: boolean;
   options: SubscriptionOption[];
   signedIn: boolean;
+  defaultPriceId: string | undefined;
 };
 
 function IncludedIcon() {
@@ -49,19 +50,25 @@ function IncludedIcon() {
 
 export function SubscriptionOptions({
   checkoutAvailable,
-  commerceWritesAllowed,
   configured,
   options,
   signedIn,
+  defaultPriceId,
 }: SubscriptionOptionsProps) {
-  const [selectedProductId, setSelectedProductId] = useState(() => options.at(0)?.productId ?? "");
+  const [selectedPriceId, setSelectedPriceId] = useState(
+    () => defaultPriceId ?? options.at(0)?.priceId ?? "",
+  );
   const [quantity, setQuantity] = useState(1);
   const selectedOption =
-    options.find((option) => option.productId === selectedProductId) ?? options.at(0);
+    options.find((option) => option.priceId === selectedPriceId) ?? options.at(0);
 
   if (!selectedOption) return null;
 
-  const intervalLabel = subscriptionIntervalLabel(selectedOption.billingInterval);
+  const intervalLabel = selectedOption.label;
+  const cadence =
+    selectedOption.intervalCount === 1
+      ? selectedOption.billingInterval
+      : `${selectedOption.intervalCount} ${selectedOption.billingInterval}s`;
   const membershipName = options.at(0)?.name ?? selectedOption.name;
   const teamPurchase = quantity >= MIN_TEAM_SEATS;
   const totalPrice = new Intl.NumberFormat("en-US", {
@@ -85,20 +92,20 @@ export function SubscriptionOptions({
         {options.length > 1 ? (
           <fieldset className="mx-auto grid w-full max-w-[24rem] gap-2">
             <legend className="sr-only">Choose a billing interval</legend>
-            <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-well p-1.5 shadow-well">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(6rem,1fr))] gap-1.5 rounded-2xl bg-well p-1.5 shadow-well">
               {options.map((option) => {
-                const label = subscriptionIntervalLabel(option.billingInterval);
+                const label = option.label;
 
                 return (
-                  <label className="relative cursor-pointer" key={option.productId}>
+                  <label className="relative cursor-pointer" key={option.priceId}>
                     <input
                       aria-label={label}
-                      checked={option.productId === selectedOption.productId}
+                      checked={option.priceId === selectedOption.priceId}
                       className="peer sr-only"
                       name="billingIntervalPreview"
-                      onChange={() => setSelectedProductId(option.productId)}
+                      onChange={() => setSelectedPriceId(option.priceId)}
                       type="radio"
-                      value={option.productId}
+                      value={option.priceId}
                     />
                     <span className="press flex min-h-12 items-center justify-center rounded-xl px-4 py-2 font-extrabold text-muted-foreground transition-[background-color,color,box-shadow] peer-checked:bg-surface-grad peer-checked:text-foreground peer-checked:shadow-btn-ghost peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring">
                       {label}
@@ -113,20 +120,21 @@ export function SubscriptionOptions({
         <div className="grid gap-4">
           <div aria-live="polite" className="grid min-h-24 content-center gap-1">
             <p
-              aria-label={`${totalPrice} total per ${selectedOption.billingInterval} for ${quantity} ${quantity === 1 ? "seat" : "seats"}`}
+              aria-label={`${totalPrice} total every ${cadence} for ${quantity} ${quantity === 1 ? "seat" : "seats"}`}
               className="flex items-end justify-center gap-1"
             >
-              <span className="mb-7 text-sm font-extrabold text-muted-foreground">US</span>
+              <span className="mb-7 text-sm font-extrabold text-muted-foreground">
+                {selectedOption.currency.toLowerCase() === "usd"
+                  ? "US"
+                  : selectedOption.currency.toUpperCase()}
+              </span>
               <span className="text-5xl font-black tracking-tight tabular-nums sm:text-6xl">
                 {totalPrice}
               </span>
-              <span className="mb-2 text-lg font-extrabold text-muted-foreground">
-                /{selectedOption.billingInterval}
-              </span>
+              <span className="mb-2 text-lg font-extrabold text-muted-foreground">/{cadence}</span>
             </p>
             <p className="text-xs font-bold text-muted-foreground">
-              {selectedOption.price} per seat. Billed every {selectedOption.billingInterval}. Cancel
-              anytime.
+              {selectedOption.price} per seat. Billed every {cadence}. Cancel anytime.
             </p>
           </div>
 
@@ -166,21 +174,18 @@ export function SubscriptionOptions({
         {signedIn ? (
           <form action={startSubscriptionCheckout} className="grid gap-3">
             <input name="productId" type="hidden" value={selectedOption.productId} />
+            <input name="priceId" type="hidden" value={selectedOption.priceId} />
             <input name="quantity" type="hidden" value={quantity} />
             <Button className="w-full" disabled={!checkoutAvailable} size="lg" type="submit">
               {teamPurchase
                 ? `Subscribe for ${quantity} seats`
                 : `Subscribe ${intervalLabel.toLowerCase()}`}
             </Button>
-            {!commerceWritesAllowed ? (
-              <p className="text-xs font-semibold text-muted-foreground">
-                Checkout is limited to local Docker during Phase 0.
-              </p>
-            ) : configured ? null : (
+            {!configured ? (
               <p className="text-xs font-semibold text-muted-foreground">
                 Subscription checkout is not configured yet.
               </p>
-            )}
+            ) : null}
           </form>
         ) : (
           <Link

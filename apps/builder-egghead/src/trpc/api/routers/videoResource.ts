@@ -30,7 +30,7 @@ export const videoResourceRouter = createTRPCRouter({
 					cursor: z.string().optional(),
 				})
 				.optional()
-				.default({}),
+				.default({ limit: 20 }),
 		)
 		.query(async ({ input }) => {
 			return await getPaginatedVideoResources(input.limit, input.cursor)

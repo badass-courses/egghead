@@ -1,6 +1,6 @@
 "use server";
 
-import { logger } from "@coursebuilder/core/utils/logger";
+import { logger } from "@coursebuilder/utils/logger";
 
 import { getLessonById } from "../content/lesson";
 import { getCurrentUser } from "../coursebuilder/current-user";

@@ -2,8 +2,8 @@ import { inngest } from '@/inngest/inngest.server'
 import { getEventOrEventSeries } from '@/lib/events-query'
 import { addUserToGoogleCalendarEvent } from '@/lib/google-calendar'
 
-import { FULL_PRICE_COUPON_REDEEMED_EVENT } from '@coursebuilder/core/inngest/commerce/event-full-price-coupon-redeemed'
-import { NEW_PURCHASE_CREATED_EVENT } from '@coursebuilder/core/inngest/commerce/event-new-purchase-created'
+import { FULL_PRICE_COUPON_REDEEMED_EVENT } from '@coursebuilder/core/events/commerce'
+import { NEW_PURCHASE_CREATED_EVENT } from '@coursebuilder/core/events/commerce'
 
 export const postEventPurchase = inngest.createFunction(
 	{

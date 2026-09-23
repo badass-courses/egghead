@@ -1,98 +1,77 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
-
-import { getCurrentUser } from "../../coursebuilder/current-user";
-import { isStripeConfigured } from "../../coursebuilder/stripe-provider";
-import { commerceWritesAreAllowed } from "../../db/local-docker";
-import { formatProductPrice } from "../../subscriptions/billing";
-import {
-  getActiveMembershipProducts,
-  type ActiveMembershipProduct,
-} from "../../subscriptions/catalog";
-import { compareSubscriptionIntervals } from "../../subscriptions/options";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { getOwnedTeamSubscription } from "../../subscriptions/team";
+import { membershipIntervalLabel } from "../../subscriptions/billing";
+import { getCurrentUser } from "../../coursebuilder/current-user";
+import { commerceWritesAreAllowed } from "../../db/local-docker";
+import { getActiveMembershipProducts, membershipPrices } from "../../subscriptions/catalog";
 import { SubscriptionOptions, type SubscriptionOption } from "./subscription-options";
 
-type PricingSearchParams = {
-  error?: string | string[];
-};
-
-function firstParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-function checkoutErrorMessage(error: string | undefined) {
-  if (error === "missing-email") return "Your account needs an email address before checkout.";
-  if (error === "invalid-product") return "That membership option is no longer available.";
-  if (error === "invalid-seats") return "Choose between 1 and 100 membership seats.";
-  if (error === "not-configured") return "Subscription checkout is not configured yet.";
-  if (error === "checkout") return "Stripe could not start checkout. Please try again.";
-  if (error === "checkout-pending") {
-    return "Another membership checkout is already in progress.";
-  }
-  return null;
-}
-
-/** Converts a validated membership product into the pricing card's display model. */
-function getSubscriptionOption(product: ActiveMembershipProduct): SubscriptionOption | null {
-  const price = formatProductPrice(product.price.unitAmount, "USD");
-  if (!price) return null;
-
-  return {
-    productId: product.id,
-    name: product.name,
-    description: product.fields.description ?? null,
-    currency: "USD",
-    price,
-    unitAmount: product.price.unitAmount,
-    billingInterval: product.fields.billingInterval,
-  };
-}
-
-/** Builds displayable pricing options in monthly-to-yearly order. */
-function getSubscriptionOptions(products: ActiveMembershipProduct[]) {
-  return products
-    .map(getSubscriptionOption)
-    .filter((option): option is SubscriptionOption => option !== null)
-    .toSorted((first, second) =>
-      compareSubscriptionIntervals(first.billingInterval, second.billingInterval),
-    );
-}
-
+export const metadata = { title: "Membership pricing | egghead" };
 const subscriptionPanelClassName = "mx-auto grid w-full max-w-[44rem] gap-7";
 
-function PricingLoadingState() {
-  return (
-    <section aria-busy="true" className={subscriptionPanelClassName}>
-      <p className="text-center font-bold text-muted-foreground">Checking your membership…</p>
-    </section>
-  );
-}
+type PricingProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
 
-/** Resolves account state and the active membership catalog for the pricing page. */
-async function ResolvedPricingState({
-  searchParams,
-}: {
-  searchParams: Promise<PricingSearchParams>;
-}) {
+async function ResolvedPricingState({ searchParams }: PricingProps) {
   await connection();
-
-  const [user, resolvedSearchParams, membershipProducts] = await Promise.all([
+  const [products, user, query] = await Promise.all([
+    getActiveMembershipProducts(),
     getCurrentUser(),
     searchParams,
-    getActiveMembershipProducts(),
   ]);
-  const subscriptionOptions = getSubscriptionOptions(membershipProducts);
+  if (typeof query["session_id"] === "string")
+    redirect(`/thanks/subscription?session_id=${encodeURIComponent(query["session_id"])}`);
   const [currentSubscription, teamSubscription] = user?.id
     ? await Promise.all([getCurrentSubscriptionForUser(user.id), getOwnedTeamSubscription(user.id)])
     : [null, null];
-  const configured = isStripeConfigured() && subscriptionOptions.length > 0;
-  const commerceWritesAllowed = commerceWritesAreAllowed();
-  const checkoutAvailable = configured && commerceWritesAllowed;
-  const errorMessage = checkoutErrorMessage(firstParam(resolvedSearchParams.error));
+  const options: SubscriptionOption[] = products.flatMap((product) =>
+    membershipPrices(product)
+      .toSorted((a, b) => (a.fields.offer?.position ?? 0) - (b.fields.offer?.position ?? 0))
+      .flatMap((price) => {
+        const recurring =
+          price.fields.stripe?.recurring ??
+          (product.fields.billingInterval
+            ? { interval: product.fields.billingInterval, intervalCount: 1 }
+            : null);
+        if (!recurring || !product) return [];
+        const currency = price.fields.stripe?.currency ?? "usd";
+        const label =
+          price.fields.offer?.label ??
+          membershipIntervalLabel(recurring.interval, recurring.intervalCount);
+        return [
+          {
+            productId: product.id,
+            priceId: price.id,
+            name: product.name,
+            description: product.fields.description ?? null,
+            currency,
+            price: new Intl.NumberFormat("en-US", { style: "currency", currency }).format(
+              price.unitAmount,
+            ),
+            unitAmount: price.unitAmount,
+            billingInterval: recurring.interval,
+            intervalCount: recurring.intervalCount,
+            label,
+          },
+        ];
+      }),
+  );
+  const notice =
+    query["error"] === "missing-email"
+      ? "Your account needs a valid email address before checkout."
+      : query["error"] === "checkout-pending"
+        ? "Another checkout is still open or being processed. Try again shortly."
+        : query["cancelled"]
+          ? "Checkout cancelled. Choose a billing option to try again."
+          : query["error"]
+            ? "We couldn’t start checkout. Please refresh the page and try again."
+            : null;
 
   return (
     <section className={subscriptionPanelClassName}>
@@ -101,20 +80,15 @@ async function ResolvedPricingState({
           Learn without the paywalls.
         </h1>
         <p className="text-pretty text-lg font-semibold text-muted-foreground">
-          Choose monthly or yearly access to every egghead course and lesson. Checkout is securely
-          hosted by Stripe.
+          Choose your billing schedule for access to every egghead course and lesson. Checkout is
+          securely hosted by Stripe.
         </p>
       </header>
-
-      {errorMessage ? (
-        <p
-          className="rounded-xl border border-rust/40 bg-rust/10 px-4 py-3 text-sm font-bold text-rust"
-          role="alert"
-        >
-          {errorMessage}
-        </p>
+      {notice ? (
+        <output className="text-center text-sm font-semibold text-muted-foreground">
+          {notice}
+        </output>
       ) : null}
-
       {currentSubscription ? (
         <div className="grid gap-3 rounded-2xl bg-sage-wash p-5 text-center shadow-well">
           <p className="font-extrabold text-sage-foreground">Your membership is active.</p>
@@ -125,13 +99,13 @@ async function ResolvedPricingState({
             {teamSubscription ? "Manage team seats" : "Browse courses"}
           </Link>
         </div>
-      ) : subscriptionOptions.length > 0 ? (
+      ) : options.length > 0 ? (
         <div aria-label="Subscription options" className="mx-auto w-full max-w-[32rem]">
           <SubscriptionOptions
-            checkoutAvailable={checkoutAvailable}
-            commerceWritesAllowed={commerceWritesAllowed}
-            configured={configured}
-            options={subscriptionOptions}
+            checkoutAvailable={commerceWritesAreAllowed()}
+            configured
+            options={options}
+            defaultPriceId={products.at(0)?.price?.id}
             signedIn={Boolean(user)}
           />
           <p className="mt-4 text-center text-xs font-semibold text-muted-foreground">
@@ -142,7 +116,7 @@ async function ResolvedPricingState({
         <div className="grid gap-3 rounded-2xl bg-well p-6 text-center shadow-well">
           <h2 className="text-xl font-black">Membership options are unavailable.</h2>
           <p className="font-semibold text-muted-foreground">
-            No active recurring membership products are configured. Please try again later.
+            No active recurring membership prices are configured. Please try again later.
           </p>
         </div>
       )}
@@ -150,19 +124,21 @@ async function ResolvedPricingState({
   );
 }
 
-export default function PricingPage({
-  searchParams,
-}: {
-  searchParams: Promise<PricingSearchParams>;
-}) {
+export default function PricingPage(props: PricingProps) {
   return (
     <Container
       as="main"
       className="content-center gap-y-0 py-[clamp(2.5rem,8vh,6rem)]"
       size="narrow"
     >
-      <Suspense fallback={<PricingLoadingState />}>
-        <ResolvedPricingState searchParams={searchParams} />
+      <Suspense
+        fallback={
+          <section aria-busy="true" className={subscriptionPanelClassName}>
+            <p className="text-center font-bold text-muted-foreground">Checking your membership…</p>
+          </section>
+        }
+      >
+        <ResolvedPricingState {...props} />
       </Suspense>
     </Container>
   );

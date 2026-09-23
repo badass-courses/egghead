@@ -4,116 +4,101 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { getCurrentUser } from "../../coursebuilder/current-user";
+import { expireStripeSubscriptionCheckoutSession } from "../../coursebuilder/stripe-provider";
+import { getEggheadDatabase } from "../../db/adapter";
+import { assertCommerceWritesAllowed, getEggheadRuntime } from "../../db/local-docker";
 import {
-  expireStripeSubscriptionCheckoutSession,
-  getSiteUrl,
-  getStripeProvider,
-  isStripeConfigured,
-  takeCreatedStripeSubscriptionCheckout,
-} from "../../coursebuilder/stripe-provider";
-import { getCourseBuilderAdapter, getEggheadDatabase } from "../../db/adapter";
-import { organization as organizationTable } from "../../db/schema";
-import { assertCommerceWritesAllowed } from "../../db/local-docker";
-import { getActiveMembershipProduct } from "../../subscriptions/catalog";
+  merchantAccount as merchantAccountTable,
+  merchantCustomer,
+  organization as organizationTable,
+} from "../../db/schema";
+import { getActiveMembershipProduct, getMembershipServices } from "../../subscriptions/catalog";
+import {
+  CHECKOUT_RESERVATION_FIELD,
+  decideCheckoutReservation,
+  readCheckoutReservation,
+  subscriptionCheckoutIdempotencyKey,
+} from "../../subscriptions/checkout-reservation";
 import { ensurePersonalOrganization } from "../../subscriptions/personal-organization";
 import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { subscriptionCheckoutQuantitySchema } from "../../subscriptions/team-contracts";
 
-const CHECKOUT_RESERVATION_FIELD = "stripeSubscriptionCheckout";
-const CHECKOUT_RESERVATION_PENDING_TTL_SECONDS = 2 * 60;
+import { resolveCheckoutPrice } from "@coursebuilder/commerce/resolve-checkout-price";
+import type { StripePaymentAdapter } from "@coursebuilder/commerce/stripe-provider";
+import { getCheckoutCustomer } from "../../subscriptions/checkout-customer";
+import { membershipCheckoutOrigin } from "../../subscriptions/configuration";
+
 const organizationFieldsSchema = z.record(z.string(), z.unknown());
-const checkoutReservationSchema = z.object({
-  country: z.string(),
-  pendingUntil: z.number().int(),
-  productId: z.string(),
-  quantity: subscriptionCheckoutQuantitySchema.default(1),
-  sessionExpiresAt: z.number().int().optional(),
-  sessionId: z.string().optional(),
-  token: z.string(),
-});
 
 async function reserveSubscriptionCheckout(
   organizationId: string,
   productId: string,
+  priceId: string,
   quantity: number,
   country: string,
+  payments: StripePaymentAdapter,
 ) {
   const db = getEggheadDatabase();
-  const { reservation, staleSessionId } = await db.transaction(async (transaction) => {
-    const [storedOrganization] = await transaction
-      .select({ fields: organizationTable.fields })
-      .from(organizationTable)
-      .where(eq(organizationTable.id, organizationId))
-      .for("update");
-    if (!storedOrganization) {
-      throw new Error("Unable to reserve subscription checkout for the organization.");
-    }
+  const decide = (confirmedExpiredSessionId?: string) =>
+    db.transaction(async (transaction) => {
+      const [storedOrganization] = await transaction
+        .select({ fields: organizationTable.fields })
+        .from(organizationTable)
+        .where(eq(organizationTable.id, organizationId))
+        .for("update");
+      if (!storedOrganization) {
+        throw new Error("Unable to reserve subscription checkout for the organization.");
+      }
 
-    const parsedFields = organizationFieldsSchema.safeParse(storedOrganization.fields ?? {});
-    const fields = parsedFields.success ? parsedFields.data : {};
-    const parsedReservation = checkoutReservationSchema.safeParse(
-      fields[CHECKOUT_RESERVATION_FIELD],
-    );
-    const currentReservation = parsedReservation.success ? parsedReservation.data : null;
-    const now = Math.floor(Date.now() / 1000);
-    const currentReservationExpiresAt =
-      currentReservation?.sessionExpiresAt ?? currentReservation?.pendingUntil ?? 0;
-    const currentReservationIsActive = currentReservationExpiresAt > now;
-
-    if (
-      currentReservation &&
-      currentReservationIsActive &&
-      currentReservation.productId === productId &&
-      currentReservation.quantity === quantity
-    ) {
-      return { reservation: currentReservation, staleSessionId: null };
-    }
-    if (currentReservation && currentReservationIsActive && !currentReservation.sessionId) {
-      return { reservation: currentReservation, staleSessionId: null };
-    }
-
-    const newReservation = {
-      country,
-      pendingUntil: now + CHECKOUT_RESERVATION_PENDING_TTL_SECONDS,
-      productId,
-      quantity,
-      token: randomUUID(),
-    };
-    await transaction
-      .update(organizationTable)
-      .set({
-        fields: {
-          ...fields,
-          [CHECKOUT_RESERVATION_FIELD]: newReservation,
-        },
-      })
-      .where(eq(organizationTable.id, organizationId));
-
-    return {
-      reservation: newReservation,
-      staleSessionId:
-        currentReservation && currentReservationIsActive ? currentReservation.sessionId : null,
-    };
-  });
-
-  if (staleSessionId) {
-    try {
-      await expireStripeSubscriptionCheckoutSession(staleSessionId);
-    } catch (error) {
-      console.warn("Unable to expire replaced Stripe checkout session", {
-        error,
-        organizationId,
+      const parsedFields = organizationFieldsSchema.safeParse(storedOrganization.fields ?? {});
+      const fields = parsedFields.success ? parsedFields.data : {};
+      const decision = decideCheckoutReservation({
+        current: readCheckoutReservation(fields[CHECKOUT_RESERVATION_FIELD]),
+        country,
+        now: Math.floor(Date.now() / 1000),
         productId,
-        sessionFingerprint: createHash("sha256").update(staleSessionId).digest("hex").slice(0, 12),
+        priceId,
+        quantity,
+        token: randomUUID(),
+        ...(confirmedExpiredSessionId ? { confirmedExpiredSessionId } : {}),
       });
-    }
+      if (decision.kind !== "replace") return decision;
+
+      await transaction
+        .update(organizationTable)
+        .set({
+          fields: {
+            ...fields,
+            [CHECKOUT_RESERVATION_FIELD]: decision.reservation,
+          },
+        })
+        .where(eq(organizationTable.id, organizationId));
+
+      return decision;
+    });
+
+  const first = await decide();
+  if (first.kind !== "expire") return first;
+
+  try {
+    const result = await expireStripeSubscriptionCheckoutSession(first.sessionId, payments);
+    if (result !== "expired") return { kind: "pending" } as const;
+  } catch (error) {
+    console.warn("Unable to expire Stripe checkout session", {
+      error,
+      organizationId,
+      productId,
+      sessionFingerprint: createHash("sha256").update(first.sessionId).digest("hex").slice(0, 12),
+    });
+    return { kind: "pending" } as const;
   }
 
-  return reservation;
+  const next = await decide(first.sessionId);
+  return next.kind === "expire" ? ({ kind: "pending" } as const) : next;
 }
 
 async function storeSubscriptionCheckoutSession(
@@ -135,10 +120,8 @@ async function storeSubscriptionCheckoutSession(
 
     const parsedFields = organizationFieldsSchema.safeParse(storedOrganization.fields ?? {});
     const fields = parsedFields.success ? parsedFields.data : {};
-    const parsedReservation = checkoutReservationSchema.safeParse(
-      fields[CHECKOUT_RESERVATION_FIELD],
-    );
-    if (!parsedReservation.success || parsedReservation.data.token !== reservationToken) {
+    const reservation = readCheckoutReservation(fields[CHECKOUT_RESERVATION_FIELD]);
+    if (!reservation || reservation.token !== reservationToken) {
       throw new Error("Subscription checkout reservation changed before the session was stored.");
     }
 
@@ -148,7 +131,7 @@ async function storeSubscriptionCheckoutSession(
         fields: {
           ...fields,
           [CHECKOUT_RESERVATION_FIELD]: {
-            ...parsedReservation.data,
+            ...reservation,
             sessionExpiresAt: session.expiresAt,
             sessionId: session.id,
           },
@@ -167,7 +150,7 @@ export async function startSubscriptionCheckout(formData: FormData) {
   if (!user?.id) {
     redirect("/login?callbackUrl=/pricing");
   }
-  if (!user.email) {
+  if (!user.email || !z.email().safeParse(user.email).success) {
     redirect("/pricing?error=missing-email");
   }
 
@@ -176,6 +159,10 @@ export async function startSubscriptionCheckout(formData: FormData) {
     redirect("/thanks/subscription?existing=true");
   }
 
+  const requestedPriceId = formData.get("priceId");
+  if (typeof requestedPriceId !== "string" || !requestedPriceId)
+    redirect("/pricing?error=invalid-product");
+  const priceId = requestedPriceId;
   const requestedProductId = formData.get("productId");
   const requestedQuantity = subscriptionCheckoutQuantitySchema.safeParse(formData.get("quantity"));
 
@@ -188,17 +175,21 @@ export async function startSubscriptionCheckout(formData: FormData) {
 
   const productId = requestedProductId;
   const quantity = requestedQuantity.data;
-  const adapter = getCourseBuilderAdapter();
+  const services = getMembershipServices();
+  if (!services) redirect("/pricing?error=not-configured");
+  const { adapter, payments, configuration, db } = services;
   const product = await getActiveMembershipProduct(productId);
 
-  if (!product) {
+  if (!product || !product.prices.some((price) => price.id === priceId)) {
     redirect("/pricing?error=invalid-product");
-  }
-  if (!isStripeConfigured()) {
-    redirect("/pricing?error=not-configured");
   }
 
   const requestHeaders = await headers();
+  const origin = membershipCheckoutOrigin(
+    process.env["NEXT_PUBLIC_APP_URL"] ?? process.env["COURSEBUILDER_URL"],
+    requestHeaders.get("origin"),
+    getEggheadRuntime(),
+  );
   const country =
     requestHeaders.get("x-vercel-ip-country") ?? requestHeaders.get("cf-ipcountry") ?? "US";
 
@@ -206,49 +197,90 @@ export async function startSubscriptionCheckout(formData: FormData) {
     id: user.id,
     email: user.email,
   });
-  const checkoutReservation = await reserveSubscriptionCheckout(
+  const checkoutDecision = await reserveSubscriptionCheckout(
     organization.id,
     productId,
+    priceId,
     quantity,
     country,
+    payments,
   );
-  if (checkoutReservation.productId !== productId || checkoutReservation.quantity !== quantity) {
+  if (checkoutDecision.kind === "pending") {
     redirect("/pricing?error=checkout-pending");
   }
-  const stripeProvider = getStripeProvider(checkoutReservation.token);
-  if (!stripeProvider) {
-    redirect("/pricing?error=not-configured");
-  }
+  const checkoutReservation = checkoutDecision.reservation;
   let checkoutRedirect: string;
 
   try {
-    const checkout = await stripeProvider.createCheckoutSession(
-      {
-        productId,
-        userId: user.id,
-        organizationId: organization.id,
-        quantity,
-        bulk: quantity > 1,
-        country: checkoutReservation.country,
-        cancelUrl: `${getSiteUrl()}/pricing`,
-      },
+    const { stripePrice, merchantProduct } = await resolveCheckoutPrice({
+      productId,
+      priceId,
       adapter,
-    );
-    const createdCheckout = takeCreatedStripeSubscriptionCheckout(stripeProvider);
-    if (!createdCheckout) {
-      throw new Error("Stripe did not create a subscription checkout session.");
+      paymentsAdapter: payments,
+    });
+    const merchantAccount = await db.query.merchantAccount.findFirst({
+      where: and(
+        eq(merchantAccountTable.id, merchantProduct.merchantAccountId),
+        eq(merchantAccountTable.status, 1),
+      ),
+    });
+    if (!merchantAccount) {
+      throw new Error("Membership checkout requires an active merchant account");
     }
-    await storeSubscriptionCheckoutSession(
-      organization.id,
-      checkoutReservation.token,
-      createdCheckout,
-    );
-    checkoutRedirect = checkout.redirect;
+    if (!stripePrice.recurring || stripePrice.livemode !== configuration.live)
+      throw new Error("Membership price must match the configured Stripe mode");
+    const customerId = await getCheckoutCustomer({
+      user: { id: user.id, email: user.email },
+      merchantAccountId: merchantProduct.merchantAccountId,
+      live: configuration.live,
+      adapter: {
+        getMerchantCustomerForUserId: async (userId) => {
+          const mapping = await db.query.merchantCustomer.findFirst({
+            where: and(
+              eq(merchantCustomer.userId, userId),
+              eq(merchantCustomer.merchantAccountId, merchantProduct.merchantAccountId),
+            ),
+          });
+          return mapping ? { ...mapping, status: mapping.status ?? 0 } : null;
+        },
+        createMerchantCustomer: adapter.createMerchantCustomer.bind(adapter),
+      },
+      customers: payments.stripe.customers,
+    });
+    const metadata = {
+      country: checkoutReservation.country,
+      productId,
+      priceId,
+      userId: user.id,
+      organizationId: organization.id,
+      bulk: String(quantity > 1),
+    };
+    const params = {
+      mode: "subscription" as const,
+      line_items: [{ price: stripePrice.id, quantity }],
+      customer: customerId,
+      client_reference_id: user.id,
+      metadata,
+      subscription_data: { metadata },
+      success_url: `${origin}/thanks/subscription?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}/pricing?cancelled=1`,
+    };
+    const session = await payments.stripe.checkout.sessions.create(params, {
+      idempotencyKey: subscriptionCheckoutIdempotencyKey(checkoutReservation.token),
+    });
+    if (!session.url || session.livemode !== configuration.live)
+      throw new Error("Invalid Stripe checkout session");
+    await storeSubscriptionCheckoutSession(organization.id, checkoutReservation.token, {
+      id: session.id,
+      expiresAt: session.expires_at,
+    });
+    checkoutRedirect = session.url;
   } catch (error) {
     console.error("Subscription checkout failed", {
       error,
       organizationId: organization.id,
       productId,
+      priceId,
       quantity,
       reservationFingerprint: createHash("sha256")
         .update(checkoutReservation.token)

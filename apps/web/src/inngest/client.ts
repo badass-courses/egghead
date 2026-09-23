@@ -1,4 +1,4 @@
-import type { CourseBuilderCoreEvents } from "@coursebuilder/core/inngest";
+import type { CourseBuilderCoreEvents } from "@coursebuilder/core/events";
 import { EventSchemas, Inngest } from "inngest";
 
 export const inngest = new Inngest({

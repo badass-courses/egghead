@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { EggheadTag, EggheadTagFieldsSchema } from '@/lib/tags'
 import { guid } from '@coursebuilder/utils/guid'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { formResolver as zodResolver } from '@/utils/form-resolver'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 

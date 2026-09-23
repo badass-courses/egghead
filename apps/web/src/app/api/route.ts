@@ -1,4 +1,8 @@
-import { getEggheadRuntime, isBetaDatabaseApproved } from "../../db/local-docker";
+import {
+  commerceWritesAreAllowed,
+  getEggheadRuntime,
+  isBetaDatabaseApproved,
+} from "../../db/local-docker";
 
 export function GET() {
   const runtime = getEggheadRuntime();
@@ -30,13 +34,9 @@ export function GET() {
       },
       guardrails: {
         runtime,
-        localDevOnly: runtime === "local",
-        betaRuntime: runtime === "beta",
         betaDatabaseApproved: isBetaDatabaseApproved(),
-        commerceWritesLocalOnly: true,
-        subscriptionManagementExcluded: true,
-        noReadFlip: true,
-        noPlanetScaleWrites: true,
+        commerceWritesAllowed: commerceWritesAreAllowed(),
+        productionDatabaseRequired: runtime === "production",
       },
     },
     {

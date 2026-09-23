@@ -1,7 +1,7 @@
 import { env } from '@/env.mjs'
 import { SkillRequest, withSkill } from '@/server/with-skill'
 
-import { getMuxOptions } from '@coursebuilder/core/lib/mux'
+import { getMuxOptions } from '@coursebuilder/video-processing/mux'
 
 const baseUrl = 'https://api.mux.com'
 

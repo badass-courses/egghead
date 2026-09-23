@@ -136,9 +136,18 @@ const checks = [
     true,
   ),
   assertEqual(
-    "production email auth remains disabled",
+    "production email auth requires configured delivery",
     isEmailAuthEnabled({
       deliveryEnabled: true,
+      runtime: "production",
+      ...postmarkConfiguration,
+    }),
+    true,
+  ),
+  assertEqual(
+    "production email auth rejects suppressed delivery",
+    isEmailAuthEnabled({
+      deliveryEnabled: false,
       runtime: "production",
       ...postmarkConfiguration,
     }),

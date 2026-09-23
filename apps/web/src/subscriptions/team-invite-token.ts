@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { z } from "zod";
 
-import { getEnv } from "../env";
+import { requireAuthSecret } from "../coursebuilder/auth-secret";
 
 const teamInvitePayloadSchema = z.object({
   email: z
@@ -17,12 +17,8 @@ const teamInvitePayloadSchema = z.object({
 
 export type TeamInvitePayload = z.infer<typeof teamInvitePayloadSchema>;
 
-function inviteSecret() {
-  return getEnv("AUTH_SECRET") ?? "local-dev-only-egghead-phase-0";
-}
-
 function signPayload(encodedPayload: string) {
-  return createHmac("sha256", inviteSecret()).update(encodedPayload).digest("base64url");
+  return createHmac("sha256", requireAuthSecret()).update(encodedPayload).digest("base64url");
 }
 
 export function createTeamInviteToken(subscriptionId: string, email?: string) {

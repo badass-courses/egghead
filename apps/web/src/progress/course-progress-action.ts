@@ -1,6 +1,6 @@
 "use server";
 
-import { logger } from "@coursebuilder/core/utils/logger";
+import { logger } from "@coursebuilder/utils/logger";
 import { z } from "zod";
 
 import { getCourseBySlug } from "../content/course";

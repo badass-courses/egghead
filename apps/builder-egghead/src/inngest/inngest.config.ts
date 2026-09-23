@@ -1,7 +1,7 @@
 import { imageResourceCreated } from '@/inngest/functions/cloudinary/image-resource-created'
 import { inngest } from '@/inngest/inngest.server'
 
-import { courseBuilderCoreFunctions } from '@coursebuilder/core/inngest'
+import { courseBuilderCoreFunctions } from '@coursebuilder/server'
 
 import { calendarSync } from './functions/calendar-sync'
 import { instructorInviteCompleted } from './functions/instructor-invite-completed'

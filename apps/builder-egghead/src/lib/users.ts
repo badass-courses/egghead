@@ -30,7 +30,7 @@ export const EggheadLegacyUserRowSchema = z.object({
 	role: z.string(),
 	email: z.string(),
 	fields: z
-		.record(z.any())
+		.record(z.string(), z.any())
 		.nullish()
 		.transform((value) => value ?? {}),
 	legacyRailsUserId: z.string().nullable(),

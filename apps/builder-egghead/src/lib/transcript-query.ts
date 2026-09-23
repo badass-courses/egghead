@@ -6,8 +6,8 @@ import { contentResource } from '@/db/schema'
 import { inngest } from '@/inngest/inngest.server'
 import { sql } from 'drizzle-orm'
 
-import { VIDEO_SRT_READY_EVENT } from '@coursebuilder/core/inngest/video-processing/events/event-video-srt-ready-to-asset'
-import { VIDEO_TRANSCRIPT_READY_EVENT } from '@coursebuilder/core/inngest/video-processing/events/event-video-transcript-ready'
+import { VIDEO_SRT_READY_EVENT } from '@coursebuilder/core/events/video'
+import { VIDEO_TRANSCRIPT_READY_EVENT } from '@coursebuilder/core/events/video'
 import {
 	srtFromTranscriptResult,
 	transcriptAsParagraphsWithTimestamps,

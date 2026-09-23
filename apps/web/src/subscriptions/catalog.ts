@@ -1,84 +1,125 @@
-import type { BillingInterval, Product } from "@coursebuilder/core/schemas";
+import type { BillingInterval, Product } from "@coursebuilder/core/schemas/product-schema";
+import { isPriceAvailable } from "@coursebuilder/commerce/select-product-price";
 import { and, eq } from "drizzle-orm";
+import { merchantAccount as merchantAccountTable, products } from "../db/schema";
+import { mySqlDrizzleAdapter } from "@coursebuilder/adapter-drizzle/mysql";
+import { StripePaymentAdapter } from "@coursebuilder/commerce/stripe-provider";
+import { drizzle } from "drizzle-orm/mysql2";
+import { getEggheadMysqlPool } from "../db/local-docker";
+import { mysqlTable } from "../db/mysql-table";
+import { eggheadCourseBuilderSchema } from "../db/schema";
+import { getLocalMembershipServices } from "../local-membership/catalog";
+import { membershipConfiguration } from "./configuration";
 
-import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
-import { products } from "../db/schema";
+export function getMembershipServices() {
+  const configuration = membershipConfiguration(process.env);
+  if (!configuration) return null;
+  if (configuration.localPreview) return { ...getLocalMembershipServices(), configuration };
+  const db = drizzle(getEggheadMysqlPool(), {
+    schema: eggheadCourseBuilderSchema,
+    mode: "default",
+  });
+  return {
+    db,
+    configuration,
+    adapter: mySqlDrizzleAdapter(db, mysqlTable),
+    payments: new StripePaymentAdapter({
+      stripeToken: configuration.token,
+      stripeWebhookSecret: configuration.webhookSecret,
+    }),
+  };
+}
 
 type MembershipProductCandidate = {
-  fields: {
-    billingInterval?: BillingInterval;
-  };
-  price?: {
-    status: number;
-  } | null;
+  fields: { billingInterval?: BillingInterval };
+  price?: { status: number } | null | undefined;
+  prices?:
+    | Array<{
+        status: number;
+        fields: {
+          stripe?: { active: boolean; supported: boolean; recurring?: unknown } | undefined;
+          offer?: { offered?: boolean | undefined } | undefined;
+        };
+      }>
+    | undefined;
   status: number;
   type?: Product["type"];
 };
+export type ActiveMembershipProduct = Product & { status: 1; type: "membership" };
 
-export type ActiveMembershipProduct = Product & {
-  fields: Product["fields"] & {
-    billingInterval: NonNullable<BillingInterval>;
-  };
-  price: NonNullable<Product["price"]>;
-  status: 1;
-  type: "membership";
-};
-
-/** Checks the local product and price fields required for a recurring membership. */
 export function isActiveMembershipProduct(
-  product: MembershipProductCandidate | Product | null,
+  product: MembershipProductCandidate | null,
 ): product is ActiveMembershipProduct {
   return Boolean(
     product &&
     product.status === 1 &&
     product.type === "membership" &&
-    product.price?.status === 1 &&
-    product.fields.billingInterval,
+    (product.prices?.some(
+      (price) =>
+        price.status === 1 &&
+        price.fields.stripe?.active &&
+        price.fields.stripe.supported &&
+        price.fields.stripe.recurring &&
+        price.fields.offer?.offered === true,
+    ) ||
+      (product.price?.status === 1 && product.fields.billingInterval)),
   );
 }
 
-/** Checks that a product has active Stripe product and price mapping rows with identifiers. */
-async function hasActiveMerchantProductAndPrice(productId: string) {
-  const adapter = getCourseBuilderAdapter();
-  const merchantProduct = await adapter.getMerchantProductForProductId(productId);
-
-  if (merchantProduct?.status !== 1 || !merchantProduct.identifier) {
-    return false;
-  }
-
-  const merchantPrice = await adapter.getMerchantPriceForProductId(merchantProduct.id);
-
-  return merchantPrice?.status === 1 && Boolean(merchantPrice.identifier);
+export function membershipPrices(product: Product) {
+  return (product.prices ?? (product.price ? [product.price] : [])).filter(
+    (price) =>
+      isPriceAvailable(price) &&
+      (price.fields.stripe?.recurring || (!price.fields.stripe && product.fields.billingInterval)),
+  );
 }
 
-/** Loads one membership only when its local product, price, and Stripe mappings are active. */
 export async function getActiveMembershipProduct(productId: string) {
-  const product = await getCourseBuilderAdapter().getProduct(productId, false);
-
+  const services = getMembershipServices();
   if (
-    !product ||
-    product.id !== productId ||
-    !isActiveMembershipProduct(product) ||
-    !(await hasActiveMerchantProductAndPrice(product.id))
-  ) {
+    !services ||
+    (services.configuration.productId && services.configuration.productId !== productId)
+  )
     return null;
-  }
-
-  return product;
+  const product = await services.adapter.getProduct(productId, false);
+  if (!isActiveMembershipProduct(product)) return null;
+  const merchantProduct = await services.adapter.getMerchantProductForProductId(productId);
+  if (merchantProduct?.status !== 1 || !merchantProduct.identifier) return null;
+  const merchantAccount = await services.db.query.merchantAccount.findFirst({
+    where: and(
+      eq(merchantAccountTable.id, merchantProduct.merchantAccountId),
+      eq(merchantAccountTable.status, 1),
+    ),
+  });
+  if (!merchantAccount) return null;
+  const mappedPrices = await Promise.all(
+    membershipPrices(product).map(async (price) => {
+      const mapping = await services.adapter.getMerchantPriceForPriceId?.(
+        merchantProduct.id,
+        price.id,
+      );
+      return mapping?.status === 1 &&
+        mapping.identifier &&
+        mapping.merchantProductId === merchantProduct.id
+        ? price
+        : null;
+    }),
+  );
+  const prices = mappedPrices.filter((price) => price !== null);
+  return prices.length ? { ...product, prices } : null;
 }
 
-/** Discovers every active CourseBuilder membership that is ready to be displayed and purchased. */
 export async function getActiveMembershipProducts() {
-  const db = getEggheadDatabase();
-  const productIds = await db
-    .select({ id: products.id })
-    .from(products)
-    .where(and(eq(products.status, 1), eq(products.type, "membership")));
-  const membershipProducts = await Promise.all(
+  const services = getMembershipServices();
+  if (!services) return [];
+  const productIds = services.configuration.productId
+    ? [{ id: services.configuration.productId }]
+    : await services.db
+        .select({ id: products.id })
+        .from(products)
+        .where(and(eq(products.status, 1), eq(products.type, "membership")));
+  const productsWithPrices = await Promise.all(
     productIds.map(({ id }) => getActiveMembershipProduct(id)),
   );
-
-  return membershipProducts.filter(
-    (product): product is ActiveMembershipProduct => product !== null,
-  );
+  return productsWithPrices.filter((product) => product !== null);
 }

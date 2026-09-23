@@ -1,3 +1,4 @@
+import { createAuthJsAdapter } from './auth-js-adapter'
 import { getAbility } from '@/ability'
 import { emailProvider } from '@/coursebuilder/email-provider'
 import { courseBuilderAdapter, db } from '@/db'
@@ -35,7 +36,7 @@ declare module 'next-auth' {
 	interface User {
 		// ...other properties
 		role?: Role
-		roles: {
+		roles?: {
 			id: string
 			name: string
 			description: string | null
@@ -110,7 +111,7 @@ export const authOptions: NextAuthConfig = {
 			}
 		},
 	},
-	adapter: courseBuilderAdapter,
+	adapter: createAuthJsAdapter(courseBuilderAdapter),
 	providers: [
 		egghead({
 			clientId: process.env.EGGHEAD_CLIENT_ID,
@@ -134,7 +135,7 @@ export const {
 export const getServerAuthSession = async () => {
 	const session = await auth()
 	const user = userSchema.optional().nullable().parse(session?.user)
-	const ability = getAbility({ user: session?.user })
+	const ability = getAbility({ user: session?.user ? { ...session.user, roles: session.user.roles ?? [] } : undefined })
 
 	return { session: { ...session, user }, ability }
 }

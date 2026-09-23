@@ -1,4 +1,4 @@
-import { StripePaymentAdapter } from "@coursebuilder/core/providers/stripe";
+import { StripePaymentAdapter } from "@coursebuilder/commerce/stripe-provider";
 import { and, eq } from "drizzle-orm";
 
 import { getStripeProvider, getSiteUrl } from "../coursebuilder/stripe-provider";

@@ -25,7 +25,7 @@ import { getServerAuthSession } from '@/server/auth'
 import { and, asc, count, desc, eq, like, or, sql } from 'drizzle-orm'
 import { z } from 'zod'
 
-import { propsForCommerce } from '@coursebuilder/core/lib/pricing/props-for-commerce'
+import { propsForCommerce } from '@coursebuilder/commerce/props-for-commerce'
 import {
 	ContentResourceSchema,
 	productSchema,
