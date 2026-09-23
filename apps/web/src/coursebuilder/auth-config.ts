@@ -13,6 +13,7 @@ import { isEmailDeliveryEnabled } from "./email-delivery";
 import { createPostmarkEmailProvider } from "./email-provider";
 
 const LOCAL_EMAIL_FROM = "egghead development <no-reply@egghead.local>";
+const authSecret = getAuthSecret();
 
 export function isGithubAuthConfigured() {
   const githubClientId = getEnv("GITHUB_CLIENT_ID");
@@ -97,6 +98,6 @@ export const authConfig = {
     signIn: "/login",
     verifyRequest: "/check-your-email",
   },
-  secret: getAuthSecret(),
+  ...(authSecret ? { secret: authSecret } : {}),
   trustHost: true,
 } satisfies NextAuthConfig;

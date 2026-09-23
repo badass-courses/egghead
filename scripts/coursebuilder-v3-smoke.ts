@@ -6,8 +6,8 @@ import { z } from "zod";
 
 assert.equal(resolveAuthSecret(undefined, "local"), "local-dev-only-egghead-phase-0");
 assert.equal(resolveAuthSecret("configured-secret", "beta"), "configured-secret");
-assert.throws(() => resolveAuthSecret(undefined, "beta"));
-assert.throws(() => resolveAuthSecret(undefined, "production"));
+assert.equal(resolveAuthSecret(undefined, "beta"), undefined);
+assert.equal(resolveAuthSecret(undefined, "production"), undefined);
 
 const operations: string[] = [];
 const adapter = createAuthJsAdapter({
