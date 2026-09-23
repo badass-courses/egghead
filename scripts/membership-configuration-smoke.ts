@@ -61,6 +61,12 @@ assert.throws(() =>
     STRIPE_SECRET_TOKEN: "sk_live_synthetic",
   }),
 );
+assert.throws(() =>
+  membershipConfiguration({
+    EGGHEAD_LOCAL_MEMBERSHIP: "true",
+    STRIPE_SECRET_TOKEN: "rk_test_synthetic",
+  }),
+);
 assert.equal(
   membershipCheckoutOrigin("https://egghead.io", "https://egghead.io", "production"),
   "https://egghead.io",

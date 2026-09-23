@@ -28,7 +28,8 @@ export function membershipConfiguration(env: MembershipEnvironment) {
   const live = token.startsWith("sk_live_") || token.startsWith("rk_live_");
   const test = token.startsWith("sk_test_") || token.startsWith("rk_test_");
   if (!live && !test) throw new Error("A Stripe secret or restricted key is required");
-  if (localPreview && !test) throw new Error("Local membership preview requires a Stripe test key");
+  if (localPreview && !token.startsWith("sk_test_"))
+    throw new Error("Local membership preview requires a Stripe test secret key");
   return {
     productId,
     token,
