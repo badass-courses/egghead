@@ -1,7 +1,7 @@
 import type { BillingInterval, Product } from "@coursebuilder/core/schemas/product-schema";
 import { isPriceAvailable } from "@coursebuilder/commerce/select-product-price";
 import { and, eq } from "drizzle-orm";
-import { products } from "../db/schema";
+import { merchantAccount as merchantAccountTable, products } from "../db/schema";
 import { mySqlDrizzleAdapter } from "@coursebuilder/adapter-drizzle/mysql";
 import { StripePaymentAdapter } from "@coursebuilder/commerce/stripe-provider";
 import { drizzle } from "drizzle-orm/mysql2";
@@ -25,7 +25,7 @@ export function getMembershipServices() {
     adapter: mySqlDrizzleAdapter(db, mysqlTable),
     payments: new StripePaymentAdapter({
       stripeToken: configuration.token,
-      stripeWebhookSecret: process.env["STRIPE_WEBHOOK_SECRET"] ?? "",
+      stripeWebhookSecret: configuration.webhookSecret,
     }),
   };
 }
@@ -85,6 +85,13 @@ export async function getActiveMembershipProduct(productId: string) {
   if (!isActiveMembershipProduct(product)) return null;
   const merchantProduct = await services.adapter.getMerchantProductForProductId(productId);
   if (merchantProduct?.status !== 1 || !merchantProduct.identifier) return null;
+  const merchantAccount = await services.db.query.merchantAccount.findFirst({
+    where: and(
+      eq(merchantAccountTable.id, merchantProduct.merchantAccountId),
+      eq(merchantAccountTable.status, 1),
+    ),
+  });
+  if (!merchantAccount) return null;
   const mappedPrices = await Promise.all(
     membershipPrices(product).map(async (price) => {
       const mapping = await services.adapter.getMerchantPriceForPriceId?.(

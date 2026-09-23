@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 
-import { subscriptionCheckoutIdempotencyKey } from "../apps/web/src/coursebuilder/stripe-provider";
+import {
+  decideCheckoutReservation,
+  readCheckoutReservation,
+  subscriptionCheckoutIdempotencyKey,
+} from "../apps/web/src/subscriptions/checkout-reservation";
 import {
   stripeSubscriptionEntitlementId,
   stripeSubscriptionGrantsAccess,
@@ -81,29 +85,82 @@ try {
         stripeSubscriptionSeatEntitlementId("sub_contract_fixture", "user_2"),
       );
     }),
-    check("Stripe checkout idempotency includes request parameters", () => {
-      const checkoutParams = {
-        country: "US",
-        line_items: [{ price: "price_monthly", quantity: 1 }],
-        mode: "subscription",
-      };
-      const checkoutKey = subscriptionCheckoutIdempotencyKey(
-        "reservation-contract-fixture",
-        checkoutParams,
-      );
-
-      assert.equal(
-        checkoutKey,
-        subscriptionCheckoutIdempotencyKey("reservation-contract-fixture", {
-          ...checkoutParams,
-        }),
-      );
+    check("one checkout attempt has one Stripe idempotency key", () => {
+      const checkoutKey = subscriptionCheckoutIdempotencyKey("reservation-contract-fixture");
+      assert.equal(checkoutKey, subscriptionCheckoutIdempotencyKey("reservation-contract-fixture"));
       assert.notEqual(
         checkoutKey,
-        subscriptionCheckoutIdempotencyKey("reservation-contract-fixture", {
-          ...checkoutParams,
-          country: "CA",
-        }),
+        subscriptionCheckoutIdempotencyKey("another-reservation-contract-fixture"),
+      );
+    }),
+    check("checkout attempt transitions require confirmed Stripe expiration", () => {
+      const request = {
+        country: "US",
+        now: 1_000,
+        productId: "membership",
+        priceId: "monthly",
+        quantity: 1,
+        token: "attempt-one",
+      };
+      const first = decideCheckoutReservation({ ...request, current: null });
+      assert.equal(first.kind, "replace");
+      if (first.kind !== "replace") return;
+      assert.deepEqual(readCheckoutReservation(first.reservation), first.reservation);
+      assert.equal(readCheckoutReservation({ token: "invalid" }), null);
+      assert.equal(first.reservation.pendingUntil, 1_120);
+
+      assert.equal(
+        decideCheckoutReservation({ ...request, current: first.reservation, now: 1_010 }).kind,
+        "reuse",
+      );
+      assert.equal(
+        decideCheckoutReservation({
+          ...request,
+          current: first.reservation,
+          priceId: "yearly",
+          now: 1_010,
+        }).kind,
+        "pending",
+      );
+
+      const open = { ...first.reservation, sessionId: "session-one", sessionExpiresAt: 2_000 };
+      assert.deepEqual(
+        decideCheckoutReservation({ ...request, current: open, priceId: "yearly", now: 1_010 }),
+        { kind: "expire", sessionId: "session-one" },
+      );
+      const afterExpiration = decideCheckoutReservation({
+        ...request,
+        current: open,
+        priceId: "yearly",
+        now: 1_010,
+        token: "attempt-two",
+        confirmedExpiredSessionId: "session-one",
+      });
+      assert.equal(afterExpiration.kind, "replace");
+      if (afterExpiration.kind === "replace") {
+        assert.equal(afterExpiration.reservation.token, "attempt-two");
+      }
+      assert.equal(
+        decideCheckoutReservation({
+          ...request,
+          current: open,
+          priceId: "yearly",
+          now: 1_010,
+          confirmedExpiredSessionId: "another-session",
+        }).kind,
+        "expire",
+      );
+      assert.equal(
+        decideCheckoutReservation({ ...request, current: open, now: 2_000 }).kind,
+        "replace",
+      );
+      assert.equal(
+        decideCheckoutReservation({
+          ...request,
+          current: { ...open, version: undefined },
+          now: 1_010,
+        }).kind,
+        "expire",
       );
     }),
     check("Stripe subscription period parsing uses the latest item period", () => {
@@ -253,7 +310,7 @@ try {
       assert.equal(stripeInvoiceDownloadUrl("not-a-url"), null);
       assert.equal(stripeInvoiceDownloadUrl(null), null);
     }),
-    check("commerce writes are allowed for local Docker only", () => {
+    check("commerce writes require local Docker or production PlanetScale", () => {
       setEnv("DATABASE_URL", "mysql://root:root@127.0.0.1:3307/coursebuilder_test");
       setEnv("EGGHEAD_RUNTIME", "local");
       assert.equal(assertCommerceWritesAllowed().commerceWritesAllowed, true);
@@ -261,6 +318,9 @@ try {
       setEnv("DATABASE_URL", "mysql://user:password@aws.connect.psdb.cloud/egghead");
       setEnv("EGGHEAD_RUNTIME", "beta");
       assert.throws(() => assertCommerceWritesAllowed());
+
+      setEnv("EGGHEAD_RUNTIME", "production");
+      assert.equal(assertCommerceWritesAllowed().commerceWritesAllowed, true);
     }),
   ];
 

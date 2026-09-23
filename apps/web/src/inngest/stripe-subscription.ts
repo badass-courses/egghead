@@ -10,6 +10,7 @@ import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
 import { assertCommerceWritesAllowed } from "../db/local-docker";
 import {
   entitlements,
+  merchantAccount as merchantAccountTable,
   merchantCustomer as merchantCustomerTable,
   merchantSubscription,
   subscription,
@@ -53,20 +54,26 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
       throw new Error("Stripe is not configured.");
     }
 
-    const merchantAccount = await step.run("load merchant account", () =>
-      adapter.getMerchantAccount({ provider: "stripe" }),
-    );
-
-    if (!merchantAccount) {
-      throw new Error("Stripe merchant account is not configured in CourseBuilder.");
-    }
-
     const checkoutSession = await step.run("load expanded checkout session", () =>
       stripeProvider.options.paymentsAdapter.getCheckoutSession(stripeCheckoutSession.id),
     );
     const subscriptionInfo = await step.run("parse subscription checkout", () =>
       parseSubscriptionInfoFromCheckoutSession(checkoutSession),
     );
+    const merchantProduct = await step.run("load merchant product", () =>
+      adapter.getMerchantProduct(subscriptionInfo.productIdentifier),
+    );
+    if (!merchantProduct || merchantProduct.status !== 1) {
+      throw new Error("No active CourseBuilder merchant product matches the Stripe product.");
+    }
+    const merchantAccount = await step.run("load merchant account", () =>
+      db.query.merchantAccount.findFirst({
+        where: eq(merchantAccountTable.id, merchantProduct.merchantAccountId),
+      }),
+    );
+    if (!merchantAccount || merchantAccount.status !== 1) {
+      throw new Error("The checkout product has no active Stripe merchant account.");
+    }
 
     const user = await step.run("load subscriber", async () => {
       const checkoutUserId = subscriptionInfo.metadata?.userId;
@@ -112,13 +119,6 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
         organizationId: organizationContext.organization.id,
       }),
     );
-
-    const merchantProduct = await step.run("load merchant product", () =>
-      adapter.getMerchantProduct(subscriptionInfo.productIdentifier),
-    );
-    if (!merchantProduct) {
-      throw new Error("No CourseBuilder merchant product matches the Stripe product.");
-    }
 
     const merchantCustomer = await step.run("load merchant customer", async () => {
       const merchantUser = await adapter.getUserById(user.id);

@@ -81,7 +81,7 @@ Acceptance checks:
 6. Duplicate/out-of-order events, pagination, partial failures, price replacements, and legacy default callers behave deterministically.
 7. Existing one-time purchase behavior remains correct, and subscription lifecycle tests prove access follows the subscription rather than the catalog's sale state.
 
-Per AGENTS.md, Phase 0 remains local/dev only. Implement schema/query work and offline contracts there first. Production catalog imports, Stripe/Inngest writer ownership, and checkout activation belong to a separately authorized commerce phase. Run pnpm check before any implementation commit, plus the relevant package tests upstream.
+This was the Phase 0 plan. The web app now owns production Stripe Checkout and subscription fulfillment on PlanetScale; beta commerce writes and the builder production runtime remain blocked. Production catalog imports are still outside this checkout change. Run `pnpm check` before any implementation commit.
 
 ## Stripe references
 

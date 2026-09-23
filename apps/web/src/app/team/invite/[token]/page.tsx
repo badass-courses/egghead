@@ -194,7 +194,7 @@ async function TeamInviteContent({
 
         {!writesAllowed ? (
           <p className="text-center text-xs font-bold text-muted-foreground">
-            Team invitations can only be accepted in local development during Phase 0.
+            Team invitations are unavailable in this environment.
           </p>
         ) : null}
       </section>

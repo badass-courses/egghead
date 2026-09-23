@@ -7,6 +7,7 @@ import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { getOwnedTeamSubscription } from "../../subscriptions/team";
 import { membershipIntervalLabel } from "../../subscriptions/billing";
 import { getCurrentUser } from "../../coursebuilder/current-user";
+import { commerceWritesAreAllowed } from "../../db/local-docker";
 import { getActiveMembershipProducts, membershipPrices } from "../../subscriptions/catalog";
 import { SubscriptionOptions, type SubscriptionOption } from "./subscription-options";
 
@@ -64,11 +65,13 @@ async function ResolvedPricingState({ searchParams }: PricingProps) {
   const notice =
     query["error"] === "missing-email"
       ? "Your account needs a valid email address before checkout."
-      : query["cancelled"]
-        ? "Checkout cancelled. Choose a billing option to try again."
-        : query["error"]
-          ? "We couldn’t start checkout. Please refresh the page and try again."
-          : null;
+      : query["error"] === "checkout-pending"
+        ? "Another checkout is still open or being processed. Try again shortly."
+        : query["cancelled"]
+          ? "Checkout cancelled. Choose a billing option to try again."
+          : query["error"]
+            ? "We couldn’t start checkout. Please refresh the page and try again."
+            : null;
 
   return (
     <section className={subscriptionPanelClassName}>
@@ -99,7 +102,7 @@ async function ResolvedPricingState({ searchParams }: PricingProps) {
       ) : options.length > 0 ? (
         <div aria-label="Subscription options" className="mx-auto w-full max-w-[32rem]">
           <SubscriptionOptions
-            checkoutAvailable
+            checkoutAvailable={commerceWritesAreAllowed()}
             configured
             options={options}
             defaultPriceId={products.at(0)?.price?.id}

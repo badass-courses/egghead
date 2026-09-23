@@ -17,5 +17,5 @@ export function isEmailAuthEnabled({
 
   if (runtime === "local") return !deliveryEnabled || postmarkConfigured;
 
-  return runtime === "beta" && deliveryEnabled && postmarkConfigured;
+  return deliveryEnabled && postmarkConfigured;
 }

@@ -14,15 +14,14 @@ During migration work it is mirrored into:
 /Users/joel/Code/skillrecordings/migrate-egghead/egghead
 ```
 
-Phase 0 is local/dev only:
+Runtime boundaries:
 
 - published `@coursebuilder/*` packages only
 - no `workspace:*` CourseBuilder runtime reach-through
-- local Docker MySQL only
-- Stripe Checkout and subscription webhook writes are local-only
-- subscription and team-seat management remain local-only
-- no dev/prod PlanetScale writes
-- no read flip
+- local web development writes to local Docker MySQL
+- beta web runtime reads an explicitly approved PlanetScale database but blocks commerce writes
+- production web runtime requires a PlanetScale `DATABASE_URL` and owns subscription checkout, webhook fulfillment, and team-seat writes
+- builder production runtime and production imports remain blocked
 
 Run:
 
@@ -32,7 +31,7 @@ pnpm phase0:imports
 pnpm --filter @egghead/web dev
 ```
 
-## Local Stripe subscriptions
+## Stripe subscriptions
 
 The subscription flow uses hosted Stripe Checkout. CourseBuilder verifies Stripe webhook
 signatures and publishes the events to the app's Inngest endpoint; the Egghead handler then
@@ -49,10 +48,16 @@ INNGEST_EVENT_KEY=
 INNGEST_SIGNING_KEY=
 ```
 
-The pricing page discovers active CourseBuilder products whose type is `membership`. Each product
-must have a recurring Stripe price connected through CourseBuilder's `MerchantProduct` and
-`MerchantPrice` rows. Both mapping rows must be active with `status = 1`. The product also needs a
-`month` or `year` `billingInterval`, and the database must contain the Stripe `MerchantAccount` row.
+For production web checkout, set `EGGHEAD_RUNTIME=production`, a PlanetScale `DATABASE_URL`,
+`AUTH_SECRET`, an HTTPS `NEXT_PUBLIC_APP_URL`, live Stripe credentials, and both Inngest keys.
+Register the Stripe webhook endpoint and Inngest functions before offering checkout. The pricing
+page requires the Stripe webhook secret and Inngest keys before it offers production checkout.
+The builder's production database guard is separate and remains blocked.
+
+The pricing page discovers active CourseBuilder products whose type is `membership`. Each offered
+recurring price must be connected through active `MerchantProduct` and `MerchantPrice` rows. The
+price owns its billing interval and currency; the database owns offer visibility, label, order,
+and default selection. Legacy single-price memberships remain readable.
 
 Run the app and the Inngest dev server in separate terminals:
 
