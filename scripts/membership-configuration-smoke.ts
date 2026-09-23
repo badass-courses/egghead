@@ -38,6 +38,14 @@ assert.equal(
 );
 assert.equal(
   membershipConfiguration({
+    EGGHEAD_RUNTIME: "Production",
+    STRIPE_SECRET_TOKEN: "sk_live_synthetic",
+    STRIPE_WEBHOOK_SECRET: "whsec_synthetic",
+  }),
+  null,
+);
+assert.equal(
+  membershipConfiguration({
     EGGHEAD_RUNTIME: "production",
     STRIPE_SECRET_TOKEN: "sk_live_synthetic",
     STRIPE_WEBHOOK_SECRET: "whsec_synthetic",

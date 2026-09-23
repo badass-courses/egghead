@@ -4,10 +4,11 @@ type MembershipEnvironment = Record<string, string | undefined>;
 
 /** The explicit local preview is separate from normal test/live Stripe configuration. */
 export function membershipConfiguration(env: MembershipEnvironment) {
+  const runtime = (env["EGGHEAD_RUNTIME"] ?? "local").trim().toLowerCase();
   const localPreview =
     env["EGGHEAD_LOCAL_MEMBERSHIP"] === "true" &&
     env["NODE_ENV"] !== "production" &&
-    (env["EGGHEAD_RUNTIME"] ?? "local") === "local";
+    runtime === "local";
   const token = env["STRIPE_SECRET_TOKEN"];
   const webhookSecret = env["STRIPE_WEBHOOK_SECRET"];
   const productId = localPreview
@@ -15,7 +16,7 @@ export function membershipConfiguration(env: MembershipEnvironment) {
     : env["EGGHEAD_SUBSCRIPTION_PRODUCT_ID"]?.trim();
   if (!token || (!localPreview && !webhookSecret)) return null;
   if (
-    env["EGGHEAD_RUNTIME"] === "production" &&
+    runtime === "production" &&
     (!env["INNGEST_EVENT_KEY"] ||
       !env["INNGEST_SIGNING_KEY"] ||
       !env["NEXT_PUBLIC_APP_URL"] ||

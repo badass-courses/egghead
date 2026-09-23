@@ -8,7 +8,7 @@ import { getMembershipServices } from "../../../subscriptions/catalog";
 
 import { getCurrentSubscriptionForUser } from "../../../subscriptions/status";
 import { getOwnedTeamSubscription } from "../../../subscriptions/team";
-import { getMembershipBillingSummary } from "../../../subscriptions/billing";
+import { formatMembershipCost, getMembershipBillingSummary } from "../../../subscriptions/billing";
 import { MembershipStatusRefresh } from "./membership-status-refresh";
 
 export const metadata = { title: "Thanks for subscribing | egghead" };
@@ -17,7 +17,7 @@ const panel =
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
 function money(amount: number, currency: string) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount / 100);
+  return formatMembershipCost(amount, currency, 1) ?? "—";
 }
 
 async function SubscriptionThanks({ searchParams }: Props) {

@@ -11,7 +11,11 @@ import { getCurrentUser } from "../../coursebuilder/current-user";
 import { expireStripeSubscriptionCheckoutSession } from "../../coursebuilder/stripe-provider";
 import { getEggheadDatabase } from "../../db/adapter";
 import { assertCommerceWritesAllowed, getEggheadRuntime } from "../../db/local-docker";
-import { organization as organizationTable, merchantCustomer } from "../../db/schema";
+import {
+  merchantAccount as merchantAccountTable,
+  merchantCustomer,
+  organization as organizationTable,
+} from "../../db/schema";
 import { getActiveMembershipProduct, getMembershipServices } from "../../subscriptions/catalog";
 import {
   CHECKOUT_RESERVATION_FIELD,
@@ -24,6 +28,7 @@ import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { subscriptionCheckoutQuantitySchema } from "../../subscriptions/team-contracts";
 
 import { resolveCheckoutPrice } from "@coursebuilder/commerce/resolve-checkout-price";
+import type { StripePaymentAdapter } from "@coursebuilder/commerce/stripe-provider";
 import { getCheckoutCustomer } from "../../subscriptions/checkout-customer";
 import { membershipCheckoutOrigin } from "../../subscriptions/configuration";
 
@@ -35,6 +40,7 @@ async function reserveSubscriptionCheckout(
   priceId: string,
   quantity: number,
   country: string,
+  payments: StripePaymentAdapter,
 ) {
   const db = getEggheadDatabase();
   const decide = (confirmedExpiredSessionId?: string) =>
@@ -79,7 +85,7 @@ async function reserveSubscriptionCheckout(
   if (first.kind !== "expire") return first;
 
   try {
-    const result = await expireStripeSubscriptionCheckoutSession(first.sessionId);
+    const result = await expireStripeSubscriptionCheckoutSession(first.sessionId, payments);
     if (result !== "expired") return { kind: "pending" } as const;
   } catch (error) {
     console.warn("Unable to expire Stripe checkout session", {
@@ -197,6 +203,7 @@ export async function startSubscriptionCheckout(formData: FormData) {
     priceId,
     quantity,
     country,
+    payments,
   );
   if (checkoutDecision.kind === "pending") {
     redirect("/pricing?error=checkout-pending");
@@ -211,6 +218,15 @@ export async function startSubscriptionCheckout(formData: FormData) {
       adapter,
       paymentsAdapter: payments,
     });
+    const merchantAccount = await db.query.merchantAccount.findFirst({
+      where: and(
+        eq(merchantAccountTable.id, merchantProduct.merchantAccountId),
+        eq(merchantAccountTable.status, 1),
+      ),
+    });
+    if (!merchantAccount) {
+      throw new Error("Membership checkout requires an active merchant account");
+    }
     if (!stripePrice.recurring || stripePrice.livemode !== configuration.live)
       throw new Error("Membership price must match the configured Stripe mode");
     const customerId = await getCheckoutCustomer({

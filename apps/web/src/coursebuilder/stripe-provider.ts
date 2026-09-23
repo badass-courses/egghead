@@ -11,30 +11,30 @@ class EggheadStripePaymentAdapter extends StripePaymentAdapter {
     const event = await this.stripe.events.retrieve(eventId);
     return event.created;
   }
-
-  async expireSubscriptionCheckout(sessionId: string) {
-    const session = await this.stripe.checkout.sessions.retrieve(sessionId);
-    if (session.status === "complete") return "complete" as const;
-    if (session.status === "expired") return "expired" as const;
-
-    try {
-      await this.stripe.checkout.sessions.expire(sessionId);
-      return "expired" as const;
-    } catch (error) {
-      const current = await this.stripe.checkout.sessions.retrieve(sessionId);
-      if (current.status === "complete") return "complete" as const;
-      if (current.status === "expired") return "expired" as const;
-      throw error;
-    }
-  }
 }
-export async function expireStripeSubscriptionCheckoutSession(sessionId: string) {
-  const paymentsAdapter = getStripeProvider()?.options.paymentsAdapter;
-  if (!(paymentsAdapter instanceof EggheadStripePaymentAdapter)) {
+export async function expireStripeSubscriptionCheckoutSession(
+  sessionId: string,
+  suppliedPaymentsAdapter?: StripePaymentAdapter,
+) {
+  const configuredPaymentsAdapter = getStripeProvider()?.options.paymentsAdapter;
+  const paymentsAdapter = suppliedPaymentsAdapter ?? configuredPaymentsAdapter;
+  if (!(paymentsAdapter instanceof StripePaymentAdapter)) {
     throw new Error("Stripe is not configured.");
   }
 
-  return paymentsAdapter.expireSubscriptionCheckout(sessionId);
+  const session = await paymentsAdapter.stripe.checkout.sessions.retrieve(sessionId);
+  if (session.status === "complete") return "complete" as const;
+  if (session.status === "expired") return "expired" as const;
+
+  try {
+    await paymentsAdapter.stripe.checkout.sessions.expire(sessionId);
+    return "expired" as const;
+  } catch (error) {
+    const current = await paymentsAdapter.stripe.checkout.sessions.retrieve(sessionId);
+    if (current.status === "complete") return "complete" as const;
+    if (current.status === "expired") return "expired" as const;
+    throw error;
+  }
 }
 export async function retrieveStripeEventCreatedAt(
   provider: PaymentsProviderConfig,
