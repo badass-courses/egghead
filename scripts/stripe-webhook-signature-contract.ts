@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import { StripePaymentAdapter } from "@coursebuilder/commerce/stripe-provider";
 import { CourseBuilder } from "@coursebuilder/server/http";
 
-// Dummy offline values. The provider is read from env when config.ts loads,
-// so set these before the dynamic import below.
+// Dummy offline values. The provider and database adapter are read from env
+// when config.ts loads, so set these before the dynamic import below. The
+// local URL keeps an inherited beta or production DATABASE_URL out of the
+// contract; the recording adapter below never queries it.
 const webhookSecret = "whsec_offline_contract_dummy";
 const stripeToken = "sk_test_offline_contract_dummy";
 process.env["STRIPE_SECRET_TOKEN"] = stripeToken;
 process.env["STRIPE_WEBHOOK_SECRET"] = webhookSecret;
 process.env["NEXT_PUBLIC_APP_URL"] = "http://localhost:3008";
 delete process.env["EGGHEAD_RUNTIME"];
+process.env["DATABASE_URL"] = "mysql://root:root@127.0.0.1:3307/coursebuilder_test";
 
 const { courseBuilderConfig } = await import("../apps/web/src/coursebuilder/config");
 
