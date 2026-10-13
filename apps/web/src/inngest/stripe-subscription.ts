@@ -3,32 +3,20 @@ import { STRIPE_CHECKOUT_SESSION_COMPLETED_EVENT } from "@coursebuilder/core/eve
 import { STRIPE_CUSTOMER_SUBSCRIPTION_UPDATED_EVENT } from "@coursebuilder/core/events/stripe";
 import { parseSubscriptionInfoFromCheckoutSession } from "@coursebuilder/commerce/stripe-subscription-utils";
 import { checkoutSessionCompletedEvent } from "@coursebuilder/core/schemas/stripe/checkout-session-completed";
-import { and, eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
-import { getStripeProvider, retrieveStripeEventCreatedAt } from "../coursebuilder/stripe-provider";
+import { getStripeProvider } from "../coursebuilder/stripe-provider";
 import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
-import { assertCommerceWritesAllowed } from "../db/local-docker";
 import {
-  entitlements,
   merchantAccount as merchantAccountTable,
-  merchantCustomer as merchantCustomerTable,
   merchantSubscription,
   subscription,
 } from "../db/schema";
-import {
-  STRIPE_SUBSCRIPTION_SOURCE,
-  syncStripeSubscriptionEntitlement,
-} from "../subscriptions/access";
+import { assertMembershipWritesAllowed } from "../subscriptions/write-policy";
 import { ensurePersonalOrganization } from "../subscriptions/personal-organization";
-import {
-  getStripeSubscriptionCurrentPeriodEnd,
-  getStripeSubscriptionQuantity,
-} from "../subscriptions/stripe";
-import {
-  mergeTeamSubscriptionFields,
-  subscriptionCheckoutQuantitySchema,
-  teamSubscriptionFieldsSchema,
-} from "../subscriptions/team-contracts";
+import { loadStripeSubscriptionSnapshot } from "../subscriptions/stripe-billing";
+import { getSubscriptionStore } from "../subscriptions/store";
+import { SUBSCRIPTION_DELETED_EVENT } from "../subscriptions/webhook-contract";
 import { inngest } from "./client";
 
 export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
@@ -42,7 +30,7 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
     if: "event.data.stripeEvent.data.object.mode == 'subscription'",
   },
   async ({ event, step }) => {
-    assertCommerceWritesAllowed();
+    assertMembershipWritesAllowed();
 
     const stripeEvent = checkoutSessionCompletedEvent.parse(event.data.stripeEvent);
     const stripeCheckoutSession = stripeEvent.data.object;
@@ -176,58 +164,19 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
       return createdSubscription;
     });
 
-    const currentStripeSubscription = await step.run(
-      "load current Stripe subscription for checkout",
-      () =>
-        stripeProvider.options.paymentsAdapter.getSubscription(
-          subscriptionInfo.subscriptionIdentifier,
-        ),
+    const snapshot = await step.run("load current subscription billing", () =>
+      loadStripeSubscriptionSnapshot(stripeProvider, subscriptionInfo.subscriptionIdentifier, {
+        id: stripeEvent.id,
+        createdAt: stripeEvent.created,
+        kind: "checkout",
+      }),
     );
-    const currentPeriodEnd = getStripeSubscriptionCurrentPeriodEnd(currentStripeSubscription);
-    if (!currentPeriodEnd) {
-      throw new Error("Stripe subscription is missing its current period end.");
-    }
-    const seatCount = subscriptionCheckoutQuantitySchema.parse(
-      getStripeSubscriptionQuantity(currentStripeSubscription) ?? subscriptionInfo.quantity,
-    );
-
-    await step.run("store subscription seats", () =>
-      db
-        .update(subscription)
-        .set({
-          fields: mergeTeamSubscriptionFields(localSubscription.fields, {
-            ownerId: user.id,
-            seats: seatCount,
-          }),
-        })
-        .where(eq(subscription.id, localSubscription.id)),
-    );
-
-    if (seatCount === 1) {
-      await step.run("sync initial subscription state", () =>
-        syncStripeSubscriptionEntitlement({
-          currentPeriodEnd: new Date(currentPeriodEnd * 1000),
-          localSubscriptionId: localSubscription.id,
-          organizationId: organizationContext.organization.id,
-          organizationMembershipId: organizationContext.membership.id,
-          productId: merchantProduct.productId,
-          status: currentStripeSubscription.status,
-          stripeEventCreatedAt: stripeEvent.created,
-          stripeEventKind: "checkout",
-          stripeSubscriptionId: subscriptionInfo.subscriptionIdentifier,
-          userId: user.id,
-        }),
-      );
-    } else {
-      // Team subscriptions expose a pool of seats. The owner deliberately claims one
-      // from /team instead of checkout assigning a seat implicitly.
-      await step.run("sync initial team subscription state", () =>
-        db
-          .update(subscription)
-          .set({ status: currentStripeSubscription.status })
-          .where(eq(subscription.id, localSubscription.id)),
-      );
-    }
+    await step.run("reconcile initial subscription", async () => {
+      const result = await getSubscriptionStore().reconcile(snapshot);
+      if (result.status === "not-ready")
+        throw new Error("Subscription is not ready for checkout reconciliation");
+      return result;
+    });
 
     await step.sendEvent("announce new subscription", {
       name: NEW_SUBSCRIPTION_CREATED_EVENT,
@@ -239,9 +188,9 @@ export const stripeSubscriptionCheckoutSessionComplete = inngest.createFunction(
     });
 
     return {
-      seatCount,
+      seatCount: snapshot.seats,
       subscriptionId: localSubscription.id,
-      status: currentStripeSubscription.status,
+      status: snapshot.status,
     };
   },
 );
@@ -256,147 +205,26 @@ export const stripeCustomerSubscriptionUpdated = inngest.createFunction(
       key: "event.data.stripeEvent.data.object.id",
     },
   },
-  { event: STRIPE_CUSTOMER_SUBSCRIPTION_UPDATED_EVENT },
-  async ({ event, step, logger }) => {
-    assertCommerceWritesAllowed();
-
+  [{ event: STRIPE_CUSTOMER_SUBSCRIPTION_UPDATED_EVENT }, { event: SUBSCRIPTION_DELETED_EVENT }],
+  async ({ event, step }) => {
+    assertMembershipWritesAllowed();
     const stripeEvent = event.data.stripeEvent;
-    const stripeSubscriptionId = stripeEvent.data.object.id;
-    const stripeProvider = getStripeProvider();
-
-    const db = getEggheadDatabase();
-
-    if (!stripeProvider) {
-      throw new Error("Stripe is not configured.");
-    }
-    // CourseBuilder's published update-event schema strips Stripe's creation timestamp.
-    // Reload the source event so entitlement ordering remains based on Stripe event time.
-    const stripeEventCreatedAt = await step.run("load Stripe event timestamp", () =>
-      retrieveStripeEventCreatedAt(stripeProvider, stripeEvent.id),
-    );
-
-    // The published CourseBuilder event schema strips fields needed for lifecycle updates.
-    // Reloading Stripe's current state also makes delayed webhook delivery converge safely.
-    const stripeSubscription = await step.run("load current Stripe subscription", () =>
-      stripeProvider.options.paymentsAdapter.getSubscription(stripeSubscriptionId),
-    );
-
-    const stored = await step.run("load stored subscription", () =>
-      db.query.merchantSubscription.findFirst({
-        where: eq(merchantSubscription.identifier, stripeSubscriptionId),
-        with: { subscription: true },
+    const provider = getStripeProvider();
+    if (!provider) throw new Error("Stripe is not configured");
+    const snapshot = await step.run("load current subscription billing", () =>
+      loadStripeSubscriptionSnapshot(provider, stripeEvent.data.object.id, {
+        id: stripeEvent.id,
+        kind:
+          event.name === SUBSCRIPTION_DELETED_EVENT
+            ? "subscription_deleted"
+            : "subscription_update",
       }),
     );
-    const localSubscription = stored?.subscription;
-
-    const organizationId = localSubscription?.organizationId;
-    const productId = localSubscription?.productId;
-
-    if (!stored || !localSubscription || !organizationId || !productId) {
-      logger.warn("Ignoring Stripe subscription update", {
-        reason: "local_subscription_not_found_or_incomplete",
-        stripeEventId: stripeEvent.id,
-        stripeSubscriptionId,
-        localSubscriptionId: localSubscription?.id ?? null,
-        organizationId: organizationId ?? null,
-        productId: productId ?? null,
-      });
-      throw new Error(`Local subscription ${stripeSubscriptionId} is not ready for update.`);
-    }
-
-    const currentPeriodEnd = getStripeSubscriptionCurrentPeriodEnd(stripeSubscription);
-    const seatCount = subscriptionCheckoutQuantitySchema.safeParse(
-      getStripeSubscriptionQuantity(stripeSubscription),
-    );
-    const storedTeamFields = teamSubscriptionFieldsSchema.safeParse(localSubscription.fields);
-    const subscriptionOwnerCustomer = storedTeamFields.success
-      ? null
-      : await step.run("load subscription owner", () =>
-          db.query.merchantCustomer.findFirst({
-            where: eq(merchantCustomerTable.id, stored.merchantCustomerId),
-          }),
-        );
-    const ownerId = storedTeamFields.success
-      ? storedTeamFields.data.ownerId
-      : subscriptionOwnerCustomer?.userId;
-
-    if (!currentPeriodEnd || !seatCount.success || !ownerId) {
-      logger.warn("Ignoring incomplete Stripe subscription update", {
-        reason: "subscription_period_seats_or_owner_missing",
-        stripeEventId: stripeEvent.id,
-        stripeSubscriptionId,
-        subscriptionId: localSubscription.id,
-        hasCurrentPeriodEnd: Boolean(currentPeriodEnd),
-        hasOwner: Boolean(ownerId),
-        hasSeatCount: seatCount.success,
-      });
-      return { ignored: true, subscriptionId: localSubscription.id };
-    }
-
-    await step.run("sync subscription seat count", () =>
-      db
-        .update(subscription)
-        .set({
-          fields: mergeTeamSubscriptionFields(localSubscription.fields, {
-            ownerId,
-            seats: seatCount.data,
-          }),
-        })
-        .where(eq(subscription.id, localSubscription.id)),
-    );
-
-    const subscriptionEntitlements = await step.run("load subscription entitlements", () =>
-      db.query.entitlements.findMany({
-        where: and(
-          eq(entitlements.sourceId, localSubscription.id),
-          eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
-          isNull(entitlements.deletedAt),
-        ),
-      }),
-    );
-    const completeEntitlements = subscriptionEntitlements.filter(
-      (
-        entitlement,
-      ): entitlement is typeof entitlement & {
-        organizationMembershipId: string;
-        userId: string;
-      } => Boolean(entitlement.organizationMembershipId && entitlement.userId),
-    );
-
-    if (completeEntitlements.length === 0) {
-      await step.run("sync unclaimed team subscription state", () =>
-        db
-          .update(subscription)
-          .set({ status: stripeSubscription.status })
-          .where(eq(subscription.id, localSubscription.id)),
-      );
-    } else {
-      await step.run("sync assigned subscription seats", () =>
-        Promise.all(
-          completeEntitlements.map((entitlement) =>
-            syncStripeSubscriptionEntitlement({
-              currentPeriodEnd: new Date(currentPeriodEnd * 1000),
-              localSubscriptionId: localSubscription.id,
-              organizationId,
-              organizationMembershipId: entitlement.organizationMembershipId,
-              productId,
-              status: stripeSubscription.status,
-              stripeEventCreatedAt,
-              stripeEventKind: "subscription_update",
-              stripeSubscriptionId,
-              teamSeat: true,
-              userId: entitlement.userId,
-            }),
-          ),
-        ),
-      );
-    }
-
-    return {
-      assignedSeats: completeEntitlements.length,
-      seatCount: seatCount.data,
-      subscriptionId: localSubscription.id,
-      status: stripeSubscription.status,
-    };
+    return step.run("reconcile subscription", async () => {
+      const result = await getSubscriptionStore().reconcile(snapshot);
+      if (result.status === "not-ready")
+        throw new Error("Local subscription is not ready for reconciliation");
+      return result;
+    });
   },
 );

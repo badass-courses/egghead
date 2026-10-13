@@ -10,7 +10,12 @@ import { getSiteUrl } from "../../coursebuilder/stripe-provider";
 import { commerceWritesAreAllowed } from "../../db/local-docker";
 import { getOwnedTeamSubscription } from "../../subscriptions/team";
 import { createTeamInviteToken } from "../../subscriptions/team-invite-token";
-import { claimTeamSeat, inviteTeamMember, removeTeamMember } from "./actions";
+import {
+  claimTeamSeat,
+  inviteTeamMember,
+  removeTeamMember,
+  prepareTeamSeatReduction,
+} from "./actions";
 import { TeamInviteLink } from "./team-invite-link";
 
 export const metadata: Metadata = {
@@ -28,6 +33,8 @@ function firstParam(value: string | string[] | undefined) {
 }
 
 function teamErrorMessage(error: string | undefined) {
+  if (error === "invalid-selection")
+    return "Choose only assigned members, up to the new seat count.";
   if (error === "invalid-invite") return "Enter a valid teammate email address.";
   if (error === "invite-email-failed") return "We could not send that invitation. Try again.";
   if (error === "already-assigned") return "That person already has a seat on this team.";
@@ -37,6 +44,8 @@ function teamErrorMessage(error: string | undefined) {
 }
 
 function teamNoticeMessage(notice: string | undefined) {
+  if (notice === "reduction-prepared")
+    return "Your retained members are saved. Change the seat count in billing when you are ready.";
   if (notice === "seat-claimed") return "Your seat is active. Welcome to the team.";
   if (notice === "seat-removed") return "The seat is available for someone new.";
   if (notice === "invite-sent") return "Invitation sent. The seat is claimed when they accept.";
@@ -174,6 +183,68 @@ async function TeamContent({ searchParams }: { searchParams: Promise<TeamSearchP
           <p className="rounded-xl border border-border-strong bg-well px-4 py-3 text-sm font-bold text-muted-foreground shadow-well">
             Team changes are unavailable in this environment.
           </p>
+        ) : null}
+
+        {team.capacityReviewRequired ? (
+          <p role="alert" className="rounded-xl border border-border-strong p-4">
+            Your billing seat count is lower than your roster. Team access is paused until you
+            select the members to retain below.
+          </p>
+        ) : null}
+
+        {team.members.length > 0 ? (
+          <form
+            action={prepareTeamSeatReduction}
+            className="grid gap-4 rounded-2xl border border-border-strong bg-surface-grad p-5 sm:p-6"
+          >
+            <input name="subscriptionId" type="hidden" value={team.id} />
+            <h2 className="text-xl font-black">Choose members before reducing seats</h2>
+            <p className="text-sm text-muted-foreground">
+              Select who will keep access, including yourself if needed. This saves your selection;
+              it does not change your billing.
+              {team.reductionSeats ? ` A selection for ${team.reductionSeats} seats is saved.` : ""}
+            </p>
+            <label className="grid gap-2" htmlFor="retained-seat-count">
+              <span className="text-sm font-extrabold">New seat count</span>
+              <input
+                aria-label="New seat count"
+                id="retained-seat-count"
+                name="seats"
+                type="number"
+                min={1}
+                max={team.totalSeats}
+                defaultValue={
+                  team.capacityReviewRequired ? team.totalSeats : Math.max(1, team.totalSeats - 1)
+                }
+                required
+                className="h-12 rounded-xl border border-border-strong bg-well px-4"
+                disabled={!writesAllowed}
+              />
+            </label>
+            <fieldset className="grid gap-2" disabled={!writesAllowed}>
+              <legend className="mb-2 text-sm font-extrabold">Members to retain</legend>
+              {team.members.map((member) => (
+                <label className="flex items-center gap-3" key={member.userId}>
+                  <input
+                    aria-label={`Retain ${member.name || member.email}`}
+                    name="retainedUserIds"
+                    type="checkbox"
+                    value={member.userId}
+                  />
+                  <span>
+                    {member.name || member.email}
+                    {member.isOwner ? " (you)" : ""}
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <Button type="submit" disabled={!writesAllowed} variant="ghost">
+              Save retained members
+            </Button>
+            <Link href="/profile" className="text-sm font-bold underline">
+              Open your profile to manage billing
+            </Link>
+          </form>
         ) : null}
 
         {!team.ownerHasSeat ? (

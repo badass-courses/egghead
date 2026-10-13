@@ -1,52 +1,56 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull } from "drizzle-orm";
+import { getEggheadDatabase } from "../db/adapter";
+import { entitlements, merchantCustomer, merchantSubscription, subscription } from "../db/schema";
+import { CURRENT_SUBSCRIPTION_STATUSES, STRIPE_SUBSCRIPTION_SOURCE } from "./access";
 
-import { getCourseBuilderAdapter, getEggheadDatabase } from "../db/adapter";
-import { entitlements, subscription } from "../db/schema";
-import { STRIPE_SUBSCRIPTION_SOURCE } from "./access";
-import { isTeamSubscription, teamSubscriptionFieldsSchema } from "./team-contracts";
-
-const CURRENT_SUBSCRIPTION_STATUSES = ["active", "past_due", "trialing"];
+export async function getBillingSubscriptionForUser(userId: string) {
+  const [owned] = await getEggheadDatabase()
+    .select({ subscription })
+    .from(subscription)
+    .innerJoin(
+      merchantSubscription,
+      eq(merchantSubscription.id, subscription.merchantSubscriptionId),
+    )
+    .innerJoin(merchantCustomer, eq(merchantCustomer.id, merchantSubscription.merchantCustomerId))
+    .where(eq(merchantCustomer.userId, userId))
+    .orderBy(desc(subscription.createdAt))
+    .limit(1);
+  return owned?.subscription ?? null;
+}
 
 export async function getCurrentSubscriptionForUser(userId: string) {
-  const adapter = getCourseBuilderAdapter();
   const db = getEggheadDatabase();
-  const memberships = await adapter.getMembershipsForUser(userId);
-
-  const organizationIds = memberships
-    .map((membership) => membership.organizationId)
-    .filter((organizationId): organizationId is string => Boolean(organizationId));
-
-  if (organizationIds.length === 0) return null;
-
-  const currentSubscriptions = await db.query.subscription.findMany({
-    where: and(
-      inArray(subscription.organizationId, organizationIds),
-      inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
-    ),
-  });
-  if (currentSubscriptions.length === 0) return null;
-
-  const ownedSubscription = currentSubscriptions.find((candidate) => {
-    const fields = teamSubscriptionFieldsSchema.safeParse(candidate.fields);
-    return (
-      !isTeamSubscription(candidate.fields) || (fields.success && fields.data.ownerId === userId)
-    );
-  });
-  if (ownedSubscription) return ownedSubscription;
-
-  const assignedSeat = await db.query.entitlements.findFirst({
-    where: and(
-      inArray(
-        entitlements.sourceId,
-        currentSubscriptions.map((candidate) => candidate.id),
+  const [owned] = await db
+    .select({ subscription })
+    .from(subscription)
+    .innerJoin(
+      merchantSubscription,
+      eq(merchantSubscription.id, subscription.merchantSubscriptionId),
+    )
+    .innerJoin(merchantCustomer, eq(merchantCustomer.id, merchantSubscription.merchantCustomerId))
+    .where(
+      and(
+        eq(merchantCustomer.userId, userId),
+        inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
       ),
-      eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
-      eq(entitlements.userId, userId),
-      isNull(entitlements.deletedAt),
-    ),
-  });
-
-  return assignedSeat
-    ? (currentSubscriptions.find((candidate) => candidate.id === assignedSeat.sourceId) ?? null)
-    : null;
+    )
+    .orderBy(desc(subscription.createdAt))
+    .limit(1);
+  if (owned) return owned.subscription;
+  const [assigned] = await db
+    .select({ subscription })
+    .from(entitlements)
+    .innerJoin(subscription, eq(subscription.id, entitlements.sourceId))
+    .where(
+      and(
+        eq(entitlements.sourceType, STRIPE_SUBSCRIPTION_SOURCE),
+        eq(entitlements.userId, userId),
+        isNull(entitlements.deletedAt),
+        gt(entitlements.expiresAt, new Date()),
+        inArray(subscription.status, CURRENT_SUBSCRIPTION_STATUSES),
+      ),
+    )
+    .orderBy(desc(subscription.createdAt))
+    .limit(1);
+  return assigned?.subscription ?? null;
 }
