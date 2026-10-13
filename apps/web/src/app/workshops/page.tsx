@@ -4,19 +4,27 @@ import Link from "next/link";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader } from "@egghead/ui/structure";
 
-import {
-  formatWorkshopDate,
-  formatWorkshopPrice,
-  getUpcomingWorkshops,
-} from "../../content/workshop";
+import { formatWorkshopDate, formatWorkshopPrice } from "@egghead/workshops/format";
+import { WorkshopCursor } from "@egghead/workshops/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { notFound } from "next/navigation";
+import { Suspense } from "react";
+import { getUpcomingWorkshops } from "../../workshops/read";
 
 export const metadata: Metadata = {
   description: "Upcoming live, hands-on workshops from egghead instructors.",
   title: "Live workshops | egghead",
 };
 
-export default async function WorkshopsPage() {
-  const workshops = await getUpcomingWorkshops();
+type WorkshopsRouteProps = { searchParams: Promise<{ after?: string }> };
+async function WorkshopsContent({ searchParams }: WorkshopsRouteProps) {
+  const { after } = await searchParams;
+  const cursor = after
+    ? Option.getOrNull(Schema.decodeUnknownOption(Schema.fromJsonString(WorkshopCursor))(after))
+    : null;
+  if (after && !cursor) notFound();
+  const { workshops, next } = await getUpcomingWorkshops(cursor ?? undefined);
 
   return (
     <Container as="main" size="wide">
@@ -63,6 +71,19 @@ export default async function WorkshopsPage() {
           No live workshops are scheduled right now. Check back soon.
         </p>
       )}
+      {next ? (
+        <Link href={`/workshops?after=${encodeURIComponent(JSON.stringify(next))}`}>
+          More workshops →
+        </Link>
+      ) : null}
     </Container>
+  );
+}
+
+export default function WorkshopsPage(props: WorkshopsRouteProps) {
+  return (
+    <Suspense fallback={null}>
+      <WorkshopsContent {...props} />
+    </Suspense>
   );
 }

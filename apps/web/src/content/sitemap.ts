@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import type { MetadataRoute } from "next";
 import { cacheLife, cacheTag } from "next/cache";
 
+import { getWorkshopReferences } from "../workshops/read";
 import { createLocalMysqlConnection } from "../db/local-docker";
 import { contentResourceSlugSql } from "./resource-slug";
 import { publishedResourceSql, routeableLessonResourceSql } from "./publication";
@@ -307,26 +308,6 @@ async function publicContentRows(
     );
 }
 
-async function workshopRows(connection: Awaited<ReturnType<typeof createLocalMysqlConnection>>) {
-  const workshopSlugSql = await contentResourceSlugSql(connection, "workshop");
-  const [rows] = await connection.execute<SitemapRow[]>(
-    `
-      SELECT ${workshopSlugSql} AS path, workshop.updatedAt
-      FROM egghead_ContentResource workshop
-      WHERE workshop.deletedAt IS NULL
-        AND workshop.type = 'event'
-        ${publishedResourceSql("workshop")}
-        AND ${workshopSlugSql} IS NOT NULL
-        AND ${workshopSlugSql} != ''
-      ORDER BY workshop.updatedAt DESC, workshop.createdAt DESC
-    `,
-  );
-
-  return rows
-    .filter((row) => row.path)
-    .map((row) => sitemapEntry(`/workshops/${row.path ?? ""}`, row.updatedAt, 0.8));
-}
-
 export async function getEggheadSitemapEntriesUncached(): Promise<MetadataRoute.Sitemap> {
   const connection = await createLocalMysqlConnection();
 
@@ -335,7 +316,9 @@ export async function getEggheadSitemapEntriesUncached(): Promise<MetadataRoute.
     const collectionLessons = await collectionLessonRows(connection);
     const standaloneLessons = await standaloneLessonRows(connection);
     const publicResources = await publicContentRows(connection);
-    const workshops = await workshopRows(connection);
+    const workshops = (await getWorkshopReferences()).map((row) =>
+      sitemapEntry(`/workshops/${row.slug}`, row.updatedAt, 0.8),
+    );
 
     const staticEntries = SITEMAP_STATIC_PATHS.map((path) =>
       sitemapEntry(path, null, path === "/" ? 1 : 0.6),

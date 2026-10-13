@@ -21,21 +21,31 @@
     "email:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/email-delivery-contract.ts",
     "beta:runtime-guard": "tsx --tsconfig apps/web/tsconfig.json scripts/beta-runtime-guard.ts",
     "builder:smoke": "tsx --tsconfig apps/builder-egghead/tsconfig.json scripts/builder-smoke.ts",
-    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm workshop:contract && pnpm search:typesense-contract && pnpm sitemap:contract && pnpm profile:contract && pnpm email:contract && pnpm beta:runtime-guard && pnpm builder:smoke",
+    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm workshop:boundaries && pnpm workshop:contract && pnpm workshop:test && pnpm search:typesense-contract && pnpm sitemap:contract && pnpm profile:contract && pnpm email:contract && pnpm beta:runtime-guard && pnpm builder:smoke",
     "hooks:install": "lefthook install",
-    "hooks:pre-commit": "lefthook run pre-commit --all-files"
+    "hooks:pre-commit": "lefthook run pre-commit --all-files",
+    "workshops": "tsx --tsconfig apps/web/tsconfig.json scripts/workshops.ts",
+    "workshop:boundaries": "tsx scripts/workshop-boundaries.ts",
+    "workshop:test": "vitest run packages/workshops/test packages/workshop-catalog/test",
+    "test": "pnpm workshop:test",
+    "workshop:mysql-test": "vitest run packages/workshop-catalog/integration/mysql.test.ts"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.0",
+    "@egghead/workshop-catalog": "workspace:*",
+    "@egghead/workshops": "workspace:*",
     "@total-typescript/tsconfig": "1.0.4",
     "@types/node": "^20.19.25",
     "@typescript/native-preview": "7.0.0-dev.20260607.1",
+    "effect": "4.0.0",
     "lefthook": "2.1.9",
     "oxfmt": "0.53.0",
     "oxlint": "1.68.0",
     "oxlint-tsgolint": "0.23.0",
     "tsx": "^4.21.0",
     "turbo": "^2.6.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "5.0.0"
   },
   "packageManager": "pnpm@11.3.0"
 }

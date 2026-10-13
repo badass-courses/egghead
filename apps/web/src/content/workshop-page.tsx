@@ -4,12 +4,8 @@ import Link from "next/link";
 import { Container } from "@egghead/ui/container";
 
 import { MarkdownContent } from "./markdown-content";
-import {
-  formatWorkshopDate,
-  formatWorkshopPrice,
-  type Workshop,
-  type WorkshopStatus,
-} from "./workshop";
+import { formatWorkshopDate, formatWorkshopPrice } from "@egghead/workshops/format";
+import type { Workshop, WorkshopStatus, RegistrationState } from "@egghead/workshops/contracts";
 
 const STATUS_LABEL: Record<WorkshopStatus, string> = {
   "in-progress": "Happening now",
@@ -20,8 +16,7 @@ const STATUS_LABEL: Record<WorkshopStatus, string> = {
 
 function WorkshopOfferCard({ workshop }: { workshop: Workshop }) {
   const offer = workshop.offer;
-  const registrationOpen =
-    workshop.status === "upcoming" && !offer?.soldOut && workshop.registrationUrl;
+  const registration = workshop.registration;
 
   return (
     <aside aria-label="Workshop registration" className="egghead-workshop-offer">
@@ -67,27 +62,24 @@ function WorkshopOfferCard({ workshop }: { workshop: Workshop }) {
             <dd>{offer.soldOut ? "Sold out" : `${offer.seatsRemaining} remaining`}</dd>
           </div>
         ) : null}
-        {offer?.memberPrice !== null && offer?.memberPrice !== undefined ? (
+        {offer?.conditionalOffer ? (
           <div>
-            <dt>Members</dt>
-            <dd>{formatWorkshopPrice(offer.memberPrice)} after eligibility is verified</dd>
+            <dt>Eligible buyers</dt>
+            <dd>
+              {formatWorkshopPrice(offer.conditionalOffer.price)} after the qualifying purchase is
+              verified
+            </dd>
           </div>
         ) : null}
       </dl>
 
-      {registrationOpen ? (
-        <Link className="egghead-workshop-cta press" href={workshop.registrationUrl ?? "#"}>
-          {workshop.ctaLabel}
+      {registration.type === "open" ? (
+        <Link className="egghead-workshop-cta press" href={registration.href}>
+          {registration.label}
           <span aria-hidden>→</span>
         </Link>
       ) : (
-        <p className="egghead-workshop-registration-state">
-          {offer?.soldOut
-            ? "This workshop is sold out."
-            : workshop.status === "past" || workshop.status === "in-progress"
-              ? "Registration is closed."
-              : "Registration details are coming soon."}
-        </p>
+        <p className="egghead-workshop-registration-state">{registrationMessage(registration)}</p>
       )}
       <p className="egghead-workshop-fine-print">
         Member and coupon eligibility is confirmed during registration.
@@ -96,9 +88,16 @@ function WorkshopOfferCard({ workshop }: { workshop: Workshop }) {
   );
 }
 
-export async function WorkshopPage({ workshop }: { workshop: Workshop }) {
-  "use cache";
+function registrationMessage(registration: Exclude<RegistrationState, { type: "open" }>) {
+  const messages = {
+    "sold-out": "This workshop is sold out.",
+    closed: "Registration is closed.",
+    pending: "Registration details are coming soon.",
+  } satisfies Record<typeof registration.type, string>;
+  return messages[registration.type];
+}
 
+export function WorkshopPage({ workshop }: { workshop: Workshop }) {
   return (
     <main>
       <section className="egghead-workshop-hero">

@@ -1,4 +1,4 @@
-import { workshopFullPrice, workshopStatus } from "../apps/web/src/content/workshop";
+import { workshopFullPrice, workshopStatus } from "@egghead/workshops/policy";
 
 function assertEqual(
   name: string,

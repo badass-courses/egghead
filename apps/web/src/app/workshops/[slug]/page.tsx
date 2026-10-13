@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
-import { getWorkshopBySlug } from "../../../content/workshop";
+import { getWorkshopBySlug } from "../../../workshops/read";
 import { WorkshopPage } from "../../../content/workshop-page";
 
 type WorkshopRouteProps = {
@@ -15,6 +15,7 @@ export async function generateMetadata({ params }: WorkshopRouteProps): Promise<
   if (!workshop) return {};
 
   return {
+    robots: { index: workshop.visibility === "public", follow: true },
     description: workshop.description,
     title: `${workshop.title} | egghead workshop`,
     alternates: { canonical: `/workshops/${workshop.slug}` },
