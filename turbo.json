@@ -16,6 +16,13 @@
     "typecheck:tsgo": {
       "dependsOn": ["^typecheck:tsgo"],
       "outputs": []
+    },
+    "//#check": {
+      "cache": false,
+      "outputs": []
+    },
+    "//#test": {
+      "outputs": []
     }
   }
 }

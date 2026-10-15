@@ -14,6 +14,7 @@ import { cn } from "@egghead/ui/utils";
 const NAV_LINKS = [
   { href: "/", label: "Learn" },
   { href: "/courses", label: "Courses" },
+  { href: "/workshops", label: "Workshops" },
   { href: "/lessons", label: "Lessons" },
   { href: "/blog", label: "Articles" },
 ];

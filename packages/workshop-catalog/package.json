@@ -1,0 +1,17 @@
+{
+  "name": "@egghead/workshop-catalog",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./mysql": "./src/mysql.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:tsgo": "tsgo --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@egghead/workshops": "workspace:*",
+    "effect": "4.0.0",
+    "mysql2": "^3.22.5"
+  }
+}
