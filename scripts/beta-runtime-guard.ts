@@ -1,4 +1,7 @@
-import { assertDatabaseUrlForRuntime } from "../apps/web/src/db/local-docker";
+import {
+  assertCommerceWritesAllowed,
+  assertDatabaseUrlForRuntime,
+} from "../apps/web/src/db/local-docker";
 
 type RuntimeGuardCheck = {
   name: string;
@@ -88,11 +91,22 @@ try {
       assertDatabaseUrlForRuntime(),
     ),
   );
+  checks.push(
+    expectThrow("beta runtime still rejects commerce writes", () => assertCommerceWritesAllowed()),
+  );
 
   setEnv("DATABASE_URL", localUrl);
   setEnv("EGGHEAD_RUNTIME", "production");
   setEnv("EGGHEAD_BETA_DB_APPROVED", undefined);
-  checks.push(expectThrow("production runtime is blocked", () => assertDatabaseUrlForRuntime()));
+  checks.push(
+    expectThrow("production runtime rejects local Docker", () => assertDatabaseUrlForRuntime()),
+  );
+
+  setEnv("DATABASE_URL", fakePlanetScaleUrl);
+  checks.push(
+    expectPass("production runtime accepts PlanetScale", () => assertDatabaseUrlForRuntime()),
+    expectPass("production runtime accepts commerce writes", () => assertCommerceWritesAllowed()),
+  );
 
   console.log(
     JSON.stringify({
@@ -104,7 +118,8 @@ try {
       guardrails: {
         betaRequiresExplicitRuntime: true,
         betaRequiresApprovalEnv: true,
-        productionRuntimeBlocked: true,
+        productionRequiresPlanetScale: true,
+        betaCommerceWritesBlocked: true,
         realDatabaseUrlUsed: false,
       },
     }),

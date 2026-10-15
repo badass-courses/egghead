@@ -2,7 +2,7 @@ import { db } from '@/db'
 import { eggheadPgQuery } from '@/db/eggheadPostgres'
 import { PostSchema } from '@/lib/posts'
 
-import { VIDEO_RESOURCE_CREATED_EVENT } from '@coursebuilder/core/inngest/video-processing/events/event-video-resource'
+import { VIDEO_RESOURCE_CREATED_EVENT } from '@coursebuilder/core/events/video'
 
 import { inngest } from '../inngest.server'
 

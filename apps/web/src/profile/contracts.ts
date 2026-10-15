@@ -3,12 +3,13 @@ import { z } from "zod";
 import type { PublicContentFamily } from "../content/routes";
 
 const PUBLIC_PROFILE_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
-const PUBLIC_AVATAR_HOSTS = new Set([
-  "avatars.githubusercontent.com",
-  "d2eip9sf3oo6c2.cloudfront.net",
-  "gravatar.com",
-  "res.cloudinary.com",
-]);
+const PUBLIC_AVATAR_PATH_PREFIX_BY_HOST: Record<string, string | null> = {
+  "avatars.githubusercontent.com": null,
+  "d2eip9sf3oo6c2.cloudfront.net": null,
+  "gravatar.com": "/avatar/",
+  "res.cloudinary.com": null,
+  "www.gravatar.com": "/avatar/",
+};
 
 export const profileNameSchema = z
   .string()
@@ -99,12 +100,17 @@ export function safePublicAvatarUrl(value: string | null): string | null {
 
   try {
     const url = new URL(candidate.startsWith("//") ? `https:${candidate}` : candidate);
+    const hostname = url.hostname.toLowerCase();
+    const requiredPathPrefix = PUBLIC_AVATAR_PATH_PREFIX_BY_HOST[hostname];
     if (
       url.protocol !== "https:" ||
       url.username ||
       url.password ||
       url.port ||
-      !PUBLIC_AVATAR_HOSTS.has(url.hostname.toLowerCase())
+      !Object.hasOwn(PUBLIC_AVATAR_PATH_PREFIX_BY_HOST, hostname) ||
+      (requiredPathPrefix !== null &&
+        requiredPathPrefix !== undefined &&
+        !url.pathname.startsWith(requiredPathPrefix))
     ) {
       return null;
     }

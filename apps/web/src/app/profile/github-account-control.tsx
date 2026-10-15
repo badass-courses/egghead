@@ -1,17 +1,43 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Button } from "@egghead/ui/button";
 
-import { disconnectGithubAccount, type GithubDisconnectActionResult } from "./actions";
+import {
+  connectGithubAccount,
+  disconnectGithubAccount,
+  type GithubDisconnectActionResult,
+} from "./actions";
 
 type GithubAccountControlProps = {
   connected: boolean;
+  connectionAvailable: boolean;
   disconnectAllowed: boolean;
 };
 
-export function GithubAccountControl({ connected, disconnectAllowed }: GithubAccountControlProps) {
+function ConnectGithubButton({ connectionAvailable }: { connectionAvailable: boolean }) {
+  const { pending } = useFormStatus();
+
+  return (
+    <Button
+      aria-describedby="github-connection-note"
+      disabled={!connectionAvailable || pending}
+      size="sm"
+      type="submit"
+      variant="ghost"
+    >
+      {pending ? "Connecting…" : "Connect to GitHub"}
+    </Button>
+  );
+}
+
+export function GithubAccountControl({
+  connected,
+  connectionAvailable,
+  disconnectAllowed,
+}: GithubAccountControlProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [result, setResult] = useState<GithubDisconnectActionResult | null>(null);
@@ -52,7 +78,7 @@ export function GithubAccountControl({ connected, disconnectAllowed }: GithubAcc
 
         {connectionIsVisible ? (
           <Button
-            aria-describedby="github-disconnect-note"
+            aria-describedby="github-connection-note"
             disabled={!actionIsAllowed || isPending}
             onClick={disconnect}
             size="sm"
@@ -60,10 +86,14 @@ export function GithubAccountControl({ connected, disconnectAllowed }: GithubAcc
           >
             {isPending ? "Disconnecting…" : "Disconnect"}
           </Button>
-        ) : null}
+        ) : (
+          <form action={connectGithubAccount}>
+            <ConnectGithubButton connectionAvailable={connectionAvailable} />
+          </form>
+        )}
       </div>
 
-      <div className="mt-3 min-h-10 text-xs text-muted-foreground" id="github-disconnect-note">
+      <div className="mt-3 min-h-10 text-xs text-muted-foreground" id="github-connection-note">
         {connectionIsVisible && !disconnectAllowed ? (
           <p>
             GitHub is currently the only sign-in method supported by egghead, so it cannot be
@@ -74,7 +104,11 @@ export function GithubAccountControl({ connected, disconnectAllowed }: GithubAcc
           <p>Disconnecting removes this GitHub identity from your egghead account.</p>
         ) : null}
         {!connectionIsVisible && !result ? (
-          <p>No GitHub identity is linked to this account.</p>
+          <p>
+            {connectionAvailable
+              ? "Connect GitHub to use it as another way to sign in."
+              : "GitHub connections are temporarily unavailable."}
+          </p>
         ) : null}
         {result?.status === "disconnected" ? (
           <output className="font-extrabold text-sage-foreground">

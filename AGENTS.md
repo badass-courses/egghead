@@ -4,11 +4,11 @@ This app is the final Rails-exit Egghead CourseBuilder integration app.
 
 Guardrails:
 
-- Keep Phase 0 local/dev only.
+- The web app owns production subscription reads, Stripe Checkout, and Stripe/Inngest subscription writes on PlanetScale. Beta remains read-only for commerce; the builder production runtime remains blocked.
 - Consume published `@coursebuilder/*` packages.
 - Do not use `workspace:*` CourseBuilder dependencies.
 - Treat `/Users/joel/Code/skillrecordings/migrate-egghead/course-builder/apps/egghead` as extraction/reference source only.
-- Do not add commerce, Stripe/Inngest writer ownership, production imports, or read flips in Phase 0.
+- Do not add production imports or move builder writer ownership as part of web checkout work.
 - Do not put raw customer rows, emails, tokens, Stripe IDs, or secrets into Brain or fixtures.
 - Bare legacy `pro` must not grant broad access.
 

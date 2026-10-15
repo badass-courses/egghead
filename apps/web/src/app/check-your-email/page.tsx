@@ -1,12 +1,7 @@
-import { notFound } from "next/navigation";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader } from "@egghead/ui/structure";
 
-import { getEggheadRuntime } from "../../db/local-docker";
-
 export default function CheckYourEmailPage() {
-  if (getEggheadRuntime() === "production") notFound();
-
   return (
     <Container as="main" size="narrow">
       <SectionHeader

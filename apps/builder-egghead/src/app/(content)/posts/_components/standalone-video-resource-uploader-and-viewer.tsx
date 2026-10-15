@@ -1,6 +1,8 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { PostUploader } from '@/app/(content)/posts/_components/post-uploader'
+import { useFormContext } from 'react-hook-form'
+import type { Post } from '@/lib/posts'
 import { useResource } from '@/components/resource-form/resource-context'
 import { env } from '@/env.mjs'
 import { api } from '@/trpc/react'
@@ -80,7 +82,8 @@ export default function StandaloneVideoResourceUploaderAndViewer() {
 			}
 		},
 	})
-	const { resource, form } = useResource()
+	const { resource } = useResource()
+	const form = useFormContext<Post>()
 	const { mutate: attachVideoResourceToPost } =
 		api.videoResources.attachToPost.useMutation()
 

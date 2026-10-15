@@ -1,15 +1,19 @@
+import { createAuthJsAdapter } from "../server/auth-js-adapter";
 import type { NextAuthConfig } from "next-auth";
 import GithubProvider from "@auth/core/providers/github";
-import { logger } from "@coursebuilder/core/utils/logger";
+import { logger } from "@coursebuilder/utils/logger";
 
 import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEggheadRuntime } from "../db/local-docker";
 import { getEnv } from "../env";
 import { claimAnonymousLessonCompletions } from "../progress/anonymous-lesson-progress";
+import { getAuthSecret } from "./auth-secret";
+import { isEmailAuthEnabled } from "./email-auth";
 import { isEmailDeliveryEnabled } from "./email-delivery";
 import { createPostmarkEmailProvider } from "./email-provider";
 
 const LOCAL_EMAIL_FROM = "egghead development <no-reply@egghead.local>";
+const authSecret = getAuthSecret();
 
 export function isGithubAuthConfigured() {
   const githubClientId = getEnv("GITHUB_CLIENT_ID");
@@ -22,10 +26,12 @@ export function isEmailAuthConfigured() {
   const postmarkApiKey = getEnv("POSTMARK_API_KEY");
   const postmarkFromEmail = getEnv("POSTMARK_FROM_EMAIL");
 
-  return Boolean(
-    getEggheadRuntime() === "local" &&
-    (!isEmailDeliveryEnabled(getEnv("SEND_EMAILS")) || (postmarkApiKey && postmarkFromEmail)),
-  );
+  return isEmailAuthEnabled({
+    deliveryEnabled: isEmailDeliveryEnabled(getEnv("SEND_EMAILS")),
+    postmarkApiKey,
+    postmarkFromEmail,
+    runtime: getEggheadRuntime(),
+  });
 }
 
 function getAuthProviders(): NextAuthConfig["providers"] {
@@ -58,7 +64,7 @@ function getAuthProviders(): NextAuthConfig["providers"] {
 }
 
 export const authConfig = {
-  adapter: getCourseBuilderAdapter(),
+  adapter: createAuthJsAdapter(getCourseBuilderAdapter()),
   providers: getAuthProviders(),
   events: {
     signIn: async ({ user }) => {
@@ -92,6 +98,6 @@ export const authConfig = {
     signIn: "/login",
     verifyRequest: "/check-your-email",
   },
-  secret: getEnv("AUTH_SECRET") ?? "local-dev-only-egghead-phase-0",
+  ...(authSecret ? { secret: authSecret } : {}),
   trustHost: true,
 } satisfies NextAuthConfig;

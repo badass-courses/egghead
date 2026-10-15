@@ -1,4 +1,8 @@
-import { getEggheadRuntime, isBetaDatabaseApproved } from "../../db/local-docker";
+import {
+  commerceWritesAreAllowed,
+  getEggheadRuntime,
+  isBetaDatabaseApproved,
+} from "../../db/local-docker";
 
 export function GET() {
   const runtime = getEggheadRuntime();
@@ -19,20 +23,20 @@ export function GET() {
         content: {
           coursebuilder: "/api/coursebuilder",
         },
+        commerce: {
+          pricing: "/pricing",
+          stripeWebhook: "/api/coursebuilder/webhook/stripe",
+          inngest: "/api/inngest",
+        },
         auth: {
           currentUser: "/api/current-user",
         },
       },
       guardrails: {
         runtime,
-        localDevOnly: runtime === "local",
-        betaRuntime: runtime === "beta",
         betaDatabaseApproved: isBetaDatabaseApproved(),
-        noCommerce: true,
-        noStripeWriterChange: true,
-        noInngestWriterChange: true,
-        noReadFlip: true,
-        noPlanetScaleWrites: true,
+        commerceWritesAllowed: commerceWritesAreAllowed(),
+        productionDatabaseRequired: runtime === "production",
       },
     },
     {

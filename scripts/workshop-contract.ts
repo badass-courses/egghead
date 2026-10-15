@@ -1,5 +1,7 @@
 import { workshopFullPrice, workshopStatus } from "@egghead/workshops/policy";
 
+import { createWorkshopMysqlConnection } from "../apps/web/src/workshops/catalog";
+
 function assertEqual(
   name: string,
   actual: number | string | null,
@@ -45,3 +47,21 @@ const checks = [
 ];
 
 console.log(JSON.stringify({ checks }, null, 2));
+
+const originalRuntime = process.env["EGGHEAD_RUNTIME"];
+try {
+  process.env["EGGHEAD_RUNTIME"] = "production";
+  let blocked = false;
+  try {
+    await createWorkshopMysqlConnection();
+  } catch (error) {
+    blocked =
+      error instanceof Error &&
+      error.message === "Production workshop reads require an approved read flip";
+  }
+  if (!blocked) throw new Error("Workshop reads must remain blocked in production");
+  console.log(JSON.stringify({ name: "production workshop reads remain blocked", pass: true }));
+} finally {
+  if (originalRuntime === undefined) delete process.env["EGGHEAD_RUNTIME"];
+  else process.env["EGGHEAD_RUNTIME"] = originalRuntime;
+}

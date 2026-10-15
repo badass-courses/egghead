@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { getPublicContentStaticParams } from "../../../content/public-resource";
 import { getPublicContentMetadata, renderPublicContentRoute } from "../../../content/public-route";
+import { EMPTY_STATIC_PARAM, withStaticParamFallback } from "../../../content/static-params";
 
 type CampaignPageProps = {
   params: Promise<{
@@ -14,8 +15,10 @@ async function slugFromParams(params: CampaignPageProps["params"]) {
   return decodeURIComponent(resolved.slug);
 }
 
-export function generateStaticParams() {
-  return getPublicContentStaticParams(["campaign"]);
+export async function generateStaticParams() {
+  return withStaticParamFallback(await getPublicContentStaticParams(["campaign"]), {
+    slug: EMPTY_STATIC_PARAM,
+  });
 }
 
 export async function generateMetadata({ params }: CampaignPageProps): Promise<Metadata> {

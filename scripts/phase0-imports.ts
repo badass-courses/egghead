@@ -1,6 +1,10 @@
 import { courseBuilderConfig } from "../apps/web/src/coursebuilder/config";
 import { getCurrentUser } from "../apps/web/src/coursebuilder/current-user";
-import { getEggheadRuntime, isBetaDatabaseApproved } from "../apps/web/src/db/local-docker";
+import {
+  commerceWritesAreAllowed,
+  getEggheadRuntime,
+  isBetaDatabaseApproved,
+} from "../apps/web/src/db/local-docker";
 import { EGGHEAD_TABLE_PREFIX, getEggheadTableName } from "../apps/web/src/db/mysql-table";
 import { entitlements, entitlementTypes, resourceProgress, users } from "../apps/web/src/db/schema";
 
@@ -31,14 +35,9 @@ console.log(
     },
     guardrails: {
       runtime,
-      localDevOnly: runtime === "local",
-      betaRuntime: runtime === "beta",
       betaDatabaseApproved: isBetaDatabaseApproved(),
-      commerceExcluded: true,
-      stripeWriterUnchanged: true,
-      inngestWriterUnchanged: true,
-      readFlipBlocked: true,
-      planetScaleWritesApproved: false,
+      commerceWritesAllowed: commerceWritesAreAllowed(),
+      productionDatabaseRequired: runtime === "production",
     },
   }),
 );

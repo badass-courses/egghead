@@ -22,12 +22,12 @@ import { authOptions } from '@/server/auth'
 import { EventSchemas, Inngest } from 'inngest'
 import { UTApi } from 'uploadthing/server'
 
-import { CourseBuilderCoreEvents } from '@coursebuilder/core/inngest'
+import { CourseBuilderCoreEvents } from '@coursebuilder/core/events'
 import {
 	RESOURCE_CHAT_REQUEST_EVENT,
 	ResourceChat,
-} from '@coursebuilder/core/inngest/co-gardener/resource-chat'
-import { createInngestMiddleware } from '@coursebuilder/core/inngest/create-inngest-middleware'
+} from '@coursebuilder/core/events/resource-chat'
+import { createInngestMiddleware } from '@coursebuilder/server/create-inngest-middleware'
 import DeepgramProvider from '@coursebuilder/core/providers/deepgram'
 import OpenAIProvider from '@coursebuilder/core/providers/openai'
 import PartykitProvider from '@coursebuilder/core/providers/partykit'

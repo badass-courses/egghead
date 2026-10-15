@@ -11,10 +11,11 @@ import { ImageResourceUploader } from '@/components/image-uploader/image-resourc
 import { env } from '@/env.mjs'
 import { sendResourceChatMessage } from '@/lib/ai-chat-query'
 import { Post, PostSchema } from '@/lib/posts'
+import { EditPostSchema } from '@/lib/posts/schemas'
 import { updatePost } from '@/lib/posts-query'
 import { EggheadTag } from '@/lib/tags'
 import { CompactInstructor } from '@/lib/users'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { formResolver as zodResolver } from '@/utils/form-resolver'
 import {
 	CheckIcon,
 	ImageIcon,
@@ -31,17 +32,6 @@ import { EditResourcesForm } from '@coursebuilder/ui/resources-crud/edit-resourc
 
 import PublishPostChecklist from './publish-post-checklist'
 import { ResourceResourcesList } from './resource-resources-list'
-
-const NewPostFormSchema = z.object({
-	title: z.string().min(2).max(90),
-	postType: z.enum(['lesson', 'article', 'podcast']),
-	body: z.string().nullish(),
-	visibility: z.enum(['public', 'unlisted', 'private']),
-	access: z.enum(['free', 'pro']),
-	description: z.string().nullish(),
-	github: z.string().nullish(),
-	gitpod: z.string().nullish(),
-})
 
 export type EditPostFormProps = {
 	post: Post
@@ -74,10 +64,12 @@ export function EditPostForm({
 	const { theme } = useTheme()
 	const session = useSession()
 	const form = useForm<z.infer<typeof PostSchema>>({
-		resolver: zodResolver(NewPostFormSchema),
+		resolver: zodResolver(EditPostSchema),
 		defaultValues: {
+			...post,
 			id: post.id,
 			fields: {
+				...post.fields,
 				image: post.fields?.image ?? '',
 				title: post.fields?.title,
 				postType: post.fields?.postType || 'lesson',

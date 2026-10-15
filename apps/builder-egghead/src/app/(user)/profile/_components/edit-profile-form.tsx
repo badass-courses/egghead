@@ -3,7 +3,7 @@
 import React from 'react'
 import { createAppAbility } from '@/ability'
 import { api } from '@/trpc/react'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { formResolver as zodResolver } from '@/utils/form-resolver'
 import { useSession } from 'next-auth/react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'

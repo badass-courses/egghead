@@ -1,4 +1,4 @@
-import { logger } from "@coursebuilder/core/utils/logger";
+import { logger } from "@coursebuilder/utils/logger";
 
 import { getCurrentUser } from "../coursebuilder/current-user";
 import { readAnonymousCompletedLessonIds } from "../progress/anonymous-lesson-progress";

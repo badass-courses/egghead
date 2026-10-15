@@ -3,7 +3,7 @@ import { inngest } from '@/inngest/inngest.server'
 import { getUserAbilityForRequest } from '@/server/ability-for-request'
 import { z } from 'zod'
 
-import { VIDEO_UPLOADED_EVENT } from '@coursebuilder/core/inngest/video-processing/events/event-video-uploaded'
+import { VIDEO_UPLOADED_EVENT } from '@coursebuilder/core/events/video'
 
 // Zod schema for the request body
 const UploadBodySchema = z.object({
@@ -57,7 +57,7 @@ export const POST = async (request: NextRequest) => {
 	} catch (error) {
 		if (error instanceof z.ZodError) {
 			return NextResponse.json(
-				{ error: error.errors },
+				{ error: error.issues },
 				{ status: 400, headers: corsHeaders },
 			)
 		}

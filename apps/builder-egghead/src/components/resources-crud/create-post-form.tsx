@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { NewPost, PostTypeSchema } from '@/lib/posts'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { formResolver as zodResolver } from '@/utils/form-resolver'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 
@@ -32,7 +32,7 @@ export function CreatePostForm({
 	restrictToPostType?: string
 	onCancel?: () => void
 }) {
-	const form = useForm<{ fields: { title: string; postType: string } }>({
+	const form = useForm<{ fields: { title: string; postType: z.infer<typeof PostTypeSchema> } }>({
 		resolver: zodResolver(
 			z.object({
 				fields: z.object({
@@ -44,13 +44,13 @@ export function CreatePostForm({
 		defaultValues: {
 			fields: {
 				title: '',
-				postType: restrictToPostType || 'lesson',
+				postType: PostTypeSchema.parse(restrictToPostType || 'lesson'),
 			},
 		},
 	})
 
 	const internalOnSubmit = async (values: {
-		fields: { title: string; postType: string }
+		fields: { title: string; postType: z.infer<typeof PostTypeSchema> }
 	}) => {
 		const resource = await createPost({
 			title: values.fields.title,

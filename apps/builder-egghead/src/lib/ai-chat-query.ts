@@ -8,7 +8,7 @@ import { ChatResourceSchema } from '@/lib/ai-chat'
 import { getServerAuthSession } from '@/server/auth'
 import { sql } from 'drizzle-orm'
 
-import { RESOURCE_CHAT_REQUEST_EVENT } from '@coursebuilder/core/inngest/co-gardener/resource-chat'
+import { RESOURCE_CHAT_REQUEST_EVENT } from '@coursebuilder/core/events/resource-chat'
 
 export async function sendResourceChatMessage({
 	resourceId,

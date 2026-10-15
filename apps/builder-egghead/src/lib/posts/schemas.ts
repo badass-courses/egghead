@@ -58,6 +58,10 @@ export const PostSchema = ContentResourceSchema.merge(
 	}),
 )
 
+export const EditPostSchema = PostSchema.extend({
+  fields: PostSchema.shape.fields.extend({ title: z.string().min(2).max(90) }),
+})
+
 export const NewPostSchema = z.object({
 	title: z.string().min(2).max(90),
 	postType: PostTypeSchema.default('lesson'),

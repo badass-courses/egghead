@@ -3,10 +3,10 @@ import { env } from '@/env.mjs'
 import { sendResourceChatMessage } from '@/lib/ai-chat-query'
 import { ResourceType as ResourceTypeFromTypes } from '@/lib/resource-types'
 import { ResourceCreationConfig } from '@/lib/resources'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { formResolver as zodResolver } from '@/utils/form-resolver'
 import { useSession } from 'next-auth/react'
 import { useTheme } from 'next-themes'
-import { useForm, type UseFormReturn } from 'react-hook-form'
+import { useForm, type DefaultValues, type UseFormReturn } from 'react-hook-form'
 import { z } from 'zod'
 
 import { ContentResource } from '@coursebuilder/core/schemas'
@@ -76,7 +76,7 @@ export interface ResourceFormConfig<
 	T extends ContentResource & {
 		fields: BaseResourceFields
 	},
-	S extends z.ZodSchema,
+	S extends z.ZodType<T>,
 > {
 	/** Type of resource being edited */
 	resourceType: ResourceTypeFromTypes
@@ -85,7 +85,7 @@ export interface ResourceFormConfig<
 	schema: S
 
 	/** Function to generate default form values */
-	defaultValues: (resource?: T) => z.infer<S>
+	defaultValues: (resource?: T) => DefaultValues<T>
 
 	/**
 	 * Configuration for creating new resources within this resource
@@ -174,10 +174,10 @@ export interface ResourceFormConfig<
  */
 export interface ResourceFormProps<
 	T extends ContentResource,
-	S extends z.ZodSchema,
+	S extends z.ZodType<T>,
 > {
 	resource: T
-	form?: UseFormReturn<z.infer<S>>
+	form?: UseFormReturn<T>
 }
 /**
  * Default tools available in the resource editor
@@ -216,7 +216,7 @@ export function withResourceForm<
 	T extends ContentResource & {
 		fields: BaseResourceFields
 	},
-	S extends z.ZodSchema,
+	S extends z.ZodType<T>,
 >(
 	Component: React.ComponentType<ResourceFormProps<T, S>>,
 	config: ResourceFormConfig<T, S>,
@@ -233,7 +233,7 @@ export function withResourceForm<
 		})
 
 		// Setup form with schema validation
-		const form = useForm<z.infer<S>>({
+		const form = useForm<T>({
 			resolver: zodResolver(config.schema),
 			defaultValues: config.defaultValues(resource),
 		})
@@ -281,7 +281,6 @@ export function withResourceForm<
 
 		return (
 			<ResourceProvider
-				form={form}
 				resource={resource}
 				resourceType={config.resourceType}
 			>

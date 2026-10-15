@@ -1,6 +1,6 @@
 # Workshop reader
 
-This slice keeps Builder as the event editor and registration destination. It reads published CourseBuilder events and offers; it does not create purchases, evaluate a person's access, grant entitlements, or take ownership of Stripe/Inngest writes. Existing database runtime guards still block production.
+This slice keeps Builder as the event editor and registration destination. It reads published CourseBuilder events and offers; it does not create purchases, evaluate a person's access, grant entitlements, or take ownership of Stripe/Inngest writes. The workshop connection factory blocks production reads even when the web database runtime permits production subscription traffic.
 
 ## Trace an action
 

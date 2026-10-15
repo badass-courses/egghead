@@ -1,5 +1,5 @@
 import { headers } from "next/headers";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
@@ -7,7 +7,6 @@ import { z } from "zod";
 
 import { isEmailAuthConfigured, isGithubAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUserFromRequest } from "../../coursebuilder/current-user";
-import { getEggheadRuntime } from "../../db/local-docker";
 import { signIn, signOut } from "../../server/auth";
 
 type LoginSearchParams = {
@@ -269,10 +268,6 @@ async function ResolvedAccountState({
 }
 
 export default function LoginPage({ searchParams }: { searchParams: Promise<LoginSearchParams> }) {
-  const runtime = getEggheadRuntime();
-
-  if (runtime === "production") notFound();
-
   return (
     <Container
       as="main"

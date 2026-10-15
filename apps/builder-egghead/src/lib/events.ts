@@ -9,7 +9,7 @@ import {
 	ResourceStateSchema,
 	ResourceVisibilitySchema,
 } from '@coursebuilder/core/schemas/content-resource-schema'
-import { productSchema } from '@coursebuilder/core/schemas/index'
+import { productSchema } from '@coursebuilder/core/schemas'
 import type { EventSeriesFormData } from '@coursebuilder/ui/event-creation/create-event-form'
 
 import { EmailSchema } from './emails'
