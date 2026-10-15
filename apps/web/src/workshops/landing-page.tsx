@@ -51,17 +51,6 @@ export function WorkshopLandingPage({
       ) : null}
 
       <header className={styles["hero"]}>
-        <div aria-hidden="true" className={styles["terminal"]}>
-          <div className={styles["terminalBar"]}>
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className={styles["terminalBody"]}>
-            <p className={styles["banner"]}>{landing?.bannerText ?? fields.title}</p>
-            <p className={styles["terminalCaption"]}>THE WORKSHOP</p>
-          </div>
-        </div>
         <h1>{landing?.headline ?? fields.title}</h1>
         <p className={styles["introduction"]}>{landing?.introduction ?? fields.description}</p>
         {landing ? (

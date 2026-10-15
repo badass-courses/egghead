@@ -4,7 +4,6 @@ description: Workshop landing pages within the existing egghead app shell.
 colors:
   workshop-accent: "#d8836b"
   workshop-accent-hover: "#eaa28d"
-  terminal-surface: "#10110f"
 ---
 
 # Design System: egghead Workshop landing page
@@ -15,23 +14,23 @@ This documents only `landing-page.tsx` and `landing-page.module.css`, using the 
 
 ## Colors
 
-Coral supplies the terminal lettering, caption, list markers, and details link. Charcoal anchors the terminal artwork and link text. Supporting copy, including the instructor role, uses app `--color-muted-foreground`; dividers use app border roles. Keyboard outlines use `--color-ring`.
+Coral supplies list markers and the details link. Charcoal supplies the link text. Supporting copy, including the instructor role, uses app `--color-muted-foreground`; dividers use app border roles. Keyboard outlines use `--color-ring`.
 
 ## Typography
 
-Inherited Nunito headings are heavy and balanced; the terminal uses monospace. The headline scales from 38px to 68px with a 17ch width; section headings scale from 28px to 36px. Narrative copy is 18px with 1.85 leading, reducing to 17px on small screens.
+Inherited Nunito headings are heavy and balanced. The headline scales from 38px to 68px with a 17ch width; section headings scale from 28px to 36px. Narrative copy is 18px with 1.85 leading, reducing to 17px on small screens.
 
 ## Layout
 
-A centered opening (960px maximum), terminal artwork (760px), and introduction (660px) lead into a 720px narrative. Sections cover the story, John’s portrait and biography, outcomes, schedule, preparation, and native FAQ. At 640px and below, padding tightens, the instructor stacks, and schedule labels move above values.
+A centered opening (960px maximum) and introduction (660px) lead into a 720px narrative. Sections cover the story, John’s portrait and biography, outcomes, schedule, preparation, and native FAQ. At 640px and below, padding tightens, the instructor stacks, and schedule labels move above values.
 
 ## Elevation & Depth
 
-The terminal alone uses a diffuse shadow (`0 20px 65px #0004`) and outlined lettering. The narrative relies on whitespace; instructor and schedule regions use borders.
+The opening and narrative rely on whitespace; instructor and schedule regions use borders.
 
 ## Shapes
 
-Corners are 12px on the terminal, 8px on the details link, and 16px on the schedule panel. Instructor portraits and window dots are circular.
+Corners are 8px on the details link and 16px on the schedule panel. Instructor portraits are circular.
 
 ## Components
 
@@ -39,4 +38,4 @@ The coral “See workshop details” anchor leads to the schedule. The details p
 
 ## Do's and Don'ts
 
-Keep this composition scoped to Workshops; inherit app text, border, and focus roles. Preserve explicit draft and registration states. Do not turn the terminal/coral treatment into global app rules or fabricate customer proof.
+Keep this composition scoped to Workshops; inherit app text, border, and focus roles. Preserve explicit draft and registration states. Do not turn the coral treatment into global app rules or fabricate customer proof.
