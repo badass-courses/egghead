@@ -19,14 +19,14 @@ import {
 } from "../../src/lib/workshops/mysql-store";
 
 it.scoped(
-  "native MySQL persists drafts, pages owners, preserves extra fields, and rejects concurrent revision writes",
+  "native MySQL persists, revises, and publishes Workshops with linked offers",
   () =>
     Effect.gen(function* () {
       const databaseUrl = process.env["WORKSHOP_TEST_DATABASE_URL"];
       if (!databaseUrl)
         throw new Error("Set WORKSHOP_TEST_DATABASE_URL to an isolated local test database");
       assertLocalWorkshopRuntime(databaseUrl);
-      const prefix = `workshoptest_${crypto.randomUUID().replaceAll("-", "")}`;
+      const prefix = `wt_${crypto.randomUUID().replaceAll("-", "")}`;
       const table = `\`${prefix}_ContentResource\``;
       const fixture = yield* Effect.acquireRelease(
         Effect.promise(() => mysql.createConnection(databaseUrl)),
@@ -158,9 +158,9 @@ it.scoped(
       const preview = yield* previewPublishWorkshop.run(publishInput).pipe(Effect.provide(services));
       expect(preview.fields.state).toBe("published");
       expect((yield* getWorkshop.run({id: created.id}).pipe(Effect.provide(services))).fields.state).toBe("draft");
-      yield* Effect.promise(() => fixture.execute(`UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', false)`));
+      yield* Effect.promise(() => fixture.execute(`UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', CAST('false' AS JSON))`));
       expect((yield* Effect.flip(publishWorkshop.run(publishInput).pipe(Effect.provide(services)))).code).toBe("InvalidWorkshop");
-      yield* Effect.promise(() => fixture.execute(`UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', true)`));
+      yield* Effect.promise(() => fixture.execute(`UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', CAST('true' AS JSON))`));
       const published = yield* publishWorkshop.run(publishInput).pipe(Effect.provide(services));
       expect(published.fields.workshopRevision).toBe(3);
       expect(published.fields.offer).toEqual({ productId: "local-offer", priceId: "local-price" });
