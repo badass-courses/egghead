@@ -50,3 +50,20 @@ The native suite also seeds synthetic, disposable device/user/role tables and ve
 ## Follow-on adoption
 
 PR 29 can project this same contract/handler registry through its MCP transport after merging or rebasing. Its legacy sale tools remain separate until the native Product/pricing, checkout, fulfillment, event conversion, and reader cutover work is approved for the appropriate phase. The detailed migration plan remains the guide for that work. This PR makes the native draft-management boundary reviewable without transferring production or commerce ownership.
+
+
+## Create in chat, view in Egghead
+
+A chat with access to the local MCP endpoint can preview and create a Workshop, then link to the Egghead web app at `/local/workshops/<workshop-id>`. The index at `/local/workshops` lists the same actor's drafts with bounded cursor pagination. Refresh either page after changes in chat.
+
+Run the builder MCP server and the web dev server. Configure these server-only values in the web app's ignored `.env.local`:
+
+```dotenv
+EGGHEAD_RUNTIME=local
+WORKSHOP_MCP_URL=http://127.0.0.1:3010/api/workshop-mcp
+WORKSHOP_MCP_TOKEN=<local-device-token>
+```
+
+The preview is available only with `NODE_ENV=development`, `EGGHEAD_RUNTIME=local`, a loopback Workshop endpoint, and a configured device token. Beta and production return 404. The token stays on the server; the browser receives rendered Workshop content. Reads use the existing authenticated MCP capabilities and shared contracts. This adds no browser write endpoint or production content reader. `pnpm workshops:preview:contract` checks the runtime and endpoint restrictions.
+
+This local preview does not make a localhost MCP endpoint reachable from the hosted ChatGPT connector service. Use a chat with local tool access, such as the Codex session running the dev servers.

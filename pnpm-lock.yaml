@@ -505,6 +505,9 @@ importers:
       '@coursebuilder/utils':
         specifier: 1.1.6
         version: 1.1.6(@babel/runtime@7.29.7)(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.1))(express@5.3.0)(hono@4.13.13)(next@16.2.5(@opentelemetry/api@1.9.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(typescript@5.9.3)(ws@8.20.1)
+      '@egghead/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@egghead/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -517,6 +520,9 @@ importers:
       drizzle-orm:
         specifier: 0.36.0
         version: 0.36.0(@cloudflare/workers-types@4.20240320.1)(@opentelemetry/api@1.9.1)(@planetscale/database@1.19.0)(@types/pg@8.15.6)(@types/react@19.2.7)(mysql2@3.22.5(@types/node@20.19.42))(pg@8.21.0)(react@19.2.3)
+      effect:
+        specifier: 3.11.5
+        version: 3.11.5
       inngest:
         specifier: 3.54.2
         version: 3.54.2(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.1))(express@5.3.0)(hono@4.13.13)(next@16.2.5(@opentelemetry/api@1.9.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(typescript@5.9.3)(zod@4.4.3)

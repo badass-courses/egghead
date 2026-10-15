@@ -31,7 +31,8 @@
     "coursebuilder:v3:smoke": "node --import tsx scripts/coursebuilder-v3-smoke.ts",
     "membership:setup": "EGGHEAD_LOCAL_MEMBERSHIP=true node --env-file=apps/web/.env --import tsx scripts/local-membership-setup.ts",
     "membership:dev": "EGGHEAD_LOCAL_MEMBERSHIP=true pnpm --filter @egghead/web dev --hostname 127.0.0.1",
-    "workshops:test": "pnpm --filter @egghead/builder typecheck:workshops && pnpm --filter @egghead/core test && pnpm --filter @egghead/builder test"
+    "workshops:test": "pnpm --filter @egghead/builder typecheck:workshops && pnpm --filter @egghead/core test && pnpm --filter @egghead/builder test && pnpm workshops:preview:contract",
+    "workshops:preview:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/workshop-preview-contract.ts"
   },
   "dependencies": {
     "@coursebuilder/adapter-drizzle": "3.1.3",
