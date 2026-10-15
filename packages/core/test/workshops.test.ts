@@ -80,6 +80,51 @@ function fixture({ approved = true, owner = "instructor", canCreate = true } = {
 }
 
 describe("Workshop capability behavior", () => {
+  it.effect(
+    "landing-page copy survives creation and revision, with invalid content rejected",
+    () => {
+      const test = fixture();
+      const landingPage = {
+        bannerText: "BUILD SOFTWARE",
+        headline: "Build a workflow you can repeat.",
+        introduction: "A day of practical development.",
+        instructor: {
+          name: "Local Instructor",
+          role: "Developer",
+          biography: "Learn by building.",
+        },
+        sections: [
+          { heading: "Start with a task", body: "Work through a real example.", bullets: [] },
+        ],
+        takeaways: ["A repeatable workflow."],
+        questions: [],
+      };
+      return Effect.gen(function* () {
+        const created = yield* createWorkshop.run({ ...input, landingPage });
+        expect(created.fields.landingPage?.headline).toBe("Build a workflow you can repeat.");
+        const revised = yield* updateWorkshop.run({
+          id: created.id,
+          expectedRevision: 1,
+          changes: {
+            landingPage: { ...landingPage, headline: "Keep building on what you learn." },
+          },
+        });
+        expect(revised.fields.landingPage?.headline).toBe("Keep building on what you learn.");
+        expect(revised.fields.landingPage?.instructor.name).toBe("Local Instructor");
+        expect(revised.fields.startsAt).toBe("2026-11-02T16:00:00.000Z");
+        const failure = yield* Effect.flip(
+          updateWorkshop.run({
+            id: created.id,
+            expectedRevision: 2,
+            changes: { landingPage: { ...landingPage, sections: [] } },
+          }),
+        );
+        expect(failure.code).toBe("InvalidInput");
+        expect(test.writes()).toBe(2);
+      }).pipe(Effect.provide(test.services));
+    },
+  );
+
   it.effect("preview performs no writes and confirmed creation returns native draft fields", () => {
     const test = fixture();
     return Effect.gen(function* () {

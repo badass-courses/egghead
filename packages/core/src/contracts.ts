@@ -20,6 +20,33 @@ export class WorkshopFailure extends Schema.TaggedError<WorkshopFailure>()("Work
   message: Schema.String,
 }) {}
 
+export const WorkshopLandingPage = Schema.Struct({
+  bannerText: boundedText(2, 60),
+  headline: boundedText(2, 160),
+  introduction: boundedText(2, 1500),
+  instructor: Schema.Struct({
+    name: boundedText(2, 100),
+    role: boundedText(2, 160),
+    biography: boundedText(2, 2000),
+    imageUrl: Schema.optionalWith(boundedText(1, 1000).pipe(Schema.pattern(/^https:\/\/[^\s]+$/)), {
+      exact: true,
+    }),
+  }),
+  sections: Schema.Array(
+    Schema.Struct({
+      heading: boundedText(2, 160),
+      body: boundedText(2, 3000),
+      bullets: Schema.Array(boundedText(2, 500)).pipe(Schema.maxItems(8)),
+    }),
+  ).pipe(Schema.minItems(1), Schema.maxItems(8)),
+  takeaways: Schema.Array(boundedText(2, 500)).pipe(Schema.minItems(1), Schema.maxItems(8)),
+  questions: Schema.Array(
+    Schema.Struct({ question: boundedText(2, 160), answer: boundedText(2, 1500) }),
+  ).pipe(Schema.maxItems(8)),
+});
+
+const landingPage = Schema.optionalWith(WorkshopLandingPage, { exact: true });
+
 export const WorkshopFields = Schema.Struct({
   title: boundedText(2, 90),
   slug: boundedText(1, 160),
@@ -28,6 +55,7 @@ export const WorkshopFields = Schema.Struct({
   endsAt: instant,
   timezone: boundedText(1, 100),
   attendeeInstructions: boundedText(0, 10000),
+  landingPage,
   state: Schema.Literal("draft"),
   visibility: Schema.Literal("unlisted"),
   workshopRevision: revision,
@@ -42,6 +70,7 @@ export const Workshop = Schema.Struct({
 export type Workshop = typeof Workshop.Type;
 
 export const WorkshopChanges = Schema.Struct({
+  landingPage,
   title: Schema.optionalWith(boundedText(2, 90), { exact: true }),
   description: Schema.optionalWith(boundedText(0, 500), { exact: true }),
   startsAt: Schema.optionalWith(instant, { exact: true }),
@@ -51,6 +80,7 @@ export const WorkshopChanges = Schema.Struct({
 });
 
 export const CreateWorkshopInput = Schema.Struct({
+  landingPage,
   requestId: Schema.UUID,
   title: boundedText(2, 90),
   description: boundedText(0, 500),

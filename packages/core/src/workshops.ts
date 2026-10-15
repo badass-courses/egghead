@@ -107,6 +107,7 @@ const prepareCreate = (input: typeof CreateWorkshopInput.Type) =>
         endsAt: input.endsAt,
         timezone: input.timezone,
         attendeeInstructions: input.attendeeInstructions,
+        ...(input.landingPage ? { landingPage: input.landingPage } : {}),
         state: "draft",
         visibility: "unlisted",
         workshopRevision: 1,

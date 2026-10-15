@@ -67,3 +67,10 @@ WORKSHOP_MCP_TOKEN=<local-device-token>
 The preview is available only with `NODE_ENV=development`, `EGGHEAD_RUNTIME=local`, a loopback Workshop endpoint, and a configured device token. Beta and production return 404. The token stays on the server; the browser receives rendered Workshop content. Reads use the existing authenticated MCP capabilities and shared contracts. This adds no browser write endpoint or production content reader. `pnpm workshops:preview:contract` checks the runtime and endpoint restrictions.
 
 This local preview does not make a localhost MCP endpoint reachable from the hosted ChatGPT connector service. Use a chat with local tool access, such as the Codex session running the dev servers.
+
+
+### Landing-page content
+
+Optional `fields.landingPage` holds the banner lettering, headline, introduction, instructor profile, long-form sections, takeaways, and FAQs. Both create and update inputs accept the same bounded schema. Existing Workshops without landing-page copy still render their title, description, schedule, and attendee instructions. New copy follows the same preview, approval, ownership, and revision checks as schedule edits; the MySQL adapter needs no additional tables or columns.
+
+The local draft route renders a full Workshop landing page in the Egghead app shell, following the structure of the Claude Code workshop reference. Its details link scrolls to the schedule. Native FAQ disclosures work without client JavaScript. Registration is explicitly unopened; this preview adds no signup, coupon, payment, or publishing behavior.

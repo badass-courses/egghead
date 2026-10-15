@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-15T00:00:00Z",
+  "title": "Design System: egghead Workshop landing page",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "terminal",
+        "value": "0 20px 65px #0004",
+        "purpose": "Depth beneath terminal artwork."
+      }
+    ],
+    "motion": [
+      {
+        "name": "details-link-background",
+        "value": "background 0.15s",
+        "purpose": "Hover transition removed for reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "small",
+        "value": "640px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Workshop details link",
+      "kind": "button",
+      "description": "In-page anchor to the schedule.",
+      "html": "<a class=\"ds-workshop-details\" href=\"#workshop-details\">See workshop details \u2193</a>",
+      "css": ".ds-workshop-details { display:inline-flex; gap:20px; padding:16px 28px; border-radius:8px; font-family:var(--font-sans); font-size:17px; font-weight:800; text-decoration:none; color:#10110f; background:#d8836b; transition:background 0.15s; } .ds-workshop-details:hover { background:#eaa28d; } .ds-workshop-details:focus-visible { outline:2px solid var(--color-ring); outline-offset:6px; } @media (prefers-reduced-motion:reduce) { .ds-workshop-details { transition:none; } }"
+    }
+  ]
+}
