@@ -1,4 +1,4 @@
-import { Context, Effect } from "effect";
+import { Context, Effect, Schema } from "effect";
 import { implement } from "./capability";
 import {
   createWorkshopContract,
@@ -7,8 +7,11 @@ import {
   previewCreateWorkshopContract,
   previewUpdateWorkshopContract,
   updateWorkshopContract,
+  publishWorkshopContract,
+  previewPublishWorkshopContract,
+  type PublishedWorkshop,
   WorkshopFailure,
-  type Workshop,
+  Workshop,
   type WorkshopPage,
   type CreateWorkshopInput,
 } from "./contracts";
@@ -37,6 +40,15 @@ export class WorkshopStore extends Context.Tag("egghead/WorkshopStore")<
       workshop: Workshop,
       expectedRevision: number,
     ) => Effect.Effect<Workshop, WorkshopFailure>;
+    readonly canPublish: (input: {
+      workshopId: string;
+      productId: string;
+      priceId: string;
+    }) => Effect.Effect<boolean, WorkshopFailure>;
+    readonly publish: (
+      workshop: PublishedWorkshop,
+      expectedRevision: number,
+    ) => Effect.Effect<PublishedWorkshop, WorkshopFailure>;
   }
 >() {}
 
@@ -46,7 +58,9 @@ function validCalendarDate(value: string) {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 19) === localComponents;
 }
 
-function validateWorkshop(workshop: Workshop) {
+function validateWorkshop(
+  workshop: Omit<Workshop, "fields"> & { fields: Workshop["fields"] },
+): Effect.Effect<Workshop, WorkshopFailure> {
   const { startsAt, endsAt, timezone, title } = workshop.fields;
   const start = Date.parse(startsAt);
   const end = Date.parse(endsAt);
@@ -75,7 +89,7 @@ function validateWorkshop(workshop: Workshop) {
       }),
     );
   }
-  return Effect.succeed({
+  return Schema.decodeUnknown(Workshop)({
     ...workshop,
     fields: {
       ...workshop.fields,
@@ -83,7 +97,11 @@ function validateWorkshop(workshop: Workshop) {
       startsAt: new Date(start).toISOString(),
       endsAt: new Date(end).toISOString(),
     },
-  });
+  }).pipe(
+    Effect.mapError(
+      () => new WorkshopFailure({ code: "InvalidWorkshop", message: "Invalid Workshop state" }),
+    ),
+  );
 }
 
 const prepareCreate = (input: typeof CreateWorkshopInput.Type) =>
@@ -182,6 +200,53 @@ export const updateWorkshop = implement(updateWorkshopContract, (input) =>
   }),
 );
 
+const preparePublish = (input: typeof publishWorkshopContract.input.Type) =>
+  Effect.gen(function* () {
+    const current = yield* loadManagedWorkshop(input.id);
+    if (
+      current.fields.state !== "draft" ||
+      current.fields.workshopRevision !== input.expectedRevision
+    )
+      return yield* Effect.fail(
+        new WorkshopFailure({
+          code: "Conflict",
+          message: "Inspect the current draft before publishing",
+        }),
+      );
+    const store = yield* WorkshopStore;
+    if (
+      !(yield* store.canPublish({
+        workshopId: current.id,
+        productId: input.productId,
+        priceId: input.priceId,
+      }))
+    )
+      return yield* Effect.fail(
+        new WorkshopFailure({
+          code: "InvalidWorkshop",
+          message:
+            "Configure an active one-time Product and Price linked to this Workshop before publishing",
+        }),
+      );
+    return {
+      ...current,
+      fields: {
+        ...current.fields,
+        state: "published" as const,
+        visibility: "public" as const,
+        offer: { productId: input.productId, priceId: input.priceId },
+        workshopRevision: current.fields.workshopRevision + 1,
+      },
+    };
+  });
+export const previewPublishWorkshop = implement(previewPublishWorkshopContract, preparePublish);
+export const publishWorkshop = implement(publishWorkshopContract, (input) =>
+  Effect.gen(function* () {
+    const workshop = yield* preparePublish(input);
+    return yield* (yield* WorkshopStore).publish(workshop, input.expectedRevision);
+  }),
+);
+
 export const capabilities = [
   listWorkshops,
   getWorkshop,
@@ -189,6 +254,8 @@ export const capabilities = [
   createWorkshop,
   previewUpdateWorkshop,
   updateWorkshop,
+  previewPublishWorkshop,
+  publishWorkshop,
 ] as const;
 
 export type WorkshopCapability = (typeof capabilities)[number];

@@ -1,12 +1,32 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Workshop } from "@egghead/core/contracts";
+import { randomUUID } from "node:crypto";
+import type { WorkshopPurchaseOffer } from "./catalog";
+import { startWorkshopCheckout } from "./checkout";
 
 import styles from "./landing-page.module.css";
 
-export function WorkshopLandingPage({ workshop }: { workshop: Workshop }) {
+export function WorkshopLandingPage({
+  workshop,
+  offer,
+  checkoutAvailable = false,
+  preview = true,
+}: {
+  workshop: Workshop;
+  offer?: WorkshopPurchaseOffer | null;
+  checkoutAvailable?: boolean;
+  preview?: boolean;
+}) {
   const { fields } = workshop;
   const landing = fields.landingPage;
+  const price = offer
+    ? new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: offer.currency,
+        maximumFractionDigits: 2,
+      }).format(offer.unitAmount) + " USD"
+    : null;
   const date = new Intl.DateTimeFormat("en-US", {
     dateStyle: "full",
     timeZone: fields.timezone,
@@ -21,10 +41,14 @@ export function WorkshopLandingPage({ workshop }: { workshop: Workshop }) {
   const end = clock.format(new Date(fields.endsAt));
   return (
     <main className={styles["page"]}>
-      <aside className={styles["preview"]}>
-        <span>Draft preview · Unlisted</span>
-        <Link href="/local/workshops">All workshop drafts</Link>
-      </aside>
+      {preview ? (
+        <aside className={styles["preview"]}>
+          <span>
+            {fields.state === "draft" ? "Draft preview · Unlisted" : "Published workshop preview"}
+          </span>
+          <Link href="/local/workshops">All workshop drafts</Link>
+        </aside>
+      ) : null}
 
       <header className={styles["hero"]}>
         <div aria-hidden="true" className={styles["terminal"]}>
@@ -125,11 +149,35 @@ export function WorkshopLandingPage({ workshop }: { workshop: Workshop }) {
             </div>
           </dl>
           <div className={styles["registration"]}>
-            <h3>Registration opens soon</h3>
-            <p>
-              This workshop is still a draft. Registration details will appear here when they’re
-              ready.
-            </p>
+            {price ? (
+              <p className={styles["price"]}>
+                {price}
+                <span>One-time workshop ticket</span>
+              </p>
+            ) : null}
+            {fields.state === "published" && checkoutAvailable && offer ? (
+              <form action={startWorkshopCheckout}>
+                <input name="workshopId" type="hidden" value={workshop.id} />
+                <input name="requestId" type="hidden" value={randomUUID()} />
+                <button className={styles["cta"]} type="submit">
+                  Buy your seat · {price}
+                </button>
+                <p>Secure payment through Stripe.</p>
+              </form>
+            ) : (
+              <>
+                <h3>
+                  {fields.state === "draft"
+                    ? "Registration opens when published"
+                    : "Registration is unavailable"}
+                </h3>
+                <p>
+                  {fields.state === "draft"
+                    ? "This workshop is still a draft. Registration will open when it is published."
+                    : "Registration is currently closed. Please check back for availability."}
+                </p>
+              </>
+            )}
           </div>
         </section>
 

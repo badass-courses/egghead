@@ -10,6 +10,8 @@ import {
   previewCreateWorkshop,
   previewUpdateWorkshop,
   updateWorkshop,
+  previewPublishWorkshop,
+  publishWorkshop,
   WorkshopActor,
   WorkshopStore,
 } from "../src/workshops";
@@ -24,7 +26,12 @@ const input = {
   attendeeInstructions: "",
 };
 
-function fixture({ approved = true, owner = "instructor", canCreate = true } = {}) {
+function fixture({
+  approved = true,
+  owner = "instructor",
+  canCreate = true,
+  offerReady = true,
+} = {}) {
   const rows = new Map<string, Workshop>();
   let writes = 0;
   const services = Layer.mergeAll(
@@ -44,6 +51,17 @@ function fixture({ approved = true, owner = "instructor", canCreate = true } = {
     }),
     Layer.succeed(WorkshopStore, {
       get: (id) => Effect.succeed(rows.get(id) ?? null),
+      canPublish: () => Effect.succeed(offerReady),
+      publish: (workshop, expectedRevision) =>
+        Effect.suspend(() => {
+          if (rows.get(workshop.id)?.fields.workshopRevision !== expectedRevision)
+            return Effect.fail(
+              new WorkshopFailure({ code: "Conflict", message: "Stale publication" }),
+            );
+          writes++;
+          rows.set(workshop.id, workshop);
+          return Effect.succeed(workshop);
+        }),
       list: ({ limit, cursor, ownerId }) => {
         const matching = [...rows.values()]
           .filter(
@@ -80,6 +98,51 @@ function fixture({ approved = true, owner = "instructor", canCreate = true } = {
 }
 
 describe("Workshop capability behavior", () => {
+  it.effect(
+    "publication requires a prepared offer, approval, and the current draft revision",
+    () => {
+      const test = fixture();
+      const unavailable = fixture({ offerReady: false });
+      return Effect.gen(function* () {
+        const draft = yield* createWorkshop.run(input);
+        const publication = {
+          id: draft.id,
+          expectedRevision: 1,
+          productId: "workshop-product",
+          priceId: "workshop-price",
+        };
+        const preview = yield* previewPublishWorkshop.run(publication);
+        expect(preview.fields.state).toBe("published");
+        expect(test.writes()).toBe(1);
+        const denied = yield* Effect.flip(
+          publishWorkshop.run(publication).pipe(
+            Effect.provideService(Approval, {
+              require: () =>
+                Effect.fail(
+                  new CapabilityFailure({ code: "ApprovalDenied", message: "Approval required" }),
+                ),
+            }),
+          ),
+        );
+        expect(denied.code).toBe("ApprovalDenied");
+        const published = yield* publishWorkshop.run(publication);
+        expect(published.fields.visibility).toBe("public");
+        expect(published.fields.offer).toEqual({
+          productId: "workshop-product",
+          priceId: "workshop-price",
+        });
+        expect(published.fields.workshopRevision).toBe(2);
+        expect((yield* Effect.flip(publishWorkshop.run(publication))).code).toBe("Conflict");
+        yield* createWorkshop.run(input).pipe(Effect.provide(unavailable.services));
+        const blocked = yield* Effect.flip(
+          publishWorkshop.run(publication).pipe(Effect.provide(unavailable.services)),
+        );
+        expect(blocked.code).toBe("InvalidWorkshop");
+        expect(unavailable.writes()).toBe(1);
+      }).pipe(Effect.provide(test.services));
+    },
+  );
+
   it.effect(
     "landing-page copy survives creation and revision, with invalid content rejected",
     () => {
@@ -234,6 +297,8 @@ describe("Workshop capability behavior", () => {
       "create_workshop",
       "preview_update_workshop",
       "update_workshop",
+      "preview_publish_workshop",
+      "publish_workshop",
     ]);
     expect(createWorkshop.contract.needsApproval).toBe(true);
     expect(createWorkshop.contract.annotations.idempotent).toBe(false);

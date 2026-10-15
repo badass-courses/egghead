@@ -20,6 +20,8 @@ it.effect(
       }),
       Layer.succeed(WorkshopStore, {
         get: () => Effect.succeed(null),
+        canPublish: () => Effect.succeed(false),
+        publish: () => Effect.fail(new WorkshopFailure({code:"NotFound",message:"Workshop not found"})),
         list: () => Effect.succeed({ workshops: [], nextCursor: null }),
         create: (workshop) =>
           Effect.sync(() => {

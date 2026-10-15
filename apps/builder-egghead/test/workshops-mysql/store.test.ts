@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
+import { Workshop } from "@egghead/core/contracts";
 import mysql from "mysql2/promise";
 import { Approval } from "@egghead/core/capability";
 import {
@@ -7,6 +8,8 @@ import {
   getWorkshop,
   listWorkshops,
   updateWorkshop,
+  previewPublishWorkshop,
+  publishWorkshop,
   WorkshopActor,
   WorkshopStore,
 } from "@egghead/core/workshops";
@@ -92,10 +95,10 @@ it.scoped(
           [created.id],
         ),
       );
-      const revised = {
+      const revised = yield* Schema.decodeUnknown(Workshop)({
         ...created,
         fields: { ...created.fields, title: "Concurrent revision", workshopRevision: 2 },
-      };
+      });
       // Two independent connections both try the same expected revision. The UPDATE predicate owns concurrency.
       const results = yield* Effect.all(
         [0, 1].map(() =>
@@ -129,6 +132,40 @@ it.scoped(
       );
       expect(plan[0]?.["key"]).toBe("PRIMARY");
       expect(plan[0]?.["type"]).toBe("const");
+      for (const [name, columns] of [
+        ["Product", "id varchar(191) PRIMARY KEY, status int, type varchar(191), quantityAvailable int, fields json"],
+        ["Price", "id varchar(191) PRIMARY KEY, productId varchar(191), status int, unitAmount decimal(10,2), fields json"],
+        ["ContentResourceProduct", "productId varchar(191), resourceId varchar(255), deletedAt timestamp(3) NULL, PRIMARY KEY(productId, resourceId)"],
+      ]) {
+        yield* Effect.acquireRelease(
+          Effect.promise(() => fixture.execute(`CREATE TABLE \`${prefix}_${name}\` (${columns})`)),
+          () => Effect.promise(() => fixture.execute(`DROP TABLE \`${prefix}_${name}\``)),
+        );
+      }
+      const publishInput = { id: created.id, expectedRevision: 2, productId: "local-offer", priceId: "local-price" };
+      const unavailable = yield* Effect.flip(previewPublishWorkshop.run(publishInput).pipe(Effect.provide(services)));
+      expect(unavailable.code).toBe("InvalidWorkshop");
+      yield* Effect.promise(() => fixture.execute(
+        `INSERT INTO \`${prefix}_Product\` VALUES ('local-offer', 1, 'live', -1, '{"state":"published"}')`,
+      ));
+      yield* Effect.promise(() => fixture.execute(
+        `INSERT INTO \`${prefix}_Price\` VALUES ('local-price', 'local-offer', 1, 375, ?)`,
+        [JSON.stringify({ stripe: { type: "one_time", active: true, supported: true, currency: "usd" }, offer: { offered: true } })],
+      ));
+      yield* Effect.promise(() => fixture.execute(
+        `INSERT INTO \`${prefix}_ContentResourceProduct\` VALUES ('local-offer', ?, NULL)`, [created.id],
+      ));
+      const preview = yield* previewPublishWorkshop.run(publishInput).pipe(Effect.provide(services));
+      expect(preview.fields.state).toBe("published");
+      expect((yield* getWorkshop.run({id: created.id}).pipe(Effect.provide(services))).fields.state).toBe("draft");
+      yield* Effect.promise(() => fixture.execute(`UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', false)`));
+      expect((yield* Effect.flip(publishWorkshop.run(publishInput).pipe(Effect.provide(services)))).code).toBe("InvalidWorkshop");
+      yield* Effect.promise(() => fixture.execute(`UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', true)`));
+      const published = yield* publishWorkshop.run(publishInput).pipe(Effect.provide(services));
+      expect(published.fields.workshopRevision).toBe(3);
+      expect(published.fields.offer).toEqual({ productId: "local-offer", priceId: "local-price" });
+      expect((yield* getWorkshop.run({id: created.id}).pipe(Effect.provide(services))).fields.state).toBe("published");
+
     }),
   20000,
 );

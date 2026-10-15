@@ -30,7 +30,9 @@ async function WorkshopDrafts({ searchParams }: { searchParams: Promise<{ cursor
           {page.workshops.map((workshop) => (
             <li key={workshop.id}>
               <Link href={`/local/workshops/${encodeURIComponent(workshop.id)}`}>
-                <span className="egghead-search-type">Draft · Unlisted</span>
+                <span className="egghead-search-type">
+                  {workshop.fields.state === "draft" ? "Draft · Unlisted" : "Published · Public"}
+                </span>
                 <span className="egghead-search-title">{workshop.fields.title}</span>
                 <span className="egghead-search-description">{workshop.fields.description}</span>
               </Link>

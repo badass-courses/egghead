@@ -1,6 +1,6 @@
 # Native Workshop capabilities
 
-This sibling to [PR 29](https://github.com/badass-courses/egghead/pull/29) introduces native CourseBuilder draft Workshops in local development. It provides create, inspect, list, and revise operations without requiring feature flags, coupons, Products, or Stripe objects. Preview operations return the same candidate Workshop as their corresponding mutation, without writing it.
+This sibling to [PR 29](https://github.com/badass-courses/egghead/pull/29) introduces native CourseBuilder Workshops in local development. It provides create, inspect, list, and revise operations without requiring feature flags, coupons, Products, or Stripe objects. Preview operations return the same candidate Workshop as their corresponding mutation, without writing it.
 
 ## One contract and one handler
 
@@ -25,17 +25,17 @@ The local adapter uses mysql2 for authentication and Workshop storage, rather th
 
 Creation values are `requestId` (UUID), `title`, `description`, `startsAt`, `endsAt`, `timezone`, and `attendeeInstructions`. Optional copy can be supplied as an empty string. Dates are ISO timestamps with an explicit offset; storage normalizes them to UTC. The Workshop timezone must be recognized by Intl. Slug initially equals the stable native ID `workshop~<requestId>`, so changing a title cannot change identity or an existing URL.
 
-Preview first, show the candidate to the operator, then confirm using the same request ID or expected revision. A duplicate creation ID returns Conflict; write annotations deliberately make no retry-idempotency promise. Inspect that ID after an uncertain creation result rather than retrying with a new UUID. Updates increment `fields.workshopRevision`; stale edits must be reloaded and previewed again. Neither write tool can publish content or open registration.
+Preview first, show the candidate to the operator, then confirm using the same request ID or expected revision. A duplicate creation ID returns Conflict; write annotations deliberately make no retry-idempotency promise. Inspect that ID after an uncertain creation result rather than retrying with a new UUID. Updates increment `fields.workshopRevision`; stale edits must be reloaded and previewed again. Create and update preserve the current publication state. Publishing uses the separate preview/publish pair below.
 
 Unknown input fields are rejected, including `flagKey`, `eggheadSale`, provider identifiers, and client-supplied actor IDs. Schedule validation merges patch fields with the current Workshop, preventing an update to only startsAt from invalidating the unchanged end. Invalid calendar dates, invalid zones, and empty patches fail before writes. Unauthorized inspect operations return NotFound to avoid exposing another contributor's draft.
 
 ## Native persistence and query budget
 
-The system of record is the published CourseBuilder `ContentResource` table, with `type = 'workshop'`, `state = 'draft'`, `visibility = 'unlisted'`, and a revision in fields. This PR adds no SQL table, migration, provider resource, or commerce writer. Existing native Workshops without this draft contract are not automatically adopted, and no event is retyped.
+The system of record is the published CourseBuilder `ContentResource` table, with `type = 'workshop'` and a revision in fields. Drafts are unlisted; published Workshops are public and require native Product and Price references. No SQL tables or migrations are added. Existing native Workshops without this draft contract are not automatically adopted, and no event is retyped.
 
-The application writes through WorkshopStore. Create uses an existence read, one atomic INSERT, and a re-read. Revision uses a current-row read, one atomic UPDATE conditioned on ID, creator, type, draft/unlisted state, and expected revision, then a re-read. The update merges JSON fields so unrelated native metadata is preserved. Provider work and Inngest delivery are absent from these transactions.
+The application writes through WorkshopStore. Create uses an existence read, one atomic INSERT, and a re-read. Revision uses a current-row read, one atomic UPDATE conditioned on ID, creator, type, draft/unlisted state, and expected revision, then a re-read. The update merges JSON fields so unrelated native metadata is preserved. Provider work and Inngest delivery are absent from these Workshop transactions.
 
-The list operation performs one statement, independent of page size, fetching at most 51 rows with keyset pagination ordered by ID. Contributors are filtered to their owner ID; admins can list all drafts. Published schema indexes available to the list are `type_idx`, `createdById_idx`, and the primary key; point reads and updates use PRIMARY. The local integration suite verifies a point read's EXPLAIN result is `const` on PRIMARY. Production-scale list examined-row budgets remain unmeasured and are a release gate, not a guarantee supplied by LIMIT. Each capability invocation uses one scoped storage connection; concurrent client requests are not globally throttled in this local-only slice.
+The list operation performs one statement, independent of page size, fetching at most 51 rows with keyset pagination ordered by ID. Contributors are filtered to their owner ID; admins can list all managed Workshops. Published schema indexes available to the list are `type_idx`, `createdById_idx`, and the primary key; point reads and updates use PRIMARY. The local integration suite verifies a point read's EXPLAIN result is `const` on PRIMARY. Production-scale list examined-row budgets remain unmeasured and are a release gate, not a guarantee supplied by LIMIT. Each capability invocation uses one scoped storage connection; concurrent client requests are not globally throttled in this local-only slice.
 
 Returned fields are explicitly decoded; malformed native rows produce InvalidWorkshop instead of silently disappearing. Storage errors are sanitized to StoreUnavailable and are not treated as successful writes. Runtime safety failures are RuntimeBlocked. Mutations do not retire Products, unlink purchases, or rewrite resource relationships.
 
@@ -49,7 +49,7 @@ The native suite also seeds synthetic, disposable device/user/role tables and ve
 
 ## Follow-on adoption
 
-PR 29 can project this same contract/handler registry through its MCP transport after merging or rebasing. Its legacy sale tools remain separate until the native Product/pricing, checkout, fulfillment, event conversion, and reader cutover work is approved for the appropriate phase. The detailed migration plan remains the guide for that work. This PR makes the native draft-management boundary reviewable without transferring production or commerce ownership.
+PR 29 can reuse this contract/handler registry after merging or rebasing. Legacy sale tools remain separate. Production purchase fulfillment and production builder writes remain disabled in this local implementation.
 
 
 ## Create in chat, view in Egghead
@@ -73,4 +73,19 @@ This local preview does not make a localhost MCP endpoint reachable from the hos
 
 Optional `fields.landingPage` holds the banner lettering, headline, introduction, instructor profile, long-form sections, takeaways, and FAQs. Both create and update inputs accept the same bounded schema. Existing Workshops without landing-page copy still render their title, description, schedule, and attendee instructions. New copy follows the same preview, approval, ownership, and revision checks as schedule edits; the MySQL adapter needs no additional tables or columns.
 
-The local draft route renders a full Workshop landing page in the Egghead app shell, following the structure of the Claude Code workshop reference. Its details link scrolls to the schedule. Native FAQ disclosures work without client JavaScript. Registration is explicitly unopened; this preview adds no signup, coupon, payment, or publishing behavior.
+The local draft route renders a full Workshop landing page in the Egghead app shell, following the structure of the Claude Code workshop reference. Its details link scrolls to the schedule. Native FAQ disclosures work without client JavaScript. The draft preview shows a configured native offer, but registration stays closed until publication.
+
+
+## Publish and test a purchase locally
+
+`preview_publish_workshop` takes `id`, `expectedRevision`, `productId`, and `priceId`. `publish_workshop` takes the same values plus transport `confirm: true`. Ownership, approval, and revision checks apply. Publication requires a linked active unlimited-seat live Product and an offered, supported, active one-time Price. The Workshop stores native offer references and advances to published/public in one compare-and-set update. Inspect after an uncertain outcome; publishing is not retry-idempotent.
+
+For this local workflow, `scripts/local-workshop-offer.ts <workshop-id>` prepares a $375 USD unlimited-seat offer in Stripe test mode and the isolated native catalog. It requires local development, a permitted local database, and a test Stripe key. It does not publish the Workshop. Provider identifiers stay in operational storage, not fixtures or documentation.
+
+Published Workshops render at `/workshop/<workshop-id>`. Drafts return 404 there and remain available through the authenticated local preview. A future published Workshop with a valid offer shows a purchase form. The web action reloads publication and exact offer references, checks the server origin, and calls the published CourseBuilder price resolver before creating a one-time Stripe Checkout session. The generic CourseBuilder checkout route rejects Workshop products, preventing a draft checkout bypass. No coupons or feature flags are involved.
+
+**Purchasing and fulfillment are local sandbox features only.** Both require `NODE_ENV=development`, `EGGHEAD_RUNTIME=local`, the isolated local database, and a Stripe test key. Beta and production cannot create Workshop Checkout sessions or run the local purchase function. Production fulfillment ownership still requires resolution before release.
+
+Run a local Stripe listener forwarding signed checkout completion and asynchronous payment success events to `/api/coursebuilder/webhook/stripe`, plus an isolated Inngest dev instance connected to `/api/inngest`. The local function retrieves the actual paid test session, verifies its metadata and exact amount, then delegates purchase recording to the published CourseBuilder commerce workflow. Session-based idempotency covers event replay. The thanks page reports payment state; opening it never grants access.
+
+Publication adds one bounded linked Product/Price eligibility read before the existing revision write. Public reads select one Workshop by primary key and at most two linked offer rows; ambiguity closes checkout. The contract suite checks draft/past/invalid schedule rejection, sandbox runtime restrictions, exact paid amount, checkout origin, and idempotency scope. Provider delivery and full payment recording require the local Stripe/Inngest integration check; offline contracts alone do not prove them.

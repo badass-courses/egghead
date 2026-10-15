@@ -61,12 +61,27 @@ export const WorkshopFields = Schema.Struct({
   workshopRevision: revision,
 });
 
-export const Workshop = Schema.Struct({
+export const DraftWorkshop = Schema.Struct({
   id: boundedText(1, 200),
   type: Schema.Literal("workshop"),
   createdById: boundedText(1, 200),
   fields: WorkshopFields,
 });
+export const WorkshopOffer = Schema.Struct({
+  productId: boundedText(1, 191),
+  priceId: boundedText(1, 191),
+});
+export const PublishedWorkshop = Schema.Struct({
+  ...DraftWorkshop.fields,
+  fields: Schema.Struct({
+    ...WorkshopFields.fields,
+    state: Schema.Literal("published"),
+    visibility: Schema.Literal("public"),
+    offer: WorkshopOffer,
+  }),
+});
+export type PublishedWorkshop = typeof PublishedWorkshop.Type;
+export const Workshop = Schema.Union(DraftWorkshop, PublishedWorkshop);
 export type Workshop = typeof Workshop.Type;
 
 export const WorkshopChanges = Schema.Struct({
@@ -112,7 +127,7 @@ const common = { failure: WorkshopFailure };
 
 export const listWorkshopsContract = defineContract("list_workshops", {
   ...common,
-  description: "List native draft Workshops. The nextCursor continues a bounded page.",
+  description: "List native Workshops. The nextCursor continues a bounded page.",
   input: Schema.Struct({
     limit: Schema.Number.pipe(Schema.int(), Schema.between(1, 50)),
     cursor: Schema.optional(boundedText(1, 200)),
@@ -124,7 +139,7 @@ export const listWorkshopsContract = defineContract("list_workshops", {
 
 export const getWorkshopContract = defineContract("get_workshop", {
   ...common,
-  description: "Inspect a native draft Workshop by ID.",
+  description: "Inspect a native Workshop by ID.",
   input: Schema.Struct({ id: boundedText(1, 200) }),
   output: Workshop,
   annotations: readAnnotations,
@@ -165,6 +180,28 @@ export const updateWorkshopContract = defineContract("update_workshop", {
     "Revise a native draft Workshop after approval; rejects stale revisions and invalid schedules.",
   input: UpdateWorkshopInput,
   output: Workshop,
+  annotations: writeAnnotations,
+  needsApproval: true,
+});
+
+const PublishWorkshopInput = Schema.Struct({
+  id: boundedText(1, 200),
+  expectedRevision: revision,
+  ...WorkshopOffer.fields,
+});
+export const previewPublishWorkshopContract = defineContract("preview_publish_workshop", {
+  ...common,
+  description: "Preview publishing a Workshop with its configured one-time Product and Price.",
+  input: PublishWorkshopInput,
+  output: PublishedWorkshop,
+  annotations: readAnnotations,
+  needsApproval: false,
+});
+export const publishWorkshopContract = defineContract("publish_workshop", {
+  ...common,
+  description: "Publish a Workshop and enable its configured one-time purchase after approval.",
+  input: PublishWorkshopInput,
+  output: PublishedWorkshop,
   annotations: writeAnnotations,
   needsApproval: true,
 });

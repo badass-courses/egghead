@@ -309,3 +309,21 @@
     transition: none;
   }
 }
+
+.registration .price {
+  color: var(--color-foreground);
+  font-size: 36px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+.price span {
+  display: block;
+  margin-top: 12px;
+  color: var(--color-muted-foreground);
+  font-size: 15px;
+  font-weight: 500;
+}
+.registration form .cta {
+  margin: 0 0 16px;
+  cursor: pointer;
+}

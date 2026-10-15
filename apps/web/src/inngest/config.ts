@@ -1,4 +1,6 @@
 import { inngest } from "./client";
+import { stripeWorkshopLocalPurchase } from "./stripe-workshop-local";
+import { localWorkshopPurchasesEnabled } from "../workshops/checkout-contract";
 import {
   stripeCustomerSubscriptionUpdated,
   stripeSubscriptionCheckoutSessionComplete,
@@ -6,5 +8,9 @@ import {
 
 export const inngestConfig = {
   client: inngest,
-  functions: [stripeSubscriptionCheckoutSessionComplete, stripeCustomerSubscriptionUpdated],
+  functions: [
+    stripeSubscriptionCheckoutSessionComplete,
+    stripeCustomerSubscriptionUpdated,
+    ...(localWorkshopPurchasesEnabled() ? [stripeWorkshopLocalPurchase] : []),
+  ],
 };
