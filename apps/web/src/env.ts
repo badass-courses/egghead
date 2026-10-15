@@ -15,7 +15,9 @@ type EnvKey =
   | "SEND_EMAILS"
   | "STRIPE_SECRET_TOKEN"
   | "STRIPE_WEBHOOK_SECRET"
-  | "URL";
+  | "URL"
+  | "WORKSHOP_MCP_URL"
+  | "WORKSHOP_MCP_TOKEN";
 
 export function getEnv(name: EnvKey) {
   return process.env[name];

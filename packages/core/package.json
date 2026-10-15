@@ -1,0 +1,24 @@
+{
+  "name": "@egghead/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./src/contracts.ts",
+    "./capability": "./src/capability.ts",
+    "./workshops": "./src/workshops.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:tsgo": "tsgo --noEmit -p tsconfig.json",
+    "check": "pnpm typecheck && pnpm typecheck:tsgo",
+    "test": "vitest run",
+    "build": "pnpm typecheck"
+  },
+  "dependencies": {
+    "effect": "3.11.5"
+  },
+  "devDependencies": {
+    "@effect/vitest": "0.14.0",
+    "vitest": "2.1.9"
+  }
+}
