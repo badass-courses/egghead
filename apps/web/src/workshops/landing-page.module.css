@@ -1,270 +1,458 @@
 .page {
-  --workshop-accent: #d8836b;
-  padding: 0 24px 96px;
+  --gutter: clamp(1.25rem, 4vw, 2rem);
+  padding: 0 var(--gutter) clamp(4rem, 8vw, 6rem);
 }
 
 .preview {
-  max-width: 1120px;
-  margin: 24px auto 0;
+  max-width: 72rem;
+  margin: 1rem auto 0;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  column-gap: 1.5rem;
   color: var(--color-muted-foreground);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .preview a {
-  text-decoration: underline;
-  text-underline-offset: 4px;
-}
-.hero {
-  max-width: 960px;
-  margin: 64px auto 0;
-  text-align: center;
-}
-.hero h1 {
-  max-width: 17ch;
-  margin: 0 auto;
-  font-size: clamp(38px, 5.4vw, 68px);
-  font-weight: 850;
-  line-height: 1.08;
-  letter-spacing: -0.03em;
-  text-wrap: balance;
-}
-.introduction {
-  max-width: 660px;
-  margin: 28px auto 0;
-  font-size: 20px;
-  line-height: 1.7;
-  color: var(--color-muted-foreground);
-}
-.presenter {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 24px;
-  font-size: 17px;
+  min-height: 2.75rem;
 }
-.presenter img {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  object-fit: cover;
+
+.page a {
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 0.25em;
+  transition: text-decoration-color var(--duration-fast) var(--ease-out-quart);
 }
-.heroDate {
-  margin: 24px 0 0;
-  font-size: 15px;
-  color: var(--color-muted-foreground);
+
+.page a:hover {
+  text-decoration-color: currentColor;
 }
-.cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 20px;
-  justify-content: center;
-  margin-top: 28px;
-  padding: 16px 28px;
-  border-radius: 8px;
-  font-size: 17px;
-  font-weight: 800;
-  color: #10110f;
-  background: var(--workshop-accent);
-  transition: background 0.15s;
-}
-.cta:hover {
-  background: #eaa28d;
-}
-.story {
-  max-width: 720px;
-  margin: 96px auto 0;
-}
-.section {
-  margin: 0 0 72px;
-}
-.story h2 {
-  margin: 0 0 24px;
-  font-size: clamp(28px, 3vw, 36px);
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-  font-weight: 800;
-  text-wrap: balance;
-}
-.story p,
-.story li {
-  color: var(--color-muted-foreground);
-  font-size: 18px;
-  line-height: 1.85;
-}
-.story p {
-  margin: 0 0 24px;
-}
-.story ul {
-  margin: 24px 0 0;
-  padding-left: 24px;
-  list-style: disc;
-}
-.story li {
-  padding-left: 8px;
-  margin: 0 0 16px;
-}
-.story li::marker {
-  color: var(--workshop-accent);
-}
-.instructor {
-  display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  gap: 36px;
-  margin: 88px -40px;
-  padding: 48px 40px;
-  border-block: 1px solid var(--color-border);
-  scroll-margin-top: 110px;
-}
-.portrait {
-  width: 160px;
-  height: 160px;
-  object-fit: cover;
-  border-radius: 50%;
-}
-.instructor h2 {
-  margin-bottom: 8px;
-}
-.instructor .instructorRole {
-  color: var(--color-muted-foreground);
-  font-size: 16px;
-  margin-bottom: 16px;
-}
-.instructor p:last-child {
-  margin-bottom: 0;
-}
-.details {
-  margin: 0 -40px 72px;
-  padding: 48px 40px;
-  border-radius: 16px;
-  border: 1px solid var(--color-border-strong);
-  scroll-margin-top: 110px;
-}
-.details > p {
-  margin-bottom: 32px;
-}
-.schedule {
-  margin: 0;
-  display: grid;
-  gap: 24px;
-}
-.schedule > div {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  gap: 16px;
-}
-.schedule dt {
-  color: var(--color-muted-foreground);
-  font-size: 15px;
-}
-.schedule dd {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-}
-.registration {
-  margin-top: 36px;
-  padding-top: 28px;
-  border-top: 1px solid var(--color-border);
-}
-.registration h3 {
-  margin: 0 0 8px;
-  font-size: 21px;
-  font-weight: 800;
-}
-.registration p {
-  margin: 0;
-  font-size: 16px;
-}
-.instructions {
-  white-space: pre-line;
-}
-.questions details {
-  padding: 24px 0;
-  border-bottom: 1px solid var(--color-border);
-}
-.questions summary {
-  font-size: 18px;
-  font-weight: 750;
-  cursor: pointer;
-}
-.questions details p {
-  margin: 16px 0 0;
-  font-size: 17px;
-}
+
 .page a:focus-visible,
 .page summary:focus-visible {
   outline: 2px solid var(--color-ring);
-  outline-offset: 6px;
+  outline-offset: 4px;
+  border-radius: 4px;
 }
-@media (max-width: 640px) {
-  .page {
-    padding-inline: 20px;
-  }
-  .preview {
-    margin-top: 20px;
-    font-size: 11px;
-    gap: 12px;
-  }
-  .hero {
-    margin-top: 40px;
-  }
-  .introduction {
-    font-size: 18px;
-  }
-  .heroDate {
-    max-width: 240px;
-    margin-inline: auto;
-    line-height: 1.8;
-  }
-  .story {
-    margin-top: 72px;
-  }
-  .story p,
-  .story li {
-    font-size: 17px;
-  }
-  .instructor {
-    grid-template-columns: 1fr;
-    margin: 64px 0;
-    padding: 36px 0;
-    gap: 24px;
-  }
-  .portrait {
-    width: 120px;
-    height: 120px;
-  }
-  .details {
-    margin-inline: 0;
-    padding: 32px 24px;
-  }
-  .schedule > div {
-    grid-template-columns: 1fr;
-    gap: 6px;
-  }
+
+.layout {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding-top: clamp(2rem, 5vw, 4.5rem);
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
 }
-@media (prefers-reduced-motion: reduce) {
-  .cta {
-    transition: none;
+
+/* Opening */
+
+.hero {
+  grid-area: hero;
+}
+
+.hero h1 {
+  max-width: 15ch;
+  margin: 0;
+  font-size: clamp(2.5rem, 1.6rem + 3.6vw, 4.25rem);
+  font-weight: 850;
+  line-height: 1.04;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+.byline {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.5rem 0 0;
+  color: var(--color-muted-foreground);
+  font-size: var(--text-lg);
+}
+
+.byline img {
+  flex: none;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.byline a {
+  color: var(--color-foreground);
+  font-weight: 750;
+}
+
+/* Schedule and registration */
+
+.registrationColumn {
+  display: contents;
+}
+
+.ticket {
+  padding: clamp(1.5rem, 3vw, 2rem);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 1rem;
+  background: var(--color-surface);
+  scroll-margin-top: 7rem;
+}
+
+.ticket h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+
+.facts {
+  display: grid;
+  gap: 1rem;
+  margin: 1.5rem 0 0;
+}
+
+.facts dt {
+  color: var(--color-muted-foreground);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.facts dd {
+  margin: 0.125rem 0 0;
+  font-size: var(--text-lg);
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.facts dd span {
+  display: block;
+  color: var(--color-muted-foreground);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.registration,
+.checkout {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border-strong);
+}
+
+.price {
+  margin: 0 0 1.25rem;
+  font-size: var(--text-4xl);
+  font-weight: 850;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.price span {
+  display: block;
+  margin-top: 0.5rem;
+  color: var(--color-muted-foreground);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.caption {
+  margin: 0.875rem 0 0;
+  color: var(--color-muted-foreground);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.status p {
+  margin: 0;
+  color: var(--color-muted-foreground);
+  font-size: var(--text-base);
+}
+
+.status p + p {
+  margin-top: 0.375rem;
+}
+
+.status strong {
+  color: var(--color-foreground);
+  font-size: var(--text-lg);
+  font-weight: 800;
+}
+
+/* Narrative */
+
+.story {
+  grid-area: story;
+  max-width: 42rem;
+}
+
+.story h2 {
+  margin: 0 0 1rem;
+  font-size: var(--text-3xl);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.story p,
+.story li {
+  font-size: var(--text-lg);
+  line-height: 1.7;
+  overflow-wrap: break-word;
+}
+
+.story p {
+  margin: 0 0 1rem;
+  color: var(--color-muted-foreground);
+}
+
+.story p:last-child {
+  margin-bottom: 0;
+}
+
+.story .introduction {
+  margin: 0;
+  color: var(--color-foreground);
+  font-size: var(--text-xl);
+  line-height: 1.6;
+}
+
+.story ul {
+  margin: 1.25rem 0 0;
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+
+.story li {
+  margin-top: 0.625rem;
+  padding-left: 0.375rem;
+  color: var(--color-foreground);
+}
+
+.story li::marker {
+  color: var(--color-rust);
+}
+
+.section {
+  margin-top: clamp(3rem, 6vw, 4.5rem);
+}
+
+.instructor {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+  margin-top: clamp(3rem, 6vw, 4.5rem);
+  padding-top: clamp(2rem, 4vw, 3rem);
+  border-top: 1px solid var(--color-border-strong);
+  scroll-margin-top: 7rem;
+}
+
+.instructor > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.portrait {
+  flex: none;
+  width: 6rem;
+  height: 6rem;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.story .instructor h2 {
+  margin-bottom: 0.25rem;
+  font-size: var(--text-2xl);
+}
+
+.story .role {
+  margin-bottom: 1rem;
+  font-size: var(--text-base);
+  font-weight: 700;
+}
+
+.instructions {
+  white-space: pre-line;
+}
+
+.questions {
+  border-top: 1px solid var(--color-border-strong);
+}
+
+.questions details {
+  border-bottom: 1px solid var(--color-border-strong);
+}
+
+.questions summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 2.75rem;
+  padding: 1rem 0;
+  font-size: var(--text-lg);
+  font-weight: 750;
+  line-height: 1.4;
+  cursor: pointer;
+  list-style: none;
+}
+
+.questions summary::-webkit-details-marker {
+  display: none;
+}
+
+.questions summary::after {
+  content: "";
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.25rem;
+  border-right: 2px solid var(--color-muted-foreground);
+  border-bottom: 2px solid var(--color-muted-foreground);
+  transform: translateY(-25%) rotate(45deg);
+  transition: transform var(--duration-fast) var(--ease-out-quart);
+}
+
+.questions details[open] summary::after {
+  transform: translateY(25%) rotate(-135deg);
+}
+
+.questions details p {
+  margin: 0;
+  padding-bottom: 1.25rem;
+}
+
+.story .backLink {
+  margin: 3rem 0 0;
+}
+
+.backLink a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  color: var(--color-foreground);
+  font-weight: 750;
+}
+
+/*
+ * Mobile purchase bar. The checkout form leaves the ticket, joins the end of
+ * the page flow, and sticks to the viewport bottom until its own reserved
+ * slot scrolls into view, so it never covers the last section or the footer.
+ */
+@media (max-width: 59.9375rem) {
+  .pageWithCheckout {
+    padding-bottom: 0;
+  }
+
+  .checkout {
+    order: 1;
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0 calc(-1 * var(--gutter));
+    padding: 0.75rem var(--gutter) calc(0.75rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--color-border-strong);
+    background: var(--color-surface);
+  }
+
+  .checkout .price {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: var(--text-xl);
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .checkout .price span {
+    margin-top: 0.125rem;
+    font-size: var(--text-xs);
+    line-height: 1.3;
+    white-space: normal;
+  }
+
+  .checkout .buy {
+    flex: none;
+    width: auto;
+    padding-inline: 1.5rem;
+  }
+
+  .checkout .caption {
+    display: none;
   }
 }
 
-.registration .price {
-  color: var(--color-foreground);
-  font-size: 36px;
-  font-weight: 800;
-  line-height: 1.2;
+@media (max-width: 22rem) {
+  .checkout {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.625rem;
+  }
+
+  .checkout .buy {
+    width: 100%;
+  }
 }
-.price span {
-  display: block;
-  margin-top: 12px;
-  color: var(--color-muted-foreground);
-  font-size: 15px;
-  font-weight: 500;
+
+@media (min-width: 60rem) {
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 22rem;
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+      "hero ticket"
+      "story ticket";
+    column-gap: clamp(3rem, 6vw, 6rem);
+    row-gap: 2.5rem;
+  }
+
+  .registrationColumn {
+    display: block;
+    grid-area: ticket;
+    align-self: start;
+    padding: clamp(1.5rem, 3vw, 2rem);
+    border: 1px solid var(--color-border-strong);
+    border-radius: 1rem;
+    background: var(--color-surface);
+  }
+
+  .ticket {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+
+  .story .backLink {
+    display: none;
+  }
 }
-.registration form .cta {
-  margin: 0 0 16px;
-  cursor: pointer;
+
+@media (min-width: 60rem) and (min-height: 46rem) {
+  .registrationColumn {
+    position: sticky;
+    top: 7rem;
+  }
+}
+
+@media (max-width: 30rem) {
+  .instructor {
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .portrait {
+    width: 5rem;
+    height: 5rem;
+  }
 }
