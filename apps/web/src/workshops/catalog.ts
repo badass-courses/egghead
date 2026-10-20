@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
 import { Schema } from "effect";
 import { Workshop } from "@egghead/core/contracts";
 import { priceSchema } from "@coursebuilder/core/schemas/price-schema";
@@ -95,4 +95,34 @@ export async function isWorkshopProduct(productId: string) {
     )
     .limit(1);
   return Boolean(row);
+}
+
+/** One type-indexed keyset read per page; the extra row detects another page. */
+export async function listUpcomingWorkshops(cursor?: string) {
+  const limit = 20;
+  const rows = await getEggheadDatabase()
+    .select({
+      id: contentResource.id,
+      title: sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${contentResource.fields}, '$.title'))`,
+      description: sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${contentResource.fields}, '$.description'))`,
+      startsAt: sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${contentResource.fields}, '$.startsAt'))`,
+      timezone: sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${contentResource.fields}, '$.timezone'))`,
+    })
+    .from(contentResource)
+    .where(
+      and(
+        eq(contentResource.type, "workshop"),
+        isNull(contentResource.deletedAt),
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${contentResource.fields}, '$.state')) = 'published'`,
+        sql`JSON_UNQUOTE(JSON_EXTRACT(${contentResource.fields}, '$.startsAt')) > ${new Date().toISOString()}`,
+        cursor ? gt(contentResource.id, cursor) : undefined,
+      ),
+    )
+    .orderBy(asc(contentResource.id))
+    .limit(limit + 1);
+  const workshops = rows.slice(0, limit);
+  return {
+    workshops,
+    nextCursor: rows.length > limit ? workshops.at(-1)?.id : undefined,
+  };
 }
