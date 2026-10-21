@@ -77,7 +77,7 @@ export function WorkshopLandingPage({
           ) : null}
         </header>
 
-        {/* Desktop: the sticky ticket card. Mobile: dissolves so checkout can pin to the viewport. */}
+        {/* The same checkout form sits in the desktop ticket and anchors to the mobile viewport. */}
         <div className={styles["registrationColumn"]}>
           <section
             aria-labelledby="workshop-details-title"

@@ -35,14 +35,14 @@ Use the inherited foreground, muted foreground, surface, strong border, rust and
 - At 60rem and wider, use a two-column grid: headline and byline above the narrative, with a 22rem registration column spanning both rows at right. The column wrapper owns the surface, border, padding and radius; the inner schedule section has none of those desktop treatments.
 - Only at widths of at least 60rem and heights of at least 46rem does the registration column become sticky (`top: 7rem`). Short desktop viewports keep it in normal flow.
 - Through 59.9375rem, the layout is a column flex container and the registration wrapper uses `display: contents`. The headline/byline and schedule panel precede the narrative. For purchasable workshops, price and purchase live in the bottom bar, outside the schedule panel.
-- The same checkout form becomes a flex item at the layout end (`order: 1`) with `position: sticky; bottom: 0; z-index: 10`. It reaches across the page gutters and uses bottom padding `calc(0.75rem + env(safe-area-inset-bottom))`. A purchasable mobile page removes its usual bottom padding.
-- Keep the form's reserved final flow slot. While reading it stays at the viewport bottom; when that slot arrives, it settles above the footer, allowing the closing content and footer to remain reachable. Do not replace this with a fixed overlay or duplicate form.
+- The same checkout form anchors to the viewport with `position: fixed; inset-inline: 0; bottom: 0; z-index: 30`. It uses bottom padding `calc(0.75rem + env(safe-area-inset-bottom))` and stays at the screen edge when the footer scrolls into view.
+- A body selector scoped to purchasable Workshop pages reserves `6.5rem` plus the safe-area inset after the footer, increasing to `10rem` through 22rem for the stacked bar. This lets the final footer controls scroll clear of the bar. Keep the normal content-to-footer spacing; do not insert the bar between them or duplicate the checkout form.
 - Through 22rem, the bar stacks price above a full-width button with a 0.625rem gap. Through 30rem, the instructor portrait stacks above the biography and shrinks from 6rem to 5rem.
 - Narrative order: introduction, authored sections, takeaways, instructor, attendee instructions, questions, then the mobile schedule-return link.
 
 ## Elevation & Depth
 
-Use flat theme surfaces and strong borders, without panel shadows. On desktop the registration wrapper forms one outlined surface; on mobile the schedule panel and purchase bar are separate surfaces. The sticky bar has a top border and opaque surface background.
+Use flat theme surfaces and strong borders, without panel shadows. On desktop the registration wrapper forms one outlined surface; on mobile the schedule panel and purchase bar are separate surfaces. The fixed purchase bar has a top border and opaque surface background.
 
 ## Shapes
 
@@ -53,7 +53,7 @@ The schedule panel on mobile and registration wrapper on desktop use a 1rem radi
 - **Schedule:** `#workshop-details` shows the Workshop title; without `landingPage`, the title becomes the H1 and this heading reads “Schedule and registration.” Show full date, start–end time and long timezone name, formatted in `fields.timezone`.
 - **Purchase:** render exactly one server form only when `published && checkoutAvailable && offer`. It posts to `startWorkshopCheckout` with hidden `workshopId` and a fresh `randomUUID()` request ID. The server owns checkout and payment checks.
 - **Price and button:** the form contains the offer price, “One-time workshop ticket,” and the yolk, large “Buy your seat” button. Price omits cents for whole amounts. Desktop shows a full-width button and Stripe payment caption; mobile hides that caption and places price beside the button until the narrow-phone stacking breakpoint. It remains the only filled control.
-- **Draft or unavailable:** keep the plain status message inside the schedule panel, with price when an offer exists. Render no checkout form, sticky purchase bar, filled button or disabled purchase button.
+- **Draft or unavailable:** keep the plain status message inside the schedule panel, with price when an offer exists. Render no checkout form, fixed purchase bar, filled button or disabled purchase button.
 - **Links:** the instructor byline links to `#instructor`. Below 60rem, a closing “Schedule and registration” link returns to `#workshop-details`. Underlines use 40% current color, becoming full strength on hover. The closing link and preview navigation have at least 2.75rem hit height.
 - **Questions:** native `details`/`summary`, with padding on the summary and a minimum height of 2.75rem. A CSS chevron rotates when open using inherited fast duration and easing; global reduced-motion rules apply.
 - **Focus:** links and summaries use a 2px ring-token outline with a 4px offset.
@@ -61,7 +61,7 @@ The schedule panel on mobile and registration wrapper on desktop use a 1rem radi
 
 ## Do's and Don'ts
 
-- Do preserve the single checkout form across desktop and mobile, including its reserved final slot and safe-area padding.
+- Do preserve the single checkout form across desktop and mobile, including footer clearance and safe-area padding.
 - Do keep the schedule and registration state readable when checkout is unavailable.
 - Don't turn a scroll link into a purchase-looking control, or add decorative banners, coral accents, icon-card grids or terminal styling to this surface.
 - Don't add marketing filler. Functional headings remain “What you’ll leave with,” “Before the workshop,” and “Questions” outside authored sections.

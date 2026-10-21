@@ -340,26 +340,22 @@
   font-weight: 750;
 }
 
-/*
- * Mobile purchase bar. The checkout form leaves the ticket, joins the end of
- * the page flow, and sticks to the viewport bottom until its own reserved
- * slot scrolls into view, so it never covers the last section or the footer.
- */
+/* Reserve space after the footer for the mobile viewport purchase bar. */
 @media (max-width: 59.9375rem) {
-  .pageWithCheckout {
-    padding-bottom: 0;
+  :global(body):has(.pageWithCheckout) {
+    padding-bottom: calc(6.5rem + env(safe-area-inset-bottom));
   }
 
   .checkout {
-    order: 1;
-    position: sticky;
+    position: fixed;
+    inset-inline: 0;
     bottom: 0;
-    z-index: 10;
+    z-index: 30;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    margin: 0 calc(-1 * var(--gutter));
+    margin: 0;
     padding: 0.75rem var(--gutter) calc(0.75rem + env(safe-area-inset-bottom));
     border-top: 1px solid var(--color-border-strong);
     background: var(--color-surface);
@@ -393,6 +389,10 @@
 }
 
 @media (max-width: 22rem) {
+  :global(body):has(.pageWithCheckout) {
+    padding-bottom: calc(10rem + env(safe-area-inset-bottom));
+  }
+
   .checkout {
     flex-direction: column;
     align-items: stretch;
