@@ -28,6 +28,19 @@ export function localWorkshopConnection() {
   return { url: url.toString(), token };
 }
 
+type WorkshopViewer = { id: string; role: string };
+
+export function canPreviewLocalWorkshops(viewer: WorkshopViewer | null): viewer is WorkshopViewer {
+  return Boolean(viewer?.id && (viewer.role === "admin" || viewer.role === "contributor"));
+}
+
+function canViewWorkshop(viewer: WorkshopViewer | null, workshop: { createdById: string }) {
+  return (
+    canPreviewLocalWorkshops(viewer) &&
+    (viewer.role === "admin" || workshop.createdById === viewer.id)
+  );
+}
+
 const ToolResponse = Schema.Struct({
   result: Schema.Struct({
     isError: Schema.optional(Schema.Boolean),
@@ -39,7 +52,14 @@ const ToolResponse = Schema.Struct({
 async function readTool(
   contract: typeof getWorkshopContract | typeof listWorkshopsContract,
   input: object,
+  viewer: WorkshopViewer | null,
 ) {
+  if (!canPreviewLocalWorkshops(viewer)) {
+    throw new WorkshopFailure({
+      code: "Unauthorized",
+      message: "Workshop preview requires a staff session",
+    });
+  }
   const connection = localWorkshopConnection();
   if (!connection) throw new Error("Local Workshop preview is not configured");
   const response = await fetch(connection.url, {
@@ -70,19 +90,24 @@ async function readTool(
   return result.structuredContent;
 }
 
-export async function listLocalWorkshops(cursor?: string) {
+export async function listLocalWorkshops(viewer: WorkshopViewer | null, cursor?: string) {
   const input = Schema.decodeUnknownSync(listWorkshopsContract.input)({ limit: 20, cursor });
-  return Schema.decodeUnknownSync(listWorkshopsContract.output)(
-    await readTool(listWorkshopsContract, input),
+  const page = Schema.decodeUnknownSync(listWorkshopsContract.output)(
+    await readTool(listWorkshopsContract, input, viewer),
   );
+  return {
+    ...page,
+    workshops: page.workshops.filter((workshop) => canViewWorkshop(viewer, workshop)),
+  };
 }
 
-export async function getLocalWorkshop(id: string) {
+export async function getLocalWorkshop(id: string, viewer: WorkshopViewer | null) {
   const input = Schema.decodeUnknownSync(getWorkshopContract.input)({ id });
   try {
-    return Schema.decodeUnknownSync(getWorkshopContract.output)(
-      await readTool(getWorkshopContract, input),
+    const workshop = Schema.decodeUnknownSync(getWorkshopContract.output)(
+      await readTool(getWorkshopContract, input, viewer),
     );
+    return canViewWorkshop(viewer, workshop) ? workshop : null;
   } catch (error) {
     if (error instanceof WorkshopFailure && error.code === "NotFound") return null;
     throw error;

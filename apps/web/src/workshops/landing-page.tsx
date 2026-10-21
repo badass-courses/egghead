@@ -6,6 +6,8 @@ import { randomUUID } from "node:crypto";
 import type { WorkshopPurchaseOffer } from "./catalog";
 import { startWorkshopCheckout } from "./checkout";
 
+import { workshopInstructorImage } from "./instructor-image";
+
 import styles from "./landing-page.module.css";
 
 export function WorkshopLandingPage({
@@ -21,6 +23,7 @@ export function WorkshopLandingPage({
 }) {
   const { fields } = workshop;
   const landing = fields.landingPage;
+  const instructorImage = workshopInstructorImage(landing?.instructor.imageUrl);
   const introduction = landing?.introduction ?? fields.description;
   const purchasable = fields.state === "published" && checkoutAvailable && Boolean(offer);
   const fractionDigits = offer && Number.isInteger(offer.unitAmount) ? 0 : 2;
@@ -67,8 +70,8 @@ export function WorkshopLandingPage({
           <h1>{landing?.headline ?? fields.title}</h1>
           {landing ? (
             <p className={styles["byline"]}>
-              {landing.instructor.imageUrl ? (
-                <Image alt="" height={80} src={landing.instructor.imageUrl} width={80} />
+              {instructorImage ? (
+                <Image {...instructorImage} alt="" height={80} width={80} />
               ) : null}
               <span>
                 With <a href="#instructor">{landing.instructor.name}</a>
@@ -176,12 +179,12 @@ export function WorkshopLandingPage({
               </section>
 
               <section className={styles["instructor"]} id="instructor">
-                {landing.instructor.imageUrl ? (
+                {instructorImage ? (
                   <Image
+                    {...instructorImage}
                     alt={landing.instructor.name}
                     className={styles["portrait"]}
                     height={192}
-                    src={landing.instructor.imageUrl}
                     width={192}
                   />
                 ) : null}

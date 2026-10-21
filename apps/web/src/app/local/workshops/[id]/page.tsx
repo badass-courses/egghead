@@ -8,7 +8,13 @@ import { getWorkshopOffer } from "../../../../workshops/catalog";
 import { getWorkshopPayments } from "../../../../workshops/payments";
 import { canPurchaseWorkshop } from "../../../../workshops/checkout-contract";
 
-import { getLocalWorkshop, localWorkshopConnection } from "../../../../workshops/local-preview";
+import {
+  getLocalWorkshop,
+  localWorkshopConnection,
+  canPreviewLocalWorkshops,
+} from "../../../../workshops/local-preview";
+
+import { getCurrentUser } from "../../../../coursebuilder/current-user";
 
 export const metadata: Metadata = {
   title: "Workshop draft | egghead",
@@ -18,8 +24,10 @@ export const metadata: Metadata = {
 async function WorkshopDraft({ params }: { params: Promise<{ id: string }> }) {
   await connection();
   if (!localWorkshopConnection()) notFound();
+  const viewer = await getCurrentUser();
+  if (!canPreviewLocalWorkshops(viewer)) notFound();
   const { id } = await params;
-  const workshop = await getLocalWorkshop(id);
+  const workshop = await getLocalWorkshop(id, viewer);
   if (!workshop) notFound();
   const offer = await getWorkshopOffer(workshop);
   const checkoutAvailable =

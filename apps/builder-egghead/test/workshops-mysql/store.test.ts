@@ -133,39 +133,155 @@ it.scoped(
       expect(plan[0]?.["key"]).toBe("PRIMARY");
       expect(plan[0]?.["type"]).toBe("const");
       for (const [name, columns] of [
-        ["Product", "id varchar(191) PRIMARY KEY, status int, type varchar(191), quantityAvailable int, fields json"],
-        ["Price", "id varchar(191) PRIMARY KEY, productId varchar(191), status int, unitAmount decimal(10,2), fields json"],
-        ["ContentResourceProduct", "productId varchar(191), resourceId varchar(255), deletedAt timestamp(3) NULL, PRIMARY KEY(productId, resourceId)"],
+        [
+          "Product",
+          "id varchar(191) PRIMARY KEY, status int, type varchar(191), quantityAvailable int, fields json",
+        ],
+        [
+          "Price",
+          "id varchar(191) PRIMARY KEY, productId varchar(191), status int, unitAmount decimal(10,2), fields json",
+        ],
+        [
+          "ContentResourceProduct",
+          "productId varchar(191), resourceId varchar(255), deletedAt timestamp(3) NULL, PRIMARY KEY(productId, resourceId)",
+        ],
       ]) {
         yield* Effect.acquireRelease(
           Effect.promise(() => fixture.execute(`CREATE TABLE \`${prefix}_${name}\` (${columns})`)),
           () => Effect.promise(() => fixture.execute(`DROP TABLE \`${prefix}_${name}\``)),
         );
       }
-      const publishInput = { id: created.id, expectedRevision: 2, productId: "local-offer", priceId: "local-price" };
-      const unavailable = yield* Effect.flip(previewPublishWorkshop.run(publishInput).pipe(Effect.provide(services)));
+      const publishInput = {
+        id: created.id,
+        expectedRevision: 2,
+        productId: "local-offer",
+        priceId: "local-price",
+      };
+      const unavailable = yield* Effect.flip(
+        previewPublishWorkshop.run(publishInput).pipe(Effect.provide(services)),
+      );
       expect(unavailable.code).toBe("InvalidWorkshop");
-      yield* Effect.promise(() => fixture.execute(
-        `INSERT INTO \`${prefix}_Product\` VALUES ('local-offer', 1, 'live', -1, '{"state":"published"}')`,
-      ));
-      yield* Effect.promise(() => fixture.execute(
-        `INSERT INTO \`${prefix}_Price\` VALUES ('local-price', 'local-offer', 1, 375, ?)`,
-        [JSON.stringify({ stripe: { type: "one_time", active: true, supported: true, currency: "usd" }, offer: { offered: true } })],
-      ));
-      yield* Effect.promise(() => fixture.execute(
-        `INSERT INTO \`${prefix}_ContentResourceProduct\` VALUES ('local-offer', ?, NULL)`, [created.id],
-      ));
-      const preview = yield* previewPublishWorkshop.run(publishInput).pipe(Effect.provide(services));
+      yield* Effect.promise(() =>
+        fixture.execute(
+          `INSERT INTO \`${prefix}_Product\` VALUES ('local-offer', 1, 'live', -1, '{"state":"published"}')`,
+        ),
+      );
+      yield* Effect.promise(() =>
+        fixture.execute(
+          `INSERT INTO \`${prefix}_Price\` VALUES ('local-price', 'local-offer', 1, 375, ?)`,
+          [
+            JSON.stringify({
+              stripe: { type: "one_time", active: true, supported: true, currency: "usd" },
+              offer: { offered: true },
+            }),
+          ],
+        ),
+      );
+      yield* Effect.promise(() =>
+        fixture.execute(
+          `INSERT INTO \`${prefix}_ContentResourceProduct\` VALUES ('local-offer', ?, NULL)`,
+          [created.id],
+        ),
+      );
+      yield* Effect.promise(() =>
+        fixture.execute(
+          `UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.stripe.currency', 'eur')`,
+        ),
+      );
+      expect(
+        (yield* Effect.flip(
+          previewPublishWorkshop.run(publishInput).pipe(Effect.provide(services)),
+        )).code,
+      ).toBe("InvalidWorkshop");
+      expect(
+        (yield* Effect.flip(publishWorkshop.run(publishInput).pipe(Effect.provide(services)))).code,
+      ).toBe("InvalidWorkshop");
+      expect(
+        (yield* getWorkshop.run({ id: created.id }).pipe(Effect.provide(services))).fields
+          .workshopRevision,
+      ).toBe(2);
+      yield* Effect.promise(() =>
+        fixture.execute(
+          `UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.stripe.currency', 'usd')`,
+        ),
+      );
+      const preview = yield* previewPublishWorkshop
+        .run(publishInput)
+        .pipe(Effect.provide(services));
       expect(preview.fields.state).toBe("published");
-      expect((yield* getWorkshop.run({id: created.id}).pipe(Effect.provide(services))).fields.state).toBe("draft");
-      yield* Effect.promise(() => fixture.execute(`UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', CAST('false' AS JSON))`));
-      expect((yield* Effect.flip(publishWorkshop.run(publishInput).pipe(Effect.provide(services)))).code).toBe("InvalidWorkshop");
-      yield* Effect.promise(() => fixture.execute(`UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', CAST('true' AS JSON))`));
+      expect(
+        (yield* getWorkshop.run({ id: created.id }).pipe(Effect.provide(services))).fields.state,
+      ).toBe("draft");
+      yield* Effect.promise(() =>
+        fixture.execute(
+          `UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', CAST('false' AS JSON))`,
+        ),
+      );
+      expect(
+        (yield* Effect.flip(publishWorkshop.run(publishInput).pipe(Effect.provide(services)))).code,
+      ).toBe("InvalidWorkshop");
+      yield* Effect.promise(() =>
+        fixture.execute(
+          `UPDATE \`${prefix}_Price\` SET fields = JSON_SET(fields, '$.offer.offered', CAST('true' AS JSON))`,
+        ),
+      );
       const published = yield* publishWorkshop.run(publishInput).pipe(Effect.provide(services));
       expect(published.fields.workshopRevision).toBe(3);
       expect(published.fields.offer).toEqual({ productId: "local-offer", priceId: "local-price" });
-      expect((yield* getWorkshop.run({id: created.id}).pipe(Effect.provide(services))).fields.state).toBe("published");
-
+      expect(
+        (yield* getWorkshop.run({ id: created.id }).pipe(Effect.provide(services))).fields.state,
+      ).toBe("published");
+      const instructor = {
+        name: "Workshop instructor",
+        role: "Teacher",
+        biography: "A synthetic instructor for this test.",
+      };
+      const landingPage = {
+        bannerText: "Workshop",
+        headline: "Build together",
+        introduction: "A synthetic Workshop landing page.",
+        instructor: { ...instructor, imageUrl: "https://example.com/portrait.jpg" },
+        sections: [{ heading: "Build together", body: "Synthetic workshop content.", bullets: [] }],
+        takeaways: ["A working project"],
+        questions: [],
+      };
+      const withPortrait = yield* updateWorkshop
+        .run({
+          id: created.id,
+          expectedRevision: 3,
+          changes: { landingPage },
+        })
+        .pipe(Effect.provide(services));
+      expect(withPortrait.fields.landingPage?.instructor.imageUrl).toBe(
+        landingPage.instructor.imageUrl,
+      );
+      const withoutPortrait = { ...landingPage, instructor };
+      const cleared = yield* updateWorkshop
+        .run({
+          id: created.id,
+          expectedRevision: 4,
+          changes: { landingPage: withoutPortrait },
+        })
+        .pipe(Effect.provide(services));
+      expect(cleared.fields.landingPage).toEqual(withoutPortrait);
+      const fieldsWithoutLanding = { ...cleared.fields };
+      delete fieldsWithoutLanding.landingPage;
+      const replacement = yield* Schema.decodeUnknown(Workshop)({
+        ...cleared,
+        fields: { ...fieldsWithoutLanding, workshopRevision: 6 },
+      });
+      yield* Effect.gen(function* () {
+        const store = yield* WorkshopStore;
+        return yield* store.revise(replacement, 5);
+      }).pipe(Effect.provide(services));
+      const [persisted] = yield* Effect.promise(() =>
+        fixture.execute<mysql.RowDataPacket[]>(
+          `SELECT JSON_CONTAINS_PATH(fields, 'one', '$.landingPage') AS hasLanding, JSON_UNQUOTE(JSON_EXTRACT(fields, '$.integrationNote')) AS note FROM ${table} WHERE id = ?`,
+          [created.id],
+        ),
+      );
+      expect(persisted[0]?.["hasLanding"]).toBe(0);
+      expect(persisted[0]?.["note"]).toBe("preserve");
     }),
   20000,
 );

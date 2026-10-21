@@ -6,7 +6,13 @@ import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader } from "@egghead/ui/structure";
 
-import { listLocalWorkshops, localWorkshopConnection } from "../../../workshops/local-preview";
+import {
+  listLocalWorkshops,
+  localWorkshopConnection,
+  canPreviewLocalWorkshops,
+} from "../../../workshops/local-preview";
+
+import { getCurrentUser } from "../../../coursebuilder/current-user";
 
 export const metadata: Metadata = {
   title: "Workshop drafts | egghead",
@@ -16,8 +22,10 @@ export const metadata: Metadata = {
 async function WorkshopDrafts({ searchParams }: { searchParams: Promise<{ cursor?: string }> }) {
   await connection();
   if (!localWorkshopConnection()) notFound();
+  const viewer = await getCurrentUser();
+  if (!canPreviewLocalWorkshops(viewer)) notFound();
   const { cursor } = await searchParams;
-  const page = await listLocalWorkshops(cursor);
+  const page = await listLocalWorkshops(viewer, cursor);
   return (
     <Container as="main" size="wide">
       <SectionHeader
