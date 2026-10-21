@@ -14,7 +14,10 @@
 		"lint": "eslint .",
 		"start": "next start",
 		"typecheck": "tsc --noEmit",
-		"coupons": "dotenv tsx src/scripts/bootstrap-basic-coupons.ts"
+		"coupons": "dotenv tsx src/scripts/bootstrap-basic-coupons.ts",
+		"test": "vitest run --config vitest.workshops.config.ts",
+		"test:workshops:mysql": "vitest run --config vitest.workshops-mysql.config.ts",
+		"typecheck:workshops": "tsc --noEmit -p tsconfig.workshops.json"
 	},
 	"dependencies": {
 		"@atlaskit/pragmatic-drag-and-drop": "^1.1.3",
@@ -125,7 +128,10 @@
 		"uuid": "^9.0.1",
 		"y-partykit": "^0.0.28",
 		"yjs": "^13.6.10",
-		"zod": "^4.4.3"
+		"zod": "^4.4.3",
+		"@egghead/core": "workspace:*",
+		"@modelcontextprotocol/sdk": "1.27.1",
+		"effect": "3.11.5"
 	},
 	"devDependencies": {
 		"@coursebuilder/eslint-config": "0.1.2",

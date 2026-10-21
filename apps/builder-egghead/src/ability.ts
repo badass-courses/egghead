@@ -6,6 +6,7 @@ import {
 	type MongoAbility,
 } from '@casl/ability'
 import z from 'zod'
+import type { Workshop } from '@egghead/core/contracts'
 
 import { ContentResource } from '@coursebuilder/core/schemas'
 
@@ -44,6 +45,7 @@ type Subjects =
 	| 'Content'
 	| 'User'
 	| ContentResource
+	| Workshop
 	| MinimalPost
 	| User
 	| 'all'
