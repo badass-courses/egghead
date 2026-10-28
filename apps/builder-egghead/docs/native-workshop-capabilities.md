@@ -8,6 +8,18 @@ This sibling to [PR 29](https://github.com/badass-courses/egghead/pull/29) intro
 
 The add-a-capability skill refers to `@rat-stack/capability`, which is not published in npm. The small local helper in `packages/core/src/capability.ts` implements the required definition, binding, decoding, output validation, and approval gate. It uses Effect 3.11.5, already present in this repository's published dependency graph, and its `Context.Tag` API. It does not pretend that Effect 4's `Context.Service` is available. Tests use compatible `@effect/vitest` 0.14.0. No framework copy or additional unused transport surfaces are introduced.
 
+## Runtime compatibility
+
+The read-only Event catalog uses Effect 4; native Workshop capabilities use Effect
+3.11.5. The web app imports the native runtime through `effect-v3`, an npm alias
+for the same exact version used by `@egghead/core`. Their schemas and Layers must
+stay within their respective runtimes. `event-catalog.ts` composes the read-only
+Event adapter; `catalog.ts` reads native Workshops and purchase offers.
+
+The Event package tests use Vitest 5 and `@effect/vitest` 4. Native core, builder,
+and web route regressions use Vitest 2 and `@effect/vitest` 0.14. The full check
+runs both suites; neither dependency major is upgraded during integration.
+
 ## Connect locally
 
 Use the builder device-token authentication flow, then connect an MCP client to `http://localhost:3000/api/workshop-mcp` with a Bearer token. The authenticated account must have an active admin or contributor role. Do not commit client authentication headers. The endpoint checks the local runtime and local test-database URL before authentication or tool execution. Beta and production are refused, including when beta database access is approved elsewhere.

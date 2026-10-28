@@ -1,5 +1,5 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
-import { Either, Schema } from "effect";
+import { Either, Schema } from "effect-v3";
 import { Workshop } from "@egghead/core/contracts";
 import { priceSchema } from "@coursebuilder/core/schemas/price-schema";
 import { isPriceAvailable } from "@coursebuilder/commerce/select-product-price";

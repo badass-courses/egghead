@@ -1,0 +1,20 @@
+{
+  "name": "@egghead/workshops",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contracts": "./src/contracts.ts",
+    "./catalog": "./src/catalog.ts",
+    "./policy": "./src/policy.ts",
+    "./capabilities": "./src/capabilities.ts",
+    "./memory": "./src/memory.ts",
+    "./format": "./src/format.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:tsgo": "tsgo --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "effect": "4.0.0"
+  }
+}

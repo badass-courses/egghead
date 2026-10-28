@@ -28,7 +28,7 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  transpilePackages: ["@egghead/ui"],
+  transpilePackages: ["@egghead/ui", "@egghead/workshops", "@egghead/workshop-catalog"],
 };
 
 export default nextConfig;

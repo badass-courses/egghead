@@ -134,6 +134,8 @@
 		"effect": "3.11.5"
 	},
 	"devDependencies": {
+		"@effect/vitest": "0.14.0",
+		"vitest": "2.1.9",
 		"@coursebuilder/eslint-config": "0.1.2",
 		"@tailwindcss/postcss": "^4.1.11",
 		"@tailwindcss/typography": "^0.5.19",

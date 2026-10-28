@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Schema } from "effect-v3";
 import {
   getWorkshopContract,
   listWorkshopsContract,
