@@ -12,6 +12,7 @@ import { parentCourseSlugsForLessonIds } from "./lesson-route-context";
 import { publishedResourceSql } from "./publication";
 import { contentResourceSlugSql } from "./resource-slug";
 import {
+  SEARCH_CONTENT_TYPE_VALUES,
   type LegacySearchIndexDocument,
   legacySearchDocumentType,
   pathForLegacySearchDocument,
@@ -25,6 +26,7 @@ import {
   getEggheadTypesenseConfig,
   isEggheadTypesenseSearchConfigured,
   legacyTypesenseContentFilter,
+  typesenseFilterValue,
 } from "./typesense";
 
 type SearchResourceRow = RowDataPacket & {
@@ -46,17 +48,7 @@ export type SearchResult = {
 
 export type SearchContentType = SearchResult["type"];
 
-export const SEARCH_CONTENT_TYPE_VALUES = [
-  "article",
-  "campaign",
-  "case-study",
-  "course",
-  "lesson",
-  "podcast",
-  "post",
-  "success-story",
-  "talk",
-] as const satisfies SearchContentType[];
+export { SEARCH_CONTENT_TYPE_VALUES } from "./search-document";
 
 function normalizedSearchContentType(typeFilter?: string | null) {
   const normalizedType = typeFilter?.trim() || null;
@@ -64,6 +56,40 @@ function normalizedSearchContentType(typeFilter?: string | null) {
   return SEARCH_CONTENT_TYPE_VALUES.some((value) => value === normalizedType)
     ? normalizedType
     : "invalid";
+}
+
+async function searchableResourceSql(
+  connection: Awaited<ReturnType<typeof createLocalMysqlConnection>>,
+) {
+  const slug = await contentResourceSlugSql(connection, "resource");
+  return `resource.deletedAt IS NULL
+    ${publishedResourceSql("resource")}
+    AND ${slug} IS NOT NULL AND ${slug} != ''
+    AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type)
+      IN (${SEARCH_CONTENT_TYPE_VALUES.map((type) => `'${type}'`).join(", ")})`;
+}
+
+// Missing index IDs may be removed only when this same source explicitly marks
+// them ineligible. An absent source row is a migration gap, never an exclusion.
+export async function confirmSearchIndexExclusions(ids: readonly string[]) {
+  if (!ids.length) return [];
+  const connection = await createLocalMysqlConnection();
+  try {
+    const eligible = await searchableResourceSql(connection);
+    const batches = Array.from({ length: Math.ceil(ids.length / 500) }, (_, index) =>
+      ids.slice(index * 500, (index + 1) * 500),
+    );
+    return await batches.reduce(async (previous, batch) => {
+      const confirmed = await previous;
+      const [rows] = await connection.execute<(RowDataPacket & { id: string })[]>(
+        `SELECT resource.id FROM egghead_ContentResource resource WHERE resource.id IN (${batch.map(() => "?").join(",")}) AND NOT (${eligible})`,
+        [...batch],
+      );
+      return [...confirmed, ...rows.map((row) => row.id)];
+    }, Promise.resolve<string[]>([]));
+  } finally {
+    await connection.end();
+  }
 }
 
 async function searchRowsFromDatabase(
@@ -88,7 +114,6 @@ async function searchRowsFromDatabase(
   const typeClause = normalizedType
     ? "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) = ?"
     : "";
-  const publicTypePlaceholders = SEARCH_CONTENT_TYPE_VALUES.map(() => "?").join(", ");
   const termClause = normalized
     ? `
             AND (
@@ -116,7 +141,6 @@ async function searchRowsFromDatabase(
         `
     : "";
   const params = [
-    ...SEARCH_CONTENT_TYPE_VALUES,
     ...(normalizedType ? [normalizedType] : []),
     ...(normalized ? [likeTerm, likeTerm, likeTerm] : []),
     ...instructorCandidates,
@@ -124,16 +148,12 @@ async function searchRowsFromDatabase(
   const limitClause = limit > 0 ? `LIMIT ${limit}` : "";
 
   try {
-    const resourceSlugSql = await contentResourceSlugSql(connection, "resource");
+    const eligible = await searchableResourceSql(connection);
     const [rows] = await connection.execute<SearchResourceRow[]>(
       `
           SELECT resource.id, resource.type, resource.fields, resource.createdAt, resource.updatedAt
           FROM egghead_ContentResource resource
-          WHERE resource.deletedAt IS NULL
-            ${publishedResourceSql("resource")}
-            AND ${resourceSlugSql} IS NOT NULL
-            AND ${resourceSlugSql} != ''
-            AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(resource.fields, '$.postType')), resource.type) IN (${publicTypePlaceholders})
+          WHERE ${eligible}
             ${typeClause}
             ${termClause}
             ${instructorClause}
@@ -208,10 +228,6 @@ async function searchSqlContent(
   const rows = await searchRowsFromDatabase(term, typeFilter, instructorFilter);
   const documents = await searchDocumentsFromRows(rows);
   return documents.map(searchResultFromDocument);
-}
-
-function typesenseFilterValue(value: string) {
-  return `\`${value.replaceAll("`", "\\`")}\``;
 }
 
 export function typesenseFilter(typeFilter?: string | null, instructorFilter?: string | null) {

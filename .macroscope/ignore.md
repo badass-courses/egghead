@@ -1,3 +1,4 @@
+```text
 # === Vendored / dependency directories ===
 **/.git/**
 **/__pycache__/**
@@ -197,3 +198,4 @@ ENV/**
 apps/builder-egghead/plans/**
 apps/builder-egghead/src/data/sampleTranscript.ts
 apps/web/src/content/hot-lesson-static-params.ts
+```

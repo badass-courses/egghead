@@ -30,6 +30,18 @@ export type SearchDocumentType =
   | "success-story"
   | "talk";
 
+export const SEARCH_CONTENT_TYPE_VALUES = [
+  "article",
+  "campaign",
+  "case-study",
+  "course",
+  "lesson",
+  "podcast",
+  "post",
+  "success-story",
+  "talk",
+] as const satisfies SearchDocumentType[];
+
 export type SearchDocumentParentResource = {
   path: string;
   slug: string;
