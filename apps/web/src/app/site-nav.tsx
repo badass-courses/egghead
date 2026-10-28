@@ -12,11 +12,7 @@ import { cn } from "@egghead/ui/utils";
    pressed, search is a well, one yolk CTA per shelf. */
 
 const NAV_LINKS = [
-  { href: "/", label: "Learn" },
-  { href: "/courses", label: "Courses" },
   { href: "/workshops", label: "Workshops" },
-  { href: "/lessons", label: "Lessons" },
-  { href: "/blog", label: "Articles" },
   { href: "/live-events", label: "Live events" },
 ];
 
