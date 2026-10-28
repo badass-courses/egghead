@@ -156,52 +156,33 @@ export function createEggheadTypesenseWriteClient() {
   return createClient(config.writeApiKey);
 }
 
-export function assertEggheadTypesenseWriteApproved() {
-  const config = getEggheadTypesenseConfig();
+export class TypesenseWorkflowError extends Error {}
 
+export const EGGHEAD_TYPESENSE_ALIAS = "egghead_content";
+
+export function assertEggheadTypesenseWriteApproved(collectionName: string) {
   if (process.env["EGGHEAD_TYPESENSE_INDEX_APPROVED"] !== "true") {
-    throw new Error("Refusing Typesense writes without EGGHEAD_TYPESENSE_INDEX_APPROVED=true.");
+    throw new TypesenseWorkflowError(
+      "Refusing Typesense writes without EGGHEAD_TYPESENSE_INDEX_APPROVED=true.",
+    );
   }
-
-  if (config.collectionName !== EGGHEAD_TYPESENSE_COLLECTION_NAME) {
-    throw new Error(
-      `Refusing Typesense writes to ${config.collectionName}; expected ${EGGHEAD_TYPESENSE_COLLECTION_NAME}.`,
+  if (!/^egghead_content_migration_v[1-9]\d*(?:_\d{14})?$/.test(collectionName)) {
+    throw new TypesenseWorkflowError(
+      `Refusing Typesense writes outside versioned migration collections: ${collectionName}.`,
     );
   }
 }
 
-export function eggheadTypesenseCollectionSchema() {
-  const config = getEggheadTypesenseConfig();
-  return {
-    ...EGGHEAD_TYPESENSE_COLLECTION_SCHEMA,
-    name: config.collectionName,
-  };
+export function eggheadTypesenseCollectionSchema(collectionName: string) {
+  return { ...EGGHEAD_TYPESENSE_COLLECTION_SCHEMA, name: collectionName };
 }
 
-export async function ensureEggheadTypesenseCollection({
-  recreate = false,
-}: {
-  recreate?: boolean;
-} = {}) {
-  assertEggheadTypesenseWriteApproved();
-
-  const config = getEggheadTypesenseConfig();
-  const client = createEggheadTypesenseWriteClient();
-  const collection = client.collections(config.collectionName);
-
-  try {
-    await collection.retrieve();
-    if (!recreate) return { collectionName: config.collectionName, created: false };
-    await collection.delete();
-  } catch (error) {
-    const status =
-      error && typeof error === "object" && "httpStatus" in error ? error.httpStatus : null;
-    if (status !== 404) throw error;
-  }
-
-  await client.collections().create(eggheadTypesenseCollectionSchema());
-
-  return { collectionName: config.collectionName, created: true };
+export async function createEggheadTypesenseCollection(collectionName: string) {
+  assertEggheadTypesenseWriteApproved(collectionName);
+  // Never delete or reuse a collection: an existing target is a failed build.
+  await createEggheadTypesenseWriteClient()
+    .collections()
+    .create(eggheadTypesenseCollectionSchema(collectionName));
 }
 
 function importLineFromJson(line: string): TypesenseImportLine {
@@ -251,19 +232,24 @@ function parseImportResult(result: unknown) {
   return summarizeImportLines(lines);
 }
 
-export async function importEggheadTypesenseDocuments(documents: readonly SearchIndexDocument[]) {
-  assertEggheadTypesenseWriteApproved();
-
-  const config = getEggheadTypesenseConfig();
+export async function importEggheadTypesenseDocuments(
+  collectionName: string,
+  documents: readonly SearchIndexDocument[],
+) {
+  assertEggheadTypesenseWriteApproved(collectionName);
   const client = createEggheadTypesenseWriteClient();
   const result = await client
-    .collections<SearchIndexDocument>(config.collectionName)
+    .collections<SearchIndexDocument>(collectionName)
     .documents()
-    .import([...documents], { action: "upsert", batch_size: 100 });
+    .import([...documents], { action: "upsert", batch_size: 100, throwOnFail: false });
 
   return {
-    collectionName: config.collectionName,
+    collectionName,
     documents: documents.length,
     ...parseImportResult(result),
   };
+}
+
+export function typesenseFilterValue(value: string) {
+  return `\`${value.replaceAll("`", "\\`")}\``;
 }
