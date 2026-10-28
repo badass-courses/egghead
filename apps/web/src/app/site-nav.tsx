@@ -8,15 +8,7 @@ import { EggoMark } from "@egghead/ui/eggo-mark";
 import { cn } from "@egghead/ui/utils";
 
 /* Primary navigation from egghead-brand/navigation.html ("The Main Bar"):
-   a floating tactile shelf — active page sits raised like the key you just
-   pressed, search is a well, one yolk CTA per shelf. */
-
-const NAV_LINKS = [
-  { href: "/", label: "Learn" },
-  { href: "/courses", label: "Courses" },
-  { href: "/lessons", label: "Lessons" },
-  { href: "/blog", label: "Articles" },
-];
+   a floating tactile shelf with search and account access. */
 
 export type SiteAccountState = "authenticated" | "anonymous" | "unknown";
 
@@ -24,12 +16,6 @@ type SiteNavAccount = {
   displayName: string;
   hasProSubscription: boolean;
 };
-
-function isActive(pathname: string | null, href: string) {
-  if (pathname === null) return false;
-  if (href === "/") return pathname === "/";
-  return pathname === href || pathname.startsWith(`${href}/`);
-}
 
 function SearchIcon() {
   return (
@@ -44,19 +30,6 @@ function SearchIcon() {
     >
       <circle cx="7" cy="7" r="5.5" />
       <path d="M11.5 11.5L15.5 15.5" />
-    </svg>
-  );
-}
-
-function EggIcon() {
-  return (
-    <svg height="17" viewBox="0 0 24 28" width="14">
-      <path
-        d="M12 1.5C7 1.5 3 9.5 3 16c0 6 3.8 10.5 9 10.5S21 22 21 16c0-6.5-4-14.5-9-14.5z"
-        fill="var(--color-cream)"
-        stroke="var(--color-yolk-shadow)"
-        strokeWidth="2"
-      />
     </svg>
   );
 }
@@ -181,30 +154,6 @@ export function SiteNavView({
             <span className="text-xl font-black tracking-tight">egghead</span>
           </Link>
 
-          <span aria-hidden className="mx-0.5 hidden size-1.5 md:block" />
-
-          <div className="hidden items-center gap-1.5 md:flex">
-            {NAV_LINKS.map((link) => {
-              const active = isActive(pathname, link.href);
-
-              return (
-                <Link
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "rounded-full text-sm",
-                    active
-                      ? "border border-border-strong bg-raised-grad px-4 py-2 font-extrabold text-foreground shadow-btn-ghost"
-                      : "press px-4 py-2 font-bold text-muted-foreground hover:bg-(--hover-wash) hover:text-foreground",
-                  )}
-                  href={link.href}
-                  key={link.href}
-                >
-                  {link.label}
-                </Link>
-              );
-            })}
-          </div>
-
           <Form
             action="/q"
             className="ml-auto hidden w-56 items-center gap-2.5 rounded-full border border-border-strong bg-well px-4 py-2 text-muted-foreground shadow-well focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring lg:flex"
@@ -258,30 +207,6 @@ export function SiteNavView({
 
         {menuOpen ? (
           <div className="absolute inset-x-0 top-[calc(100%+0.75rem)] space-y-1.5 rounded-2xl border bg-surface-grad p-3 shadow-card-deep md:hidden">
-            {NAV_LINKS.map((link) => {
-              const active = isActive(pathname, link.href);
-
-              return (
-                <Link
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "flex items-center rounded-xl px-4",
-                    active
-                      ? "gap-3 border border-border-strong bg-raised-grad pt-[13px] pb-[11px] font-extrabold text-foreground shadow-btn-ghost"
-                      : "press justify-between py-3 font-bold text-muted-foreground hover:bg-(--hover-wash)",
-                  )}
-                  href={link.href}
-                  key={link.href}
-                >
-                  {active ? <EggIcon /> : null}
-                  {link.label}
-                  {active ? null : <span className="font-black text-muted-foreground/40">→</span>}
-                </Link>
-              );
-            })}
-
-            <div className="my-2 border-t border-border-soft" />
-
             <AccountLink accountState={accountState} mobile {...(account ? { account } : {})} />
           </div>
         ) : null}
