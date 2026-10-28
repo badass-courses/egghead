@@ -4,7 +4,8 @@ import { and, eq } from "drizzle-orm";
 import { getStripeProvider, getSiteUrl } from "../coursebuilder/stripe-provider";
 import { getEggheadDatabase } from "../db/adapter";
 import { merchantCustomer, merchantSubscription } from "../db/schema";
-import { getCurrentSubscriptionForUser } from "./status";
+import { getBillingSubscriptionForUser } from "./status";
+import { getStripeSubscriptionCurrentPeriodEnd } from "./stripe";
 
 export type MembershipBillingSummary = {
   billingInterval: string;
@@ -86,7 +87,7 @@ export function membershipIntervalLabel(interval: string | null, intervalCount: 
 }
 
 async function getStripeMembershipForUser(userId: string) {
-  const currentSubscription = await getCurrentSubscriptionForUser(userId);
+  const currentSubscription = await getBillingSubscriptionForUser(userId);
   if (!currentSubscription) return null;
 
   const db = getEggheadDatabase();
@@ -145,7 +146,7 @@ export async function getMembershipBillingSummary(
 
     const subscriptionItem = membership.stripeSubscription.items.data[0];
     const price = subscriptionItem?.price;
-    const periodEnd = membership.stripeSubscription.current_period_end;
+    const periodEnd = getStripeSubscriptionCurrentPeriodEnd(membership.stripeSubscription);
     if (!periodEnd || !Number.isFinite(periodEnd)) return null;
     const invoicePdfUrl = await getLatestInvoicePdfUrl(
       membership.paymentsAdapter,

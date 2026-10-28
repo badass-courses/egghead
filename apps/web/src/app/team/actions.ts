@@ -6,13 +6,13 @@ import { z } from "zod";
 
 import { getCurrentUser } from "../../coursebuilder/current-user";
 import { sendEmail } from "../../coursebuilder/email-delivery";
-import { getSiteUrl, getStripeProvider } from "../../coursebuilder/stripe-provider";
-import { assertCommerceWritesAllowed } from "../../db/local-docker";
+import { getSiteUrl } from "../../coursebuilder/stripe-provider";
+import { assertLocalDockerDatabaseUrl } from "../../db/local-docker";
 import { getEnv } from "../../env";
-import { stripeSubscriptionGrantsAccess } from "../../subscriptions/access";
-import { getStripeSubscriptionCurrentPeriodEnd } from "../../subscriptions/stripe";
+import { getSubscriptionStore } from "../../subscriptions/store";
+import { subscriptionCheckoutQuantitySchema } from "../../subscriptions/team-contracts";
 import {
-  getOwnedTeamSubscriptionRow,
+  getOwnedTeamSubscription,
   getTeamInviteDetails,
   grantTeamSubscriptionSeat,
   removeTeamSubscriptionSeat,
@@ -32,24 +32,6 @@ const inviteEmailSchema = z
   .max(255)
   .transform((email) => email.toLowerCase());
 
-async function getTeamStripeState(subscriptionId: string, ownerId: string) {
-  const ownedSubscription = await getOwnedTeamSubscriptionRow(subscriptionId, ownerId);
-  const stripeProvider = getStripeProvider();
-  if (!ownedSubscription || !stripeProvider) return null;
-
-  const stripeSubscription = await stripeProvider.options.paymentsAdapter.getSubscription(
-    ownedSubscription.stripeSubscriptionId,
-  );
-  const currentPeriodEnd = getStripeSubscriptionCurrentPeriodEnd(stripeSubscription);
-  if (!currentPeriodEnd || !stripeSubscriptionGrantsAccess(stripeSubscription.status)) return null;
-
-  return {
-    currentPeriodEnd: new Date(currentPeriodEnd * 1000),
-    ownedSubscription,
-    status: stripeSubscription.status,
-  };
-}
-
 function refreshTeamPages() {
   revalidatePath("/profile");
   revalidatePath("/team");
@@ -67,7 +49,7 @@ function teamInvitePath(token: string) {
 }
 
 export async function acceptTeamInvite(formData: FormData) {
-  assertCommerceWritesAllowed();
+  assertLocalDockerDatabaseUrl();
 
   const token = formData.get("token");
   if (typeof token !== "string") redirect("/team");
@@ -88,17 +70,10 @@ export async function acceptTeamInvite(formData: FormData) {
 
   const inviteDetails = await getTeamInviteDetails(payload.subscriptionId);
   if (!inviteDetails) redirect(`${invitePath}?error=unavailable`);
-  if (inviteDetails.availableSeats === 0) redirect(`${invitePath}?status=claimed`);
-
-  const teamState = await getTeamStripeState(payload.subscriptionId, inviteDetails.ownerId);
-  if (!teamState) redirect(`${invitePath}?error=unavailable`);
 
   const result = await grantTeamSubscriptionSeat({
-    currentPeriodEnd: teamState.currentPeriodEnd,
     ownerId: inviteDetails.ownerId,
     seatUserId: currentUser.id,
-    status: teamState.status,
-    stripeSubscriptionId: teamState.ownedSubscription.stripeSubscriptionId,
     subscriptionId: payload.subscriptionId,
   });
 
@@ -111,7 +86,7 @@ export async function acceptTeamInvite(formData: FormData) {
 }
 
 export async function claimTeamSeat(formData: FormData) {
-  assertCommerceWritesAllowed();
+  assertLocalDockerDatabaseUrl();
 
   const currentUser = await getCurrentUser();
   if (!currentUser?.id) redirect("/login?callbackUrl=%2Fteam");
@@ -119,15 +94,9 @@ export async function claimTeamSeat(formData: FormData) {
   const subscriptionId = subscriptionIdSchema.safeParse(formData.get("subscriptionId"));
   if (!subscriptionId.success) redirect("/team?error=team-unavailable");
 
-  const teamState = await getTeamStripeState(subscriptionId.data, currentUser.id);
-  if (!teamState) redirect("/team?error=team-unavailable");
-
   const result = await grantTeamSubscriptionSeat({
-    currentPeriodEnd: teamState.currentPeriodEnd,
     ownerId: currentUser.id,
     seatUserId: currentUser.id,
-    status: teamState.status,
-    stripeSubscriptionId: teamState.ownedSubscription.stripeSubscriptionId,
     subscriptionId: subscriptionId.data,
   });
   if (result.status !== "assigned") {
@@ -139,7 +108,7 @@ export async function claimTeamSeat(formData: FormData) {
 }
 
 export async function inviteTeamMember(formData: FormData) {
-  assertCommerceWritesAllowed();
+  assertLocalDockerDatabaseUrl();
 
   const currentUser = await getCurrentUser();
   if (!currentUser?.id) redirect("/login?callbackUrl=%2Fteam");
@@ -148,11 +117,12 @@ export async function inviteTeamMember(formData: FormData) {
   const email = inviteEmailSchema.safeParse(formData.get("email"));
   if (!subscriptionId.success || !email.success) redirect("/team?error=invalid-invite");
 
-  const [teamState, inviteDetails] = await Promise.all([
-    getTeamStripeState(subscriptionId.data, currentUser.id),
+  const [ownedTeam, inviteDetails] = await Promise.all([
+    getOwnedTeamSubscription(currentUser.id),
     getTeamInviteDetails(subscriptionId.data),
   ]);
-  if (!teamState || !inviteDetails) redirect("/team?error=team-unavailable");
+  if (!ownedTeam || ownedTeam.id !== subscriptionId.data || !inviteDetails)
+    redirect("/team?error=team-unavailable");
   if (inviteDetails.availableSeats === 0) redirect("/team?error=team-full");
 
   const token = createTeamInviteToken(subscriptionId.data, email.data);
@@ -177,7 +147,7 @@ export async function inviteTeamMember(formData: FormData) {
 }
 
 export async function removeTeamMember(formData: FormData) {
-  assertCommerceWritesAllowed();
+  assertLocalDockerDatabaseUrl();
 
   const currentUser = await getCurrentUser();
   if (!currentUser?.id) redirect("/login?callbackUrl=%2Fteam");
@@ -195,4 +165,29 @@ export async function removeTeamMember(formData: FormData) {
 
   refreshTeamPages();
   redirect("/team?notice=seat-removed");
+}
+
+export async function prepareTeamSeatReduction(formData: FormData) {
+  assertLocalDockerDatabaseUrl();
+  const user = await getCurrentUser();
+  if (!user?.id) redirect("/login?callbackUrl=%2Fteam");
+  const selection = z
+    .object({
+      subscriptionId: subscriptionIdSchema,
+      seats: subscriptionCheckoutQuantitySchema,
+      retainedUserIds: z.array(userIdSchema).max(100),
+    })
+    .safeParse({
+      subscriptionId: formData.get("subscriptionId"),
+      seats: formData.get("seats"),
+      retainedUserIds: formData.getAll("retainedUserIds"),
+    });
+  if (!selection.success) redirect("/team?error=invalid-selection");
+  const result = await getSubscriptionStore().prepareReduction({
+    ...selection.data,
+    ownerId: user.id,
+  });
+  if (result.status !== "prepared") redirect("/team?error=invalid-selection");
+  refreshTeamPages();
+  redirect("/team?notice=reduction-prepared");
 }

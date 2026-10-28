@@ -6,9 +6,8 @@ import {
   subscriptionCheckoutIdempotencyKey,
 } from "../apps/web/src/subscriptions/checkout-reservation";
 import {
-  stripeSubscriptionEntitlementId,
   stripeSubscriptionGrantsAccess,
-  stripeSubscriptionSeatEntitlementId,
+  subscriptionGrantId,
 } from "../apps/web/src/subscriptions/access";
 import { assertCommerceWritesAllowed } from "../apps/web/src/db/local-docker";
 import {
@@ -25,7 +24,6 @@ import {
 } from "../apps/web/src/subscriptions/stripe";
 import {
   isTeamSubscription,
-  mergeTeamSubscriptionFields,
   subscriptionCheckoutQuantitySchema,
 } from "../apps/web/src/subscriptions/team-contracts";
 import {
@@ -73,16 +71,12 @@ try {
     }),
     check("Stripe entitlement IDs are deterministic", () => {
       assert.equal(
-        stripeSubscriptionEntitlementId("sub_contract_fixture"),
-        "stripe_ent_sub_contract_fixture",
-      );
-      assert.equal(
-        stripeSubscriptionSeatEntitlementId("sub_contract_fixture", "user_1"),
-        stripeSubscriptionSeatEntitlementId("sub_contract_fixture", "user_1"),
+        subscriptionGrantId("sub_contract_fixture", "user_1"),
+        subscriptionGrantId("sub_contract_fixture", "user_1"),
       );
       assert.notEqual(
-        stripeSubscriptionSeatEntitlementId("sub_contract_fixture", "user_1"),
-        stripeSubscriptionSeatEntitlementId("sub_contract_fixture", "user_2"),
+        subscriptionGrantId("sub_contract_fixture", "user_1"),
+        subscriptionGrantId("sub_contract_fixture", "user_2"),
       );
     }),
     check("one checkout attempt has one Stripe idempotency key", () => {
@@ -190,9 +184,13 @@ try {
       assert.equal(getStripeSubscriptionQuantity({ items: { data: [{}] } }), 1);
       assert.equal(isTeamSubscription({ ownerId: "owner_1", seats: 2 }), true);
       assert.equal(isTeamSubscription({ ownerId: "owner_1", seats: 1 }), false);
-      assert.deepEqual(
-        mergeTeamSubscriptionFields({ preserved: true }, { ownerId: "owner_1", seats: 6 }),
-        { ownerId: "owner_1", preserved: true, seats: 6 },
+      assert.equal(
+        isTeamSubscription({ ownerId: "owner_1", seats: 1, membershipKind: "team" }),
+        true,
+      );
+      assert.equal(
+        isTeamSubscription({ ownerId: "owner_1", seats: 4, membershipKind: "individual" }),
+        false,
       );
     }),
     check("team invite links are signed and optionally email-scoped", () => {

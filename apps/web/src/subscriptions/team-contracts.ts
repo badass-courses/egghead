@@ -11,6 +11,7 @@ export const subscriptionCheckoutQuantitySchema = z.coerce
 
 export const teamSubscriptionFieldsSchema = z.object({
   ownerId: z.string().min(1),
+  membershipKind: z.enum(["individual", "team"]).optional(),
   seats: z.coerce.number().int().min(1).max(MAX_TEAM_SEATS),
 });
 
@@ -18,15 +19,9 @@ export type TeamSubscriptionFields = z.infer<typeof teamSubscriptionFieldsSchema
 
 export function isTeamSubscription(fields: unknown) {
   const parsedFields = teamSubscriptionFieldsSchema.safeParse(fields);
-  return parsedFields.success && parsedFields.data.seats >= MIN_TEAM_SEATS;
-}
-
-export function mergeTeamSubscriptionFields(currentFields: unknown, input: TeamSubscriptionFields) {
-  const parsedFields = z.record(z.string(), z.unknown()).safeParse(currentFields);
-
-  return {
-    ...(parsedFields.success ? parsedFields.data : {}),
-    ownerId: input.ownerId,
-    seats: input.seats,
-  };
+  return (
+    parsedFields.success &&
+    (parsedFields.data.membershipKind === "team" ||
+      (!parsedFields.data.membershipKind && parsedFields.data.seats >= MIN_TEAM_SEATS))
+  );
 }
