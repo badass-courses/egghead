@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-15T00:00:00Z",
+  "title": "Design System: egghead Workshop landing page",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "terminal",
+        "value": "0 20px 65px #0004",
+        "purpose": "Depth beneath terminal artwork."
+      }
+    ],
+    "motion": [
+      {
+        "name": "details-link-background",
+        "value": "background 0.15s",
+        "purpose": "Hover transition removed for reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "small",
+        "value": "640px"
+      }
+    ]
+  },
+  "components": []
+}

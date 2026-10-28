@@ -1,0 +1,104 @@
+# Native Workshop capabilities
+
+This sibling to [PR 29](https://github.com/badass-courses/egghead/pull/29) introduces native CourseBuilder Workshops in local development. It provides create, inspect, list, and revise operations without requiring feature flags or coupons. Draft creation does not require commerce objects; publication requires a linked native Product and Price. Preview operations return the same candidate Workshop as their corresponding mutation, without writing it.
+
+## One contract and one handler
+
+`packages/core/src/contracts.ts` defines input, output, failure, approval requirements, and annotations. `packages/core/src/workshops.ts` binds the handlers and exports one ordered capabilities tuple. The MCP projection discovers its schemas and metadata from that tuple and executes those handlers. Server-side consumers can call the same capabilities with Actor, Approval, and WorkshopStore Layers. Contract imports require no server services.
+
+The add-a-capability skill refers to `@rat-stack/capability`, which is not published in npm. The small local helper in `packages/core/src/capability.ts` implements the required definition, binding, decoding, output validation, and approval gate. It uses Effect 3.11.5, already present in this repository's published dependency graph, and its `Context.Tag` API. It does not pretend that Effect 4's `Context.Service` is available. Tests use compatible `@effect/vitest` 0.14.0. No framework copy or additional unused transport surfaces are introduced.
+
+## Runtime compatibility
+
+The read-only Event catalog uses Effect 4; native Workshop capabilities use Effect
+3.11.5. The web app imports the native runtime through `effect-v3`, an npm alias
+for the same exact version used by `@egghead/core`. Their schemas and Layers must
+stay within their respective runtimes. `event-catalog.ts` composes the read-only
+Event adapter; `catalog.ts` reads native Workshops and purchase offers.
+
+The Event package tests use Vitest 5 and `@effect/vitest` 4. Native core, builder,
+and web route regressions use Vitest 2 and `@effect/vitest` 0.14. The full check
+runs both suites; neither dependency major is upgraded during integration.
+
+## Connect locally
+
+Use the builder device-token authentication flow, then connect an MCP client to `http://localhost:3000/api/workshop-mcp` with a Bearer token. The authenticated account must have an active admin or contributor role. Do not commit client authentication headers. The endpoint checks the local runtime and local test-database URL before authentication or tool execution. Beta and production are refused, including when beta database access is approved elsewhere.
+
+The local adapter uses mysql2 for authentication and Workshop storage, rather than the existing builder's PlanetScale transport. Revoked and expired tokens and inactive/deleted role assignments are rejected. Legacy tokens with no expiry retain the existing local-development behavior; production use is not supported.
+
+| Capability                 | Required values                                    | Approval |
+| -------------------------- | -------------------------------------------------- | -------- |
+| `list_workshops`           | `limit` between 1 and 50, optional `cursor`        | None     |
+| `get_workshop`             | Workshop `id`                                      | None     |
+| `preview_create_workshop`  | Creation values below                              | None     |
+| `create_workshop`          | Same creation values, transport `confirm: true`    | Required |
+| `preview_update_workshop`  | `id`, `expectedRevision`, `changes`                | None     |
+| `update_workshop`          | Same update values, transport `confirm: true`      | Required |
+| `preview_publish_workshop` | `id`, `expectedRevision`, `productId`, `priceId`   | None     |
+| `publish_workshop`         | Same publication values, transport `confirm: true` | Required |
+
+Creation values are `requestId` (UUID), `title`, `description`, `startsAt`, `endsAt`, `timezone`, and `attendeeInstructions`. Optional copy can be supplied as an empty string. Dates are ISO timestamps with an explicit offset; storage normalizes them to UTC. The Workshop timezone must be recognized by Intl. Slug initially equals the stable native ID `workshop~<requestId>`, so changing a title cannot change identity or an existing URL.
+
+Preview first, show the candidate to the operator, then confirm using the same request ID or expected revision. A duplicate creation ID returns Conflict; write annotations deliberately make no retry-idempotency promise. Inspect that ID after an uncertain creation result rather than retrying with a new UUID. Updates increment `fields.workshopRevision`; stale edits must be reloaded and previewed again. Create and update preserve the current publication state. Publishing uses the separate preview/publish pair below.
+
+Unknown input fields are rejected, including `flagKey`, `eggheadSale`, provider identifiers, and client-supplied actor IDs. Schedule validation merges patch fields with the current Workshop, preventing an update to only startsAt from invalidating the unchanged end. Invalid calendar dates, invalid zones, and empty patches fail before writes. Unauthorized inspect operations return NotFound to avoid exposing another contributor's draft.
+
+## Native persistence and query budget
+
+The system of record is the published CourseBuilder `ContentResource` table, with `type = 'workshop'` and a revision in fields. Drafts are unlisted; published Workshops are public and require native Product and Price references. No SQL tables or migrations are added. Existing native Workshops without this draft contract are not automatically adopted, and no event is retyped.
+
+The application writes through WorkshopStore. Create uses an existence read, one atomic INSERT, and a re-read. Revision uses a current-row read, one atomic UPDATE conditioned on ID, creator, type, the current state/visibility (draft/unlisted or published/public), and expected revision, then a re-read. The update merges unrelated top-level metadata and replaces the landingPage subtree atomically, including removal of omitted optional fields. An absent landingPage is removed rather than stored as JSON null. Provider work and Inngest delivery are absent from these Workshop transactions.
+
+The list operation performs one statement, independent of page size, fetching at most 51 rows with keyset pagination ordered by ID. Contributors are filtered to their owner ID; admins can list all managed Workshops. Published schema indexes available to the list are `type_idx`, `createdById_idx`, and the primary key; point reads and updates use PRIMARY. The local integration suite verifies a point read's EXPLAIN result is `const` on PRIMARY. Production-scale list examined-row budgets remain unmeasured and are a release gate, not a guarantee supplied by LIMIT. Each capability invocation uses one scoped storage connection; concurrent client requests are not globally throttled in this local-only slice.
+
+Returned fields are explicitly decoded; malformed native rows produce InvalidWorkshop instead of silently disappearing. Storage errors are sanitized to StoreUnavailable and are not treated as successful writes. Runtime safety failures are RuntimeBlocked. Mutations do not retire Products, unlink purchases, or rewrite resource relationships.
+
+## Verification
+
+`pnpm workshops:test` runs core handler/property tests and MCP discovery, invocation, confirmation, and runtime-guard tests. These run offline and are included in `pnpm check`. `pnpm --filter @egghead/builder typecheck:workshops` also checks the adapter and projection tests, which the existing builder tsconfig otherwise excludes.
+
+For real MySQL verification, set `WORKSHOP_TEST_DATABASE_URL` to an isolated local database whose name ends in `_test` or `_local`, then run `pnpm --filter @egghead/builder test:workshops:mysql`. The suite creates a uniquely prefixed native resource fixture table and drops it afterward. It proves native persistence/re-read, duplicate identity protection, owner pagination, extra-field preservation, and concurrent compare-and-set updates across independent connections. It does not prove PlanetScale behavior, which is outside this endpoint's allowed runtime.
+
+`scripts/workshop-catalog-mysql.ts` verifies chronological public pagination using a connection-local temporary ContentResource table. The cursor contains `(startsAt, id)` so tied dates remain stable across pages. Each page executes one statement and returns at most 21 rows (20 results plus a continuation probe). The existing type index filters Workshops; sorting the JSON start time still requires a filesort. The fixture records EXPLAIN against mixed content; production-scale examined-row and sort budgets remain a release gate. Run `pnpm exec tsx --tsconfig apps/web/tsconfig.json scripts/workshop-catalog-mysql.ts` with a permitted local `DATABASE_URL` and `EGGHEAD_RUNTIME=local`.
+
+The native suite also seeds synthetic, disposable device/user/role tables and verifies a confirmed HTTP MCP call through authentication, the shared handler, and persistence. It tests expired/revoked tokens and inactive role assignments. Tokens and synthetic identifiers are generated at runtime and are never saved as fixtures or printed. Token expiry compares against the database clock, avoiding client/server timezone differences. The suite was exercised with temporary MySQL 9.2; target-provider compatibility remains a later release check.
+
+## Follow-on adoption
+
+PR 29 can reuse this contract/handler registry after merging or rebasing. Legacy sale tools remain separate. Production purchase fulfillment and production builder writes remain disabled in this local implementation.
+
+## Create in chat, view in Egghead
+
+A chat with access to the local MCP endpoint can preview and create a Workshop, then link to the Egghead web app at `/local/workshops/<workshop-id>`. The index at `/local/workshops` lists the same actor's drafts with bounded cursor pagination. Refresh either page after changes in chat.
+
+Run the builder MCP server and the web dev server. Configure these server-only values in the web app's ignored `.env.local`:
+
+```dotenv
+EGGHEAD_RUNTIME=local
+WORKSHOP_MCP_URL=http://127.0.0.1:3010/api/workshop-mcp
+WORKSHOP_MCP_TOKEN=<local-device-token>
+```
+
+The preview is available only with `NODE_ENV=development`, `EGGHEAD_RUNTIME=local`, a loopback Workshop endpoint, and a configured device token. Beta and production return 404. A signed-in admin or contributor session is required before the server uses its MCP credential. Contributors see only Workshops they own; admins can view all Workshops accessible to the configured MCP actor. The token stays on the server; the browser receives rendered Workshop content. Reads use the existing authenticated MCP capabilities and shared contracts. This adds no browser write endpoint or production content reader. `pnpm workshops:preview:contract` checks the runtime and endpoint restrictions.
+
+This local preview does not make a localhost MCP endpoint reachable from the hosted ChatGPT connector service. Use a chat with local tool access, such as the Codex session running the dev servers.
+
+### Landing-page content
+
+Optional `fields.landingPage` holds the banner lettering, headline, introduction, instructor profile, long-form sections, takeaways, and FAQs. Both create and update inputs accept the same bounded schema. Existing Workshops without landing-page copy still render their title, description, schedule, and attendee instructions. New copy follows the same preview, approval, ownership, and revision checks as schedule edits; the MySQL adapter needs no additional tables or columns.
+
+The local draft route renders a full Workshop landing page in the Egghead app shell, following the structure of the Claude Code workshop reference. Its details link scrolls to the schedule. Native FAQ disclosures work without client JavaScript. The draft preview shows a configured native offer, but registration stays closed until publication.
+
+## Publish and test a purchase locally
+
+`preview_publish_workshop` takes `id`, `expectedRevision`, `productId`, and `priceId`. `publish_workshop` takes the same values plus transport `confirm: true`. Ownership, approval, and revision checks apply. Publication requires a linked active unlimited-seat live Product and an offered, supported, active one-time USD Price. The Workshop stores native offer references and advances to published/public in one compare-and-set update. Inspect after an uncertain outcome; publishing is not retry-idempotent.
+
+For this local workflow, `scripts/local-workshop-offer.ts <workshop-id>` prepares a $375 USD unlimited-seat offer in Stripe test mode and the isolated native catalog. It requires local development, a permitted local database, and a test Stripe key. It does not publish the Workshop. Provider identifiers stay in operational storage, not fixtures or documentation.
+
+Published Workshops render at `/workshop/<workshop-id>`. Drafts return 404 there and remain available through the authenticated local preview. A future published Workshop with a valid offer shows a purchase form. The web action reloads publication and exact offer references, checks the server origin, and calls the published CourseBuilder price resolver before creating a one-time Stripe Checkout session. The generic CourseBuilder checkout route rejects Workshop products, preventing a draft checkout bypass. No coupons or feature flags are involved.
+
+**Purchasing and fulfillment are local sandbox features only.** Both require `NODE_ENV=development`, `EGGHEAD_RUNTIME=local`, the isolated local database, and a Stripe test key. Beta and production cannot create Workshop Checkout sessions or run the local purchase function. Production fulfillment ownership still requires resolution before release.
+
+Run a local Stripe listener forwarding signed checkout completion and asynchronous payment success events to `/api/coursebuilder/webhook/stripe`, plus an isolated Inngest dev instance connected to `/api/inngest`. The local function retrieves the actual paid test session, verifies its metadata and exact amount, then delegates purchase recording to the published CourseBuilder commerce workflow. Session-based idempotency covers event replay. The thanks page reports payment state; opening it never grants access.
+
+Publication adds one bounded linked Product/Price eligibility read before the existing revision write. Public reads select one Workshop by primary key and at most two linked offer rows; ambiguity closes checkout. The contract suite checks draft/past/invalid schedule rejection, sandbox runtime restrictions, exact paid amount, checkout origin, and idempotency scope. Provider delivery and full payment recording require the local Stripe/Inngest integration check; offline contracts alone do not prove them.

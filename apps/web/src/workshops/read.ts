@@ -6,7 +6,7 @@ import {
   listWorkshopReferences,
 } from "@egghead/workshops/capabilities";
 import type { WorkshopCursor } from "@egghead/workshops/contracts";
-import { workshopCatalogLayer } from "./catalog";
+import { workshopCatalogLayer } from "./event-catalog";
 
 export async function getWorkshopBySlug(slug: string) {
   await connection();

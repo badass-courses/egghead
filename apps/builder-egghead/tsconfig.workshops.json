@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/lib/workshops/**/*.ts",
+    "src/app/api/workshop-mcp/**/*.ts",
+    "test/workshops/**/*.ts",
+    "test/workshops-mysql/**/*.ts",
+    "vitest.workshops.config.ts",
+    "vitest.workshops-mysql.config.ts"
+  ],
+  "exclude": ["node_modules"]
+}

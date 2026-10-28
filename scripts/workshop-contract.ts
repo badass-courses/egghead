@@ -1,6 +1,6 @@
 import { workshopFullPrice, workshopStatus } from "@egghead/workshops/policy";
 
-import { createWorkshopMysqlConnection } from "../apps/web/src/workshops/catalog";
+import { createWorkshopMysqlConnection } from "../apps/web/src/workshops/event-catalog";
 
 function assertEqual(
   name: string,

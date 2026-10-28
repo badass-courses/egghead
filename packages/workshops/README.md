@@ -6,7 +6,7 @@ This slice keeps Builder as the event editor and registration destination. It re
 
 `getWorkshopContract` in `src/contracts.ts` defines the input, output, failures, read-only annotations, and approval setting. `getWorkshop` in `src/capabilities.ts` decodes its input, requests a source snapshot through `WorkshopCatalog`, samples the Effect clock, applies `evaluateWorkshop`, and validates the output. `listUpcomingWorkshops` follows the same path with a bounded page and cursor. The registry keeps the contracts beside their handlers.
 
-`WorkshopCatalog` owns the reader interface, not SQL. `@egghead/workshop-catalog/mysql` provides the CourseBuilder MySQL Layer. The application chooses its connection factory in `apps/web/src/workshops/catalog.ts`, preserving the existing local/beta database safety checks. `memoryWorkshopCatalog` supplies the same interface for tests or a disposable composition.
+`WorkshopCatalog` owns the reader interface, not SQL. `@egghead/workshop-catalog/mysql` provides the CourseBuilder MySQL Layer. The application chooses its connection factory in `apps/web/src/workshops/event-catalog.ts`, preserving the existing local/beta database safety checks. `memoryWorkshopCatalog` supplies the same interface for tests or a disposable composition.
 
 The Next read adapter and JSON CLI call the same handlers. Formatting is separate from server execution. HTTP, MCP, code mode, and RPC projections are not implemented in this slice; their future entry points should consume these contracts and handlers. There is no owned reservation lifecycle or new infrastructure to justify XState or Alchemy here.
 

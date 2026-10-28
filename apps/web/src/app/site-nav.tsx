@@ -17,6 +17,7 @@ const NAV_LINKS = [
   { href: "/workshops", label: "Workshops" },
   { href: "/lessons", label: "Lessons" },
   { href: "/blog", label: "Articles" },
+  { href: "/live-events", label: "Live events" },
 ];
 
 export type SiteAccountState = "authenticated" | "anonymous" | "unknown";
@@ -29,7 +30,11 @@ type SiteNavAccount = {
 function isActive(pathname: string | null, href: string) {
   if (pathname === null) return false;
   if (href === "/") return pathname === "/";
-  return pathname === href || pathname.startsWith(`${href}/`);
+  return (
+    pathname === href ||
+    pathname.startsWith(`${href}/`) ||
+    (href === "/live-events" && pathname.startsWith("/workshop/"))
+  );
 }
 
 function SearchIcon() {
@@ -103,7 +108,7 @@ function AccountLink({
         "press rounded-xl text-sm font-extrabold",
         mobile
           ? "flex items-center justify-center gap-2 px-4 pt-[13px] pb-[11px] text-center"
-          : "hidden items-center gap-2 px-5 pt-[11px] pb-[9px] md:flex",
+          : "hidden items-center gap-2 px-5 pt-[11px] pb-[9px] lg:flex",
         anonymous
           ? "border border-yolk-shadow/40 bg-yolk-grad text-yolk-foreground shadow-btn hover:shadow-btn-hover"
           : "border border-border-strong bg-raised-grad text-foreground shadow-btn-ghost",
@@ -182,9 +187,9 @@ export function SiteNavView({
             <span className="text-xl font-black tracking-tight">egghead</span>
           </Link>
 
-          <span aria-hidden className="mx-0.5 hidden size-1.5 md:block" />
+          <span aria-hidden className="mx-0.5 hidden size-1.5 lg:block" />
 
-          <div className="hidden items-center gap-1.5 md:flex">
+          <div className="hidden items-center gap-1.5 lg:flex">
             {NAV_LINKS.map((link) => {
               const active = isActive(pathname, link.href);
 
@@ -208,7 +213,7 @@ export function SiteNavView({
 
           <Form
             action="/q"
-            className="ml-auto hidden w-56 items-center gap-2.5 rounded-full border border-border-strong bg-well px-4 py-2 text-muted-foreground shadow-well focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring lg:flex"
+            className="ml-auto hidden w-48 items-center gap-2.5 rounded-full border border-border-strong bg-well px-4 py-2 text-muted-foreground shadow-well focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring xl:flex"
           >
             <SearchIcon />
             <input
@@ -225,7 +230,7 @@ export function SiteNavView({
 
           <Link
             aria-label="Search"
-            className="press ml-auto grid size-10 place-items-center rounded-xl border border-border-strong bg-surface-grad text-muted-foreground shadow-btn-ghost lg:hidden"
+            className="press ml-auto grid size-10 place-items-center rounded-xl border border-border-strong bg-surface-grad text-muted-foreground shadow-btn-ghost xl:hidden"
             href="/q"
           >
             <SearchIcon />
@@ -237,7 +242,7 @@ export function SiteNavView({
             aria-expanded={menuOpen}
             aria-label={menuOpen ? "Close menu" : "Open menu"}
             className={cn(
-              "grid size-10 place-items-center rounded-xl border md:hidden",
+              "grid size-10 place-items-center rounded-xl border lg:hidden",
               menuOpen
                 ? "border-border-strong bg-well font-black text-foreground shadow-well"
                 : "press border-yolk-shadow/40 bg-yolk-grad shadow-btn",
@@ -258,7 +263,7 @@ export function SiteNavView({
         </nav>
 
         {menuOpen ? (
-          <div className="absolute inset-x-0 top-[calc(100%+0.75rem)] space-y-1.5 rounded-2xl border bg-surface-grad p-3 shadow-card-deep md:hidden">
+          <div className="absolute inset-x-0 top-[calc(100%+0.75rem)] space-y-1.5 rounded-2xl border bg-surface-grad p-3 shadow-card-deep lg:hidden">
             {NAV_LINKS.map((link) => {
               const active = isActive(pathname, link.href);
 

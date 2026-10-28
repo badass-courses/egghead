@@ -1,6 +1,7 @@
 # === Vendored / dependency directories ===
+
 **/.git/**
-**/__pycache__/**
+**/**pycache**/**
 **/.pytest_cache/**
 **/.mypy_cache/**
 **/.ruff_cache/**
@@ -9,8 +10,8 @@
 **/node_modules/**
 **/site-packages/**
 **/.pnpm-store/**
-**/__Snapshots__/**
-**/__snapshots__/**
+**/**Snapshots**/**
+**/**snapshots**/**
 **/.agents/skills/**
 **/.claude/skills/**
 **/.github/skills/**
@@ -23,18 +24,20 @@
 **/.vercel/**
 **/.angular/**
 **/vendor/**
-**/_vendor/**
+**/\_vendor/**
 **/third_party/**
 **/Pods/**
 **/.bundle/**
 
 # === Root-anchored ambiguous directories ===
+
 build/**
 out/**
 env/**
 ENV/**
 
 # === Generated / build-output directories (match anywhere) ===
+
 **/target/**
 **/dist/**
 **/generated/**
@@ -45,41 +48,45 @@ ENV/**
 **/src/main/generated/**
 
 # === Minified build output ===
-**/*.min.js
-**/*.min.css
-**/*.bundle.js
+
+**/\*.min.js
+**/_.min.css
+\*\*/_.bundle.js
 
 # === Yarn PnP loader files ===
+
 **/.pnp.cjs
 **/.pnp.loader.mjs
 
 # === Generated protobuf / codegen files ===
-**/*_pb.d.ts
-**/*_pb.js
-**/*.pb.go
-**/*_pb2.py
-**/*_pb2_grpc.py
-**/*_pb2.pyi
-**/*.grpc.swift
-**/*.pb.swift
-**/*.sql.go
-**/*.designer.cs
-**/*.g.dart
-**/*.pb.dart
-**/*_pb.rb
-**/*.d.ts
-**/*.gen.ts
-**/*.gen.tsx
-**/*.gen.js
-**/*.gen.jsx
+
+**/\*\_pb.d.ts
+**/_\_pb.js
+\*\*/_.pb.go
+**/\*\_pb2.py
+**/_\_pb2_grpc.py
+\*\*/_\_pb2.pyi
+**/\*.grpc.swift
+**/_.pb.swift
+\*\*/_.sql.go
+**/\*.designer.cs
+**/_.g.dart
+\*\*/_.pb.dart
+**/\*\_pb.rb
+**/_.d.ts
+\*\*/_.gen.ts
+**/\*.gen.tsx
+**/_.gen.js
+\*\*/_.gen.jsx
 
 # === Package manager files ===
+
 **/go.mod
 **/package.json
-**/*.pbxproj
-**/*.xcstrings
-**/*.strings
-**/*.properties
+**/\*.pbxproj
+**/_.xcstrings
+\*\*/_.strings
+**/\*.properties
 **/pom.xml
 **/Package.swift
 **/bun.lock
@@ -87,112 +94,119 @@ ENV/**
 **/.eslintignore
 
 # === Lock / sum files ===
+
 **/go.sum
 **/package-lock.json
 **/pnpm-lock.yaml
 **/yarn.lock
-**/Package.resolved
+\*\*/Package.resolved
 
 # === Images ===
-**/*.jpg
-**/*.jpeg
-**/*.png
-**/*.gif
-**/*.svg
-**/*.ico
-**/*.webp
-**/*.bmp
-**/*.tiff
+
+**/\*.jpg
+**/_.jpeg
+\*\*/_.png
+**/\*.gif
+**/_.svg
+\*\*/_.ico
+**/\*.webp
+**/_.bmp
+\*\*/_.tiff
 
 # === Fonts ===
-**/*.woff
-**/*.woff2
-**/*.ttf
-**/*.eot
-**/*.otf
+
+**/\*.woff
+**/_.woff2
+\*\*/_.ttf
+**/\*.eot
+**/\*.otf
 
 # === Media ===
-**/*.mp3
-**/*.mp4
-**/*.wav
-**/*.avi
-**/*.mov
-**/*.mkv
-**/*.flac
-**/*.ogg
-**/*.srt
+
+**/\*.mp3
+**/_.mp4
+\*\*/_.wav
+**/\*.avi
+**/_.mov
+\*\*/_.mkv
+**/\*.flac
+**/_.ogg
+\*\*/_.srt
 
 # === Archives ===
-**/*.zip
-**/*.tar
-**/*.gz
-**/*.rar
-**/*.7z
-**/*.bz2
+
+**/\*.zip
+**/_.tar
+\*\*/_.gz
+**/\*.rar
+**/_.7z
+\*\*/_.bz2
 
 # === Documents ===
-**/*.pdf
-**/*.doc
-**/*.docx
-**/*.xls
-**/*.xlsx
-**/*.ppt
-**/*.pptx
+
+**/\*.pdf
+**/_.doc
+\*\*/_.docx
+**/\*.xls
+**/_.xlsx
+\*\*/_.ppt \*_/_.pptx
 
 # === Data / serialized ===
-**/*.db
-**/*.sqlite
-**/*.sqlite3
-**/*.parquet
-**/*.avro
-**/*.arrow
-**/*.npy
-**/*.pkl
-**/*.json
-**/*.jsonl
+
+**/\*.db
+**/_.sqlite
+\*\*/_.sqlite3
+**/\*.parquet
+**/_.avro
+\*\*/_.arrow
+**/\*.npy
+**/_.pkl
+\*\*/_.json \*_/_.jsonl
 
 # === ML models ===
-**/*.onnx
-**/*.tflite
-**/*.h5
-**/*.safetensors
+
+**/\*.onnx
+**/_.tflite
+\*\*/_.h5 \*_/_.safetensors
 
 # === Compiled / binary ===
-**/*.exe
-**/*.dll
-**/*.so
-**/*.dylib
-**/*.bin
-**/*.pyc
-**/*.class
-**/*.o
-**/*.a
-**/*.wasm
+
+**/\*.exe
+**/_.dll
+\*\*/_.so
+**/\*.dylib
+**/_.bin
+\*\*/_.pyc
+**/\*.class
+**/_.o
+\*\*/_.a \*_/_.wasm
 
 # === Certificates / keys ===
-**/*.cer
-**/*.pem
-**/*.p12
+
+**/\*.cer
+**/_.pem
+\*\*/_.p12
 
 # === Platform-specific / non-reviewable ===
-**/*.stringsdict
-**/*.snap
-**/*.adoc
-**/*.arb
-**/*.lock
-**/*.po
-**/*.fbx
-**/*.log
-**/*.xib
-**/*.meta
-**/*.kml
-**/*.prefab
-**/*.eml
-**/*.csv
-**/*.grpc.reflection
-**/*.js.map
+
+**/\*.stringsdict
+**/_.snap
+\*\*/_.adoc
+**/\*.arb
+**/_.lock
+\*\*/_.po
+**/\*.fbx
+**/_.log
+\*\*/_.xib
+**/\*.meta
+**/_.kml
+\*\*/_.prefab
+**/\*.eml
+**/_.csv
+\*\*/_.grpc.reflection \*_/_.js.map
 
 # === Repo-specific (added) ===
+
 .impeccable/**
 apps/builder-egghead/plans/**
 apps/builder-egghead/src/data/sampleTranscript.ts

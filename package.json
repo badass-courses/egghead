@@ -24,7 +24,7 @@
     "email:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/email-delivery-contract.ts",
     "beta:runtime-guard": "tsx --tsconfig apps/web/tsconfig.json scripts/beta-runtime-guard.ts",
     "builder:smoke": "tsx --tsconfig apps/builder-egghead/tsconfig.json scripts/builder-smoke.ts",
-    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm workshop:boundaries && pnpm workshop:contract && pnpm workshop:test && pnpm search:typesense-contract && pnpm sitemap:contract && pnpm stripe:subscription-contract && pnpm stripe:webhook-signature-contract && pnpm checkout:customer:smoke && pnpm membership:config:smoke && pnpm coursebuilder:prices:smoke && pnpm coursebuilder:v3:smoke && pnpm profile:contract && pnpm email:contract && pnpm beta:runtime-guard && pnpm builder:smoke",
+    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm workshop:boundaries && pnpm workshop:contract && pnpm workshop:test && pnpm search:typesense-contract && pnpm sitemap:contract && pnpm stripe:subscription-contract && pnpm stripe:webhook-signature-contract && pnpm checkout:customer:smoke && pnpm membership:config:smoke && pnpm coursebuilder:prices:smoke && pnpm coursebuilder:v3:smoke && pnpm profile:contract && pnpm email:contract && pnpm beta:runtime-guard && pnpm builder:smoke && pnpm workshops:test",
     "hooks:install": "lefthook install",
     "hooks:pre-commit": "lefthook run pre-commit --all-files",
     "coursebuilder:prices:smoke": "node --import tsx scripts/coursebuilder-prices-smoke.ts",
@@ -34,9 +34,12 @@
     "workshop:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/workshop-contract.ts",
     "workshops": "tsx --tsconfig apps/web/tsconfig.json scripts/workshops.ts",
     "workshop:boundaries": "tsx scripts/workshop-boundaries.ts",
-    "workshop:test": "vitest run packages/workshops/test packages/workshop-catalog/test apps/web/test/workshops/pages.test.ts",
+    "workshop:test": "vitest run packages/workshops/test packages/workshop-catalog/test",
     "test": "pnpm workshop:test",
-    "workshop:mysql-test": "vitest run packages/workshop-catalog/integration/mysql.test.ts"
+    "workshop:mysql-test": "vitest run packages/workshop-catalog/integration/mysql.test.ts",
+    "workshops:test": "pnpm --filter @egghead/builder typecheck:workshops && pnpm --filter @egghead/core test && pnpm --filter @egghead/builder test && pnpm workshops:preview:contract && pnpm workshops:checkout:contract",
+    "workshops:preview:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/workshop-preview-contract.ts",
+    "workshops:checkout:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/workshop-checkout-contract.ts"
   },
   "dependencies": {
     "@coursebuilder/adapter-drizzle": "3.1.3",

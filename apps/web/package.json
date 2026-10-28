@@ -19,6 +19,7 @@
     "@coursebuilder/email-templates": "1.0.8",
     "@coursebuilder/next": "0.0.42",
     "@coursebuilder/utils": "1.1.6",
+    "@egghead/core": "workspace:*",
     "@egghead/ui": "workspace:*",
     "@egghead/workshop-catalog": "workspace:*",
     "@egghead/workshops": "workspace:*",
@@ -26,6 +27,7 @@
     "@react-email/components": "0.0.27",
     "drizzle-orm": "0.36.0",
     "effect": "4.0.0",
+    "effect-v3": "npm:effect@3.11.5",
     "inngest": "3.54.2",
     "mysql2": "^3.22.5",
     "next": "16.2.5",
@@ -45,6 +47,7 @@
     "autoprefixer": "^10.4.14",
     "drizzle-kit": "0.28.1",
     "tailwindcss": "^4.3.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "2.1.9"
   }
 }

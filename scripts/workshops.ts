@@ -6,7 +6,7 @@ import {
   listUpcomingWorkshopsContract,
   InvalidWorkshopInput,
 } from "@egghead/workshops/contracts";
-import { workshopCatalogLayer } from "../apps/web/src/workshops/catalog";
+import { workshopCatalogLayer } from "../apps/web/src/workshops/event-catalog";
 
 const [command = "list", input = "{}"] = process.argv.slice(2);
 const program =
