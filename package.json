@@ -34,7 +34,7 @@
     "workshop:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/workshop-contract.ts",
     "workshops": "tsx --tsconfig apps/web/tsconfig.json scripts/workshops.ts",
     "workshop:boundaries": "tsx scripts/workshop-boundaries.ts",
-    "workshop:test": "vitest run packages/workshops/test packages/workshop-catalog/test",
+    "workshop:test": "vitest run packages/workshops/test packages/workshop-catalog/test apps/web/test/workshops/pages.test.ts",
     "test": "pnpm workshop:test",
     "workshop:mysql-test": "vitest run packages/workshop-catalog/integration/mysql.test.ts"
   },

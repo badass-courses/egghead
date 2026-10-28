@@ -11,7 +11,7 @@ type WorkshopRouteProps = {
 
 export async function generateMetadata({ params }: WorkshopRouteProps): Promise<Metadata> {
   const { slug } = await params;
-  const workshop = await getWorkshopBySlug(decodeURIComponent(slug));
+  const workshop = await getWorkshopBySlug(slug);
   if (!workshop) return {};
 
   return {
@@ -31,7 +31,7 @@ export async function generateMetadata({ params }: WorkshopRouteProps): Promise<
 
 async function WorkshopRouteContent({ params }: WorkshopRouteProps) {
   const { slug } = await params;
-  const workshop = await getWorkshopBySlug(decodeURIComponent(slug));
+  const workshop = await getWorkshopBySlug(slug);
   if (!workshop) notFound();
 
   return <WorkshopPage workshop={workshop} />;

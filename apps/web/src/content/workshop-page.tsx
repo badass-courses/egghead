@@ -101,52 +101,56 @@ export function WorkshopPage({ workshop }: { workshop: Workshop }) {
   return (
     <main>
       <section className="egghead-workshop-hero">
-        <Container className="egghead-workshop-hero-grid" size="wide">
-          <div className="egghead-workshop-intro">
-            <Link className="egghead-workshop-back" href="/workshops">
-              ← All workshops
-            </Link>
-            <p className="egghead-workshop-stamp">{STATUS_LABEL[workshop.status]}</p>
-            <h1>{workshop.title}</h1>
-            <p className="egghead-workshop-lede">{workshop.description}</p>
-            <p className="egghead-workshop-date">{formatWorkshopDate(workshop)}</p>
-          </div>
+        <Container size="wide">
+          <div className="egghead-workshop-hero-grid">
+            <div className="egghead-workshop-intro">
+              <Link className="egghead-workshop-back" href="/workshops">
+                ← All workshops
+              </Link>
+              <p className="egghead-workshop-stamp">{STATUS_LABEL[workshop.status]}</p>
+              <h1>{workshop.title}</h1>
+              <p className="egghead-workshop-lede">{workshop.description}</p>
+              <p className="egghead-workshop-date">{formatWorkshopDate(workshop)}</p>
+            </div>
 
-          {workshop.imageUrl ? (
-            <div className="egghead-workshop-poster">
-              <Image
-                alt=""
-                fill
-                priority
-                sizes="(max-width: 800px) 100vw, 48vw"
-                src={workshop.imageUrl}
-                unoptimized
-              />
-            </div>
-          ) : (
-            <div
-              aria-hidden
-              className="egghead-workshop-poster egghead-workshop-poster-placeholder"
-            >
-              <span>live</span>
-              <strong>workshop</strong>
-              <small>learn by doing</small>
-            </div>
-          )}
+            {workshop.imageUrl ? (
+              <div className="egghead-workshop-poster">
+                <Image
+                  alt=""
+                  fill
+                  priority
+                  sizes="(max-width: 800px) 100vw, 48vw"
+                  src={workshop.imageUrl}
+                  unoptimized
+                />
+              </div>
+            ) : (
+              <div
+                aria-hidden
+                className="egghead-workshop-poster egghead-workshop-poster-placeholder"
+              >
+                <span>live</span>
+                <strong>workshop</strong>
+                <small>learn by doing</small>
+              </div>
+            )}
+          </div>
         </Container>
       </section>
 
-      <Container className="egghead-workshop-body-grid" size="wide">
-        <article className="egghead-workshop-copy">
-          <p className="egghead-workshop-body-label">Workshop field guide</p>
-          <MarkdownContent label={`${workshop.title} workshop details`}>
-            {workshop.body}
-          </MarkdownContent>
-          {!workshop.body ? (
-            <p className="egghead-empty-state">Full workshop details are coming soon.</p>
-          ) : null}
-        </article>
-        <WorkshopOfferCard workshop={workshop} />
+      <Container size="wide">
+        <div className="egghead-workshop-body-grid">
+          <article className="egghead-workshop-copy">
+            <p className="egghead-workshop-body-label">Workshop field guide</p>
+            <MarkdownContent label={`${workshop.title} workshop details`}>
+              {workshop.body}
+            </MarkdownContent>
+            {!workshop.body ? (
+              <p className="egghead-empty-state">Full workshop details are coming soon.</p>
+            ) : null}
+          </article>
+          <WorkshopOfferCard workshop={workshop} />
+        </div>
       </Container>
     </main>
   );
