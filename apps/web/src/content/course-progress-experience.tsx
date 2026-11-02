@@ -13,10 +13,9 @@ import type { LessonForPage } from "./lesson";
 
 export async function CourseProgressCurriculumExperience({ course }: { course: CourseForPage }) {
   const progress = await getLessonProgressSnapshot(course.lessons.map((lesson) => lesson.id));
-  const progressKey = `${course.id}:${progress.isAuthenticated}:${progress.initialCompletedLessonIds.join("|")}`;
 
   return (
-    <LessonProgressProvider key={progressKey} {...progress}>
+    <LessonProgressProvider {...progress}>
       <CoursePageProgressCurriculum course={course} />
     </LessonProgressProvider>
   );
@@ -30,16 +29,14 @@ export async function CourseLessonProgressExperience({
   lesson: LessonForPage;
 }) {
   const progress = await getLessonProgressSnapshot(course.lessons.map((item) => item.id));
-  const progressKey = `${course.id}:${progress.isAuthenticated}:${progress.initialCompletedLessonIds.join("|")}`;
 
   return (
     <LessonProgressProvider
-      key={progressKey}
       course={{
         id: course.id,
         slug: course.slug,
         title: course.title,
-        lessonIds: course.lessons.map((item) => item.id),
+        lessonCount: course.lessons.length,
       }}
       {...progress}
     >
