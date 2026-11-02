@@ -29,6 +29,7 @@ import { getLessonVideoTranscript } from "./lesson-transcript";
 import { LessonTranscriptBody } from "./lesson-transcript-renderer";
 import type { LessonForPage } from "./lesson";
 import { MarkdownContent } from "./markdown-content";
+import { collectionPath } from "./routes";
 
 function LessonVideoPlaceholder({
   accessState = "pending",
@@ -191,6 +192,18 @@ export async function LessonPlayerExperience({ lesson }: { lesson: LessonForPage
                 href={`/login?${new URLSearchParams({ callbackUrl: lesson.canonicalPath }).toString()}`}
               >
                 {anonymousLimitReached ? "Sign in to keep learning" : "Sign in or subscribe"}
+              </Link>
+            </div>
+          ) : videoState === "unavailable" ? (
+            <div className="egghead-video-placeholder-content">
+              <h2 className="text-xl font-bold">Video unavailable</h2>
+              <p>We can’t play this lesson’s video right now. You can explore other lessons.</p>
+              <Link
+                href={
+                  lesson.parentCourseSlug ? collectionPath(lesson.parentCourseSlug) : "/courses"
+                }
+              >
+                {lesson.parentCourseSlug ? "Back to course" : "Browse courses"}
               </Link>
             </div>
           ) : null}
