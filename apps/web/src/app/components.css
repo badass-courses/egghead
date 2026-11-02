@@ -698,7 +698,8 @@
   margin: 0;
 }
 
-.egghead-search-results a {
+.egghead-search-results a,
+.egghead-search-skeleton {
   display: grid;
   gap: 0.5rem;
   padding: 1.25rem 1.375rem;
@@ -750,6 +751,29 @@
   color: var(--color-muted-foreground);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+}
+
+/* ── Loading skeletons ───────────────────────────────────────── */
+
+@keyframes egghead-skeleton-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.egghead-skeleton-block {
+  display: block;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--color-foreground) 9%, transparent);
+  border-radius: 0.375rem;
+  animation: egghead-skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+.egghead-search-filter-skeleton {
+  display: flex;
+  align-items: center;
+  height: 2.5rem;
+  padding-inline: 0.75rem;
 }
 
 /* ── Account ─────────────────────────────────────────────────── */
