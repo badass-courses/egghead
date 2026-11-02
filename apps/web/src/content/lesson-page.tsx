@@ -232,10 +232,9 @@ export async function LessonAccessExperience({
   showProgressStatus?: boolean;
 }) {
   const progress = await getLessonProgressSnapshot([lesson.id]);
-  const progressKey = `${lesson.id}:${progress.isAuthenticated}:${progress.initialCompletedLessonIds.join("|")}`;
 
   return (
-    <LessonProgressProvider key={progressKey} {...progress}>
+    <LessonProgressProvider {...progress}>
       <LessonPlayerExperience lesson={lesson} />
       {showProgressStatus ? <LessonProgressStatus lessonResourceId={lesson.id} /> : null}
       <LessonFactsExperience lesson={lesson} />

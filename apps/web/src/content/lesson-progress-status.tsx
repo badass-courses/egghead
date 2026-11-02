@@ -29,11 +29,11 @@ export function LessonProgressControl({ lessonResourceId }: { lessonResourceId: 
     if (isSaving) return;
 
     if (isCompleted) {
-      void uncompleteLesson(lessonResourceId);
+      uncompleteLesson(lessonResourceId);
       return;
     }
 
-    void completeLesson(lessonResourceId);
+    completeLesson(lessonResourceId);
   }
 
   const label = isCompleted ? "Mark lesson as unwatched" : "Mark lesson as watched";

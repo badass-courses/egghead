@@ -2,20 +2,20 @@
 
 import {
   createContext,
+  startTransition,
   useCallback,
   useContext,
   useMemo,
-  useRef,
+  useOptimistic,
   useState,
   type ReactNode,
 } from "react";
 
 import { CourseCompletionReview } from "./course-completion-review";
-import { syncCourseCompletion, type SyncCourseCompletionResult } from "./course-progress-action";
 import {
-  completeLessonProgress,
-  uncompleteLessonProgress,
+  setLessonCompletion,
   type LessonProgressSource,
+  type SetLessonCompletionResult,
 } from "./lesson-progress-action";
 
 export type LessonProgressFeedback =
@@ -42,30 +42,71 @@ export type LessonProgressCourse = {
   id: string;
   slug: string;
   title: string;
-  lessonIds: string[];
+  lessonCount: number;
 };
 
 type LessonProgressContextValue = {
   completedLessonIds: ReadonlySet<string>;
   isAuthenticated: boolean;
-  completeLesson: (resourceId: string, source?: LessonProgressSource) => Promise<void>;
-  uncompleteLesson: (resourceId: string) => Promise<void>;
+  completeLesson: (resourceId: string, source?: LessonProgressSource) => void;
+  uncompleteLesson: (resourceId: string) => void;
   feedbackForLesson: (resourceId: string) => LessonProgressFeedback;
   isLessonCompleted: (resourceId: string) => boolean;
 };
 
+type CompletionIntent = { resourceId: string; completed: boolean };
+
 const idleFeedback: LessonProgressFeedback = { status: "idle", message: null };
 
-function isCourseCompletionFailure(status: SyncCourseCompletionResult["status"]) {
-  return status === "authentication_required" || status === "invalid_course" || status === "failed";
+function applyCompletionIntent(
+  completedLessonIds: ReadonlySet<string>,
+  intent: CompletionIntent,
+): ReadonlySet<string> {
+  const next = new Set(completedLessonIds);
+  if (intent.completed) next.add(intent.resourceId);
+  else next.delete(intent.resourceId);
+  return next;
 }
 
-function shouldRetryCourseCompletion(status: SyncCourseCompletionResult["status"]) {
-  return status === "incomplete" || isCourseCompletionFailure(status);
+function feedbackForResult(
+  result: SetLessonCompletionResult,
+  completed: boolean,
+): LessonProgressFeedback {
+  switch (result.status) {
+    case "saved":
+      return completed
+        ? { status: "completed", message: "Lesson marked as watched" }
+        : { status: "uncompleted", message: "Lesson marked as unwatched" };
+    case "anonymous_saved":
+      return {
+        status: "anonymous_completed",
+        message: "Lesson watched. Sign in to keep your progress.",
+      };
+    case "course_sync_failed":
+      return {
+        status: "course_completion_failed",
+        message: "Lesson progress saved, but course completion could not be saved",
+      };
+    case "anonymous_limit_reached":
+    case "authentication_required":
+      return { status: result.status, message: "Sign in to keep learning" };
+    case "invalid_resource":
+      return { status: "invalid_resource", message: "This lesson could not be marked as watched" };
+    case "failed":
+      return { status: "failed", message: "Lesson progress could not be saved" };
+    default:
+      result satisfies never;
+      return { status: "failed", message: "Lesson progress could not be saved" };
+  }
 }
 
 const LessonProgressContext = createContext<LessonProgressContextValue | null>(null);
 
+/**
+ * Shows server-owned lesson progress. `initialCompletedLessonIds` is the server
+ * snapshot and the only source of truth: pending writes are layered on top
+ * optimistically and fall away when the action's re-render arrives.
+ */
 export function LessonProgressProvider({
   children,
   course,
@@ -77,284 +118,56 @@ export function LessonProgressProvider({
   initialCompletedLessonIds: string[];
   isAuthenticated: boolean;
 }) {
-  const [completedLessonIds, setCompletedLessonIds] = useState<ReadonlySet<string>>(
+  const serverCompletedLessonIds = useMemo<ReadonlySet<string>>(
     () => new Set(initialCompletedLessonIds),
+    [initialCompletedLessonIds],
+  );
+  const [completedLessonIds, addCompletionIntent] = useOptimistic(
+    serverCompletedLessonIds,
+    applyCompletionIntent,
   );
   const [feedbackByLesson, setFeedbackByLesson] = useState<
     ReadonlyMap<string, LessonProgressFeedback>
   >(() => new Map());
   const [isCourseReviewOpen, setIsCourseReviewOpen] = useState(false);
-  // Initial progress is mount-only; callers must remount with a new key for a new snapshot.
-  const completedLessonIdsRef = useRef<ReadonlySet<string>>(completedLessonIds);
-  const inFlightLessonIdsRef = useRef<Set<string>>(new Set());
-  const courseSyncRetryLessonIdsRef = useRef<Set<string>>(new Set());
+  const courseSlug = course?.slug;
 
   const setFeedback = useCallback((resourceId: string, feedback: LessonProgressFeedback) => {
-    setFeedbackByLesson((current) => {
-      const next = new Map(current);
-      next.set(resourceId, feedback);
-      return next;
-    });
+    setFeedbackByLesson((current) => new Map(current).set(resourceId, feedback));
   }, []);
 
-  const addOptimisticCompletion = useCallback((resourceId: string) => {
-    const next = new Set(completedLessonIdsRef.current);
-    next.add(resourceId);
-    completedLessonIdsRef.current = next;
-    setCompletedLessonIds(next);
-    return next;
-  }, []);
+  const saveCompletion = useCallback(
+    (resourceId: string, completed: boolean, source: LessonProgressSource) => {
+      if (feedbackByLesson.get(resourceId)?.status === "saving") return;
+      if (completedLessonIds.has(resourceId) === completed) return;
 
-  const rollBackOptimisticCompletion = useCallback((resourceId: string) => {
-    const next = new Set(completedLessonIdsRef.current);
-    next.delete(resourceId);
-    completedLessonIdsRef.current = next;
-    setCompletedLessonIds(next);
-    return next;
-  }, []);
+      setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
+      startTransition(async () => {
+        addCompletionIntent({ resourceId, completed });
+
+        let result: SetLessonCompletionResult;
+        try {
+          result = await setLessonCompletion({ resourceId, completed, source, courseSlug });
+        } catch {
+          result = { status: "failed", promptCourseReview: false };
+        }
+
+        setFeedback(resourceId, feedbackForResult(result, completed));
+        if (result.promptCourseReview) setIsCourseReviewOpen(true);
+      });
+    },
+    [addCompletionIntent, completedLessonIds, courseSlug, feedbackByLesson, setFeedback],
+  );
 
   const completeLesson = useCallback(
-    async (resourceId: string, source: LessonProgressSource = "lesson_progress_control") => {
-      if (inFlightLessonIdsRef.current.has(resourceId)) {
-        return;
-      }
-
-      if (completedLessonIdsRef.current.has(resourceId)) {
-        if (!course || !courseSyncRetryLessonIdsRef.current.has(resourceId)) return;
-
-        inFlightLessonIdsRef.current.add(resourceId);
-        setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
-
-        try {
-          const courseResult = await syncCourseCompletion({
-            courseId: course.id,
-            courseSlug: course.slug,
-          });
-
-          if (shouldRetryCourseCompletion(courseResult.status)) {
-            setFeedback(resourceId, {
-              status: "course_completion_failed",
-              message: "Lesson progress saved, but course completion could not be saved",
-            });
-            return;
-          }
-
-          courseSyncRetryLessonIdsRef.current.delete(resourceId);
-          if (courseResult.status === "completed" && courseResult.shouldPromptForReview) {
-            setIsCourseReviewOpen(true);
-          }
-          setFeedback(resourceId, {
-            status: "completed",
-            message: "Lesson marked as watched",
-          });
-        } catch {
-          setFeedback(resourceId, {
-            status: "course_completion_failed",
-            message: "Lesson progress saved, but course completion could not be saved",
-          });
-        } finally {
-          inFlightLessonIdsRef.current.delete(resourceId);
-        }
-        return;
-      }
-
-      if (!isAuthenticated && source !== "lesson_player_ended") {
-        setFeedback(resourceId, {
-          status: "authentication_required",
-          message: "Sign in to keep learning",
-        });
-        return;
-      }
-
-      inFlightLessonIdsRef.current.add(resourceId);
-      addOptimisticCompletion(resourceId);
-      setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
-
-      try {
-        const result = await completeLessonProgress({ resourceId, source });
-
-        switch (result.status) {
-          case "completed": {
-            const completesCourse =
-              course !== undefined &&
-              course.lessonIds.length > 0 &&
-              course.lessonIds.every((lessonId) => completedLessonIdsRef.current.has(lessonId));
-            if (completesCourse && course) {
-              const courseResult = await syncCourseCompletion({
-                courseId: course.id,
-                courseSlug: course.slug,
-              });
-
-              if (shouldRetryCourseCompletion(courseResult.status)) {
-                courseSyncRetryLessonIdsRef.current.add(resourceId);
-                setFeedback(resourceId, {
-                  status: "course_completion_failed",
-                  message: "Lesson progress saved, but course completion could not be saved",
-                });
-                return;
-              }
-
-              courseSyncRetryLessonIdsRef.current.delete(resourceId);
-              if (courseResult.status === "completed" && courseResult.shouldPromptForReview) {
-                setIsCourseReviewOpen(true);
-              }
-            }
-
-            setFeedback(resourceId, {
-              status: "completed",
-              message: "Lesson marked as watched",
-            });
-            return;
-          }
-          case "anonymous_completed":
-            setFeedback(resourceId, {
-              status: "anonymous_completed",
-              message: "Lesson watched. Sign in to keep your progress.",
-            });
-            return;
-          case "anonymous_limit_reached":
-            rollBackOptimisticCompletion(resourceId);
-            setFeedback(resourceId, {
-              status: "anonymous_limit_reached",
-              message: "Sign in to keep learning",
-            });
-            return;
-          case "authentication_required":
-            rollBackOptimisticCompletion(resourceId);
-            setFeedback(resourceId, {
-              status: "authentication_required",
-              message: "Sign in to keep learning",
-            });
-            return;
-          case "invalid_resource":
-            rollBackOptimisticCompletion(resourceId);
-            setFeedback(resourceId, {
-              status: "invalid_resource",
-              message: "This lesson could not be marked as watched",
-            });
-            return;
-          case "failed":
-            rollBackOptimisticCompletion(resourceId);
-            setFeedback(resourceId, {
-              status: "failed",
-              message: "Lesson progress could not be saved",
-            });
-            return;
-          default:
-            result satisfies never;
-            rollBackOptimisticCompletion(resourceId);
-            setFeedback(resourceId, {
-              status: "failed",
-              message: "Lesson progress could not be saved",
-            });
-            return;
-        }
-      } catch {
-        rollBackOptimisticCompletion(resourceId);
-        setFeedback(resourceId, {
-          status: "failed",
-          message: "Lesson progress could not be saved",
-        });
-      } finally {
-        inFlightLessonIdsRef.current.delete(resourceId);
-      }
-    },
-    [addOptimisticCompletion, course, isAuthenticated, rollBackOptimisticCompletion, setFeedback],
+    (resourceId: string, source: LessonProgressSource = "lesson_progress_control") =>
+      saveCompletion(resourceId, true, source),
+    [saveCompletion],
   );
 
   const uncompleteLesson = useCallback(
-    async (resourceId: string) => {
-      if (
-        !completedLessonIdsRef.current.has(resourceId) ||
-        inFlightLessonIdsRef.current.has(resourceId)
-      ) {
-        return;
-      }
-
-      if (!isAuthenticated) {
-        setFeedback(resourceId, {
-          status: "authentication_required",
-          message: "Sign in to keep learning",
-        });
-        return;
-      }
-
-      const courseWasCompleted =
-        course !== undefined &&
-        course.lessonIds.length > 0 &&
-        course.lessonIds.every((lessonId) => completedLessonIdsRef.current.has(lessonId));
-      inFlightLessonIdsRef.current.add(resourceId);
-      rollBackOptimisticCompletion(resourceId);
-      setFeedback(resourceId, { status: "saving", message: "Saving lesson progress" });
-
-      try {
-        const result = await uncompleteLessonProgress({ resourceId });
-
-        switch (result.status) {
-          case "uncompleted": {
-            courseSyncRetryLessonIdsRef.current.delete(resourceId);
-            if (courseWasCompleted && course) {
-              const courseResult = await syncCourseCompletion({
-                courseId: course.id,
-                courseSlug: course.slug,
-              });
-
-              if (isCourseCompletionFailure(courseResult.status)) {
-                setFeedback(resourceId, {
-                  status: "course_completion_failed",
-                  message: "Lesson progress saved, but course completion could not be saved",
-                });
-                return;
-              }
-            }
-
-            setFeedback(resourceId, {
-              status: "uncompleted",
-              message: "Lesson marked as unwatched",
-            });
-            return;
-          }
-          case "authentication_required":
-            addOptimisticCompletion(resourceId);
-            setFeedback(resourceId, {
-              status: "authentication_required",
-              message: "Sign in to keep learning",
-            });
-            return;
-          case "invalid_resource":
-            addOptimisticCompletion(resourceId);
-            setFeedback(resourceId, {
-              status: "invalid_resource",
-              message: "This lesson could not be marked as watched",
-            });
-            return;
-          case "failed":
-            addOptimisticCompletion(resourceId);
-            setFeedback(resourceId, {
-              status: "failed",
-              message: "Lesson progress could not be saved",
-            });
-            return;
-          default:
-            result satisfies never;
-            addOptimisticCompletion(resourceId);
-            setFeedback(resourceId, {
-              status: "failed",
-              message: "Lesson progress could not be saved",
-            });
-            return;
-        }
-      } catch {
-        addOptimisticCompletion(resourceId);
-        setFeedback(resourceId, {
-          status: "failed",
-          message: "Lesson progress could not be saved",
-        });
-      } finally {
-        inFlightLessonIdsRef.current.delete(resourceId);
-      }
-    },
-    [addOptimisticCompletion, course, isAuthenticated, rollBackOptimisticCompletion, setFeedback],
+    (resourceId: string) => saveCompletion(resourceId, false, "lesson_progress_control"),
+    [saveCompletion],
   );
 
   const isLessonCompleted = useCallback(
@@ -392,7 +205,7 @@ export function LessonProgressProvider({
       {course ? (
         <CourseCompletionReview
           course={course}
-          lessonCount={course.lessonIds.length}
+          lessonCount={course.lessonCount}
           onClose={() => setIsCourseReviewOpen(false)}
           open={isCourseReviewOpen}
         />

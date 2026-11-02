@@ -1,191 +1,120 @@
 "use server";
 
 import { logger } from "@coursebuilder/utils/logger";
+import { updateTag } from "next/cache";
+import { z } from "zod";
 
+import { getCourseBySlug } from "../content/course";
 import { getLessonById } from "../content/lesson";
 import { getCurrentUser } from "../coursebuilder/current-user";
 import { recordAnonymousLessonCompletion } from "./anonymous-lesson-progress";
+import { syncCourseProgressForUser } from "./course-progress";
 import { completeResourceForUser, uncompleteResourceForUser } from "./resource-progress";
 
 export type LessonProgressSource = "lesson_player_ended" | "lesson_progress_control";
 
-export type CompleteLessonProgressResult =
+const setLessonCompletionInputSchema = z.object({
+  resourceId: z.string().min(1).max(255),
+  completed: z.boolean(),
+  source: z.enum(["lesson_player_ended", "lesson_progress_control"]),
+  courseSlug: z.string().min(1).max(255).optional(),
+});
+
+export type SetLessonCompletionInput = z.infer<typeof setLessonCompletionInputSchema>;
+
+export type SetLessonCompletionResult =
+  | { status: "saved"; promptCourseReview: boolean }
   | {
-      status: "completed";
-      resourceId: string;
-      completedAt: string;
-    }
-  | {
-      status: "anonymous_completed";
-      resourceId: string;
-      completedAt: null;
-    }
-  | {
-      status: "anonymous_limit_reached" | "authentication_required" | "invalid_resource" | "failed";
-      resourceId: string;
-      completedAt: null;
+      status:
+        | "anonymous_saved"
+        | "course_sync_failed"
+        | "anonymous_limit_reached"
+        | "authentication_required"
+        | "invalid_resource"
+        | "failed";
+      promptCourseReview: false;
     };
 
-export type UncompleteLessonProgressResult =
-  | {
-      status: "uncompleted";
-      resourceId: string;
-      completedAt: null;
-    }
-  | {
-      status: "authentication_required" | "invalid_resource" | "failed";
-      resourceId: string;
-      completedAt: string | null;
-    };
+function result(status: Exclude<SetLessonCompletionResult["status"], "saved">) {
+  return { status, promptCourseReview: false } satisfies SetLessonCompletionResult;
+}
 
-export async function completeLessonProgress(input: {
-  resourceId: string;
-  source: LessonProgressSource;
-}): Promise<CompleteLessonProgressResult> {
-  const resourceId = typeof input?.resourceId === "string" ? input.resourceId : "";
-  const source =
-    input?.source === "lesson_player_ended" ? "lesson_player_ended" : "lesson_progress_control";
+// Course and lesson links prefetch full payloads, including the progress
+// snapshot. A tag update (unlike `refresh()`) evicts the client prefetch cache
+// and re-renders the current page in this action's response. Anonymous writes
+// set a cookie, which Next already treats the same way.
+function evictProgressSnapshots(userId: string) {
+  updateTag(`lesson-progress:${userId}`);
+}
 
-  if (resourceId.length === 0) {
-    return {
-      status: "invalid_resource",
-      resourceId,
-      completedAt: null,
-    };
-  }
+/**
+ * Records a lesson as watched or unwatched. When the lesson is viewed inside a
+ * course, the course completion row is recounted here so the server alone
+ * decides course completion.
+ */
+export async function setLessonCompletion(input: unknown): Promise<SetLessonCompletionResult> {
+  const parsed = setLessonCompletionInputSchema.safeParse(input);
+  if (!parsed.success) return result("invalid_resource");
+
+  const { completed, courseSlug, resourceId, source } = parsed.data;
 
   try {
     const [user, lesson] = await Promise.all([getCurrentUser(), getLessonById(resourceId)]);
 
-    if (!lesson || lesson.id !== resourceId) {
-      return {
-        status: "invalid_resource",
-        resourceId,
-        completedAt: null,
-      };
-    }
+    if (!lesson || lesson.id !== resourceId) return result("invalid_resource");
 
     if (!user?.id) {
-      if (source !== "lesson_player_ended") {
-        return {
-          status: "authentication_required",
-          resourceId: lesson.id,
-          completedAt: null,
-        };
+      if (!completed || source !== "lesson_player_ended") {
+        return result("authentication_required");
       }
 
       const anonymousCompletion = await recordAnonymousLessonCompletion(lesson.id);
+      return result(
+        anonymousCompletion.status === "limit_reached"
+          ? "anonymous_limit_reached"
+          : "anonymous_saved",
+      );
+    }
 
-      if (anonymousCompletion.status === "limit_reached") {
-        return {
-          status: "anonymous_limit_reached",
-          resourceId: lesson.id,
-          completedAt: null,
-        };
+    const progress = completed
+      ? await completeResourceForUser({ userId: user.id, resourceId: lesson.id, source })
+      : await uncompleteResourceForUser({ userId: user.id, resourceId: lesson.id, source });
+
+    if (progress.state.completed !== completed) return result("failed");
+
+    evictProgressSnapshots(user.id);
+
+    if (!courseSlug) return { status: "saved", promptCourseReview: false };
+
+    try {
+      const course = await getCourseBySlug(courseSlug);
+      if (!course?.lessons.some((courseLesson) => courseLesson.id === lesson.id)) {
+        return { status: "saved", promptCourseReview: false };
       }
 
+      const courseProgress = await syncCourseProgressForUser({
+        userId: user.id,
+        courseId: course.id,
+        lessonIds: course.lessons.map((courseLesson) => courseLesson.id),
+      });
+
       return {
-        status: "anonymous_completed",
-        resourceId: lesson.id,
-        completedAt: null,
+        status: "saved",
+        promptCourseReview:
+          completed && courseProgress.completed && !courseProgress.reviewSubmitted,
       };
+    } catch (error) {
+      logger.error(
+        error instanceof Error ? error : new Error("Unknown course progress sync failure"),
+        { operation: "setLessonCompletion.syncCourseProgress" },
+      );
+      return result("course_sync_failed");
     }
-
-    const progress = await completeResourceForUser({
-      userId: user.id,
-      resourceId: lesson.id,
-      source,
-    });
-
-    if (!progress.state.completedAt) {
-      return {
-        status: "failed",
-        resourceId: lesson.id,
-        completedAt: null,
-      };
-    }
-
-    return {
-      status: "completed",
-      resourceId: lesson.id,
-      completedAt: progress.state.completedAt,
-    };
   } catch (error) {
     logger.error(
       error instanceof Error ? error : new Error("Unknown lesson progress write failure"),
-      { operation: "completeLessonProgress" },
+      { operation: "setLessonCompletion" },
     );
-
-    return {
-      status: "failed",
-      resourceId,
-      completedAt: null,
-    };
-  }
-}
-
-export async function uncompleteLessonProgress(input: {
-  resourceId: string;
-}): Promise<UncompleteLessonProgressResult> {
-  const resourceId = typeof input?.resourceId === "string" ? input.resourceId : "";
-  const user = await getCurrentUser();
-
-  if (!user?.id) {
-    return {
-      status: "authentication_required",
-      resourceId,
-      completedAt: null,
-    };
-  }
-
-  if (resourceId.length === 0) {
-    return {
-      status: "invalid_resource",
-      resourceId,
-      completedAt: null,
-    };
-  }
-
-  try {
-    const lesson = await getLessonById(resourceId);
-
-    if (!lesson || lesson.id !== resourceId) {
-      return {
-        status: "invalid_resource",
-        resourceId,
-        completedAt: null,
-      };
-    }
-
-    const progress = await uncompleteResourceForUser({
-      userId: user.id,
-      resourceId: lesson.id,
-      source: "lesson_progress_control",
-    });
-
-    if (progress.state.completed) {
-      return {
-        status: "failed",
-        resourceId: lesson.id,
-        completedAt: progress.state.completedAt,
-      };
-    }
-
-    return {
-      status: "uncompleted",
-      resourceId: lesson.id,
-      completedAt: null,
-    };
-  } catch (error) {
-    logger.error(
-      error instanceof Error ? error : new Error("Unknown lesson progress removal failure"),
-      { operation: "uncompleteLessonProgress" },
-    );
-
-    return {
-      status: "failed",
-      resourceId,
-      completedAt: null,
-    };
+    return result("failed");
   }
 }
