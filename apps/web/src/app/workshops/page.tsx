@@ -1,89 +1,81 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-
+import { connection } from "next/server";
+import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader } from "@egghead/ui/structure";
+import { listUpcomingWorkshops } from "../../workshops/catalog";
 
-import { formatWorkshopDate, formatWorkshopPrice } from "@egghead/workshops/format";
-import { WorkshopCursor } from "@egghead/workshops/contracts";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
-import { notFound } from "next/navigation";
-import { Suspense } from "react";
-import { getUpcomingWorkshops } from "../../workshops/read";
+export const metadata: Metadata = { title: "Workshops | egghead" };
 
-export const metadata: Metadata = {
-  description: "Upcoming live, hands-on workshops from egghead instructors.",
-  title: "Live workshops | egghead",
-};
-
-type WorkshopsRouteProps = { searchParams: Promise<{ after?: string }> };
-async function WorkshopsContent({ searchParams }: WorkshopsRouteProps) {
-  const { after } = await searchParams;
-  const cursor = after
-    ? Option.getOrNull(Schema.decodeUnknownOption(Schema.fromJsonString(WorkshopCursor))(after))
-    : null;
-  if (after && !cursor) notFound();
-  const { workshops, next } = await getUpcomingWorkshops(cursor ?? undefined);
-
+async function Workshops({ searchParams }: { searchParams: Promise<{ cursor?: string }> }) {
+  await connection();
+  const { cursor } = await searchParams;
+  const page = await listUpcomingWorkshops(cursor);
   return (
-    <Container as="main" size="wide">
-      <SectionHeader
-        description="Focused live sessions where you build alongside an expert, ask questions, and leave with something that works."
-        eyebrow="Learn together"
-        title="Live workshops"
-      />
-
-      {workshops.length > 0 ? (
-        <ol className="egghead-workshop-list">
-          {workshops.map((workshop, index) => (
+    <>
+      {page.workshops.length ? (
+        <ol className="egghead-search-results">
+          {page.workshops.map((workshop) => (
             <li key={workshop.id}>
-              <Link className="egghead-workshop-card" href={`/workshops/${workshop.slug}`}>
-                <span className="egghead-workshop-card-number">
-                  {String(index + 1).padStart(2, "0")}
-                </span>
-                <span className="egghead-workshop-card-copy">
-                  <span className="egghead-workshop-card-date">
-                    {workshop.status === "in-progress"
-                      ? "Happening now"
-                      : formatWorkshopDate(workshop)}
-                  </span>
-                  <strong>{workshop.title}</strong>
-                  {workshop.description ? <span>{workshop.description}</span> : null}
-                </span>
-                <span className="egghead-workshop-card-offer">
-                  {workshop.offer ? (
-                    <>
-                      <small>from</small>
-                      <strong>{formatWorkshopPrice(workshop.offer.currentPrice)}</strong>
-                    </>
-                  ) : (
-                    <small>Details soon</small>
-                  )}
-                  <span aria-hidden>→</span>
-                </span>
+              <Link href={`/workshops/${encodeURIComponent(workshop.id)}`}>
+                <time className="egghead-search-type" dateTime={workshop.startsAt}>
+                  {new Intl.DateTimeFormat("en-US", {
+                    dateStyle: "long",
+                    timeStyle: "short",
+                    timeZone: workshop.timezone,
+                  }).format(new Date(workshop.startsAt))}{" "}
+                  · {workshop.timezone}
+                </time>
+                <span className="egghead-search-title">{workshop.title}</span>
+                <span className="egghead-search-description">{workshop.description}</span>
               </Link>
             </li>
           ))}
         </ol>
       ) : (
-        <p className="egghead-empty-state">
-          No live workshops are scheduled right now. Check back soon.
-        </p>
+        <p className="egghead-empty-state">No upcoming workshops. Check back for new workshops.</p>
       )}
-      {next ? (
-        <Link href={`/workshops?after=${encodeURIComponent(JSON.stringify(next))}`}>
-          More workshops →
+      {page.nextCursor ? (
+        <Link href={`/workshops?cursor=${encodeURIComponent(page.nextCursor)}`}>
+          More workshops
         </Link>
       ) : null}
-    </Container>
+    </>
   );
 }
 
-export default function WorkshopsPage(props: WorkshopsRouteProps) {
+function WorkshopsSkeleton() {
   return (
-    <Suspense fallback={null}>
-      <WorkshopsContent {...props} />
-    </Suspense>
+    <output className="block" aria-label="Loading workshops">
+      <span className="sr-only">Loading workshops…</span>
+      <div aria-hidden className="grid gap-3.5 motion-safe:animate-pulse">
+        {[0, 1, 2].map((item) => (
+          <div
+            key={item}
+            className="grid gap-3 rounded-2xl border border-border bg-surface-grad px-5 py-5 sm:px-6"
+          >
+            <div className="h-3 w-40 max-w-full rounded bg-border-strong" />
+            <div className="h-6 w-3/4 max-w-lg rounded bg-border-strong" />
+            <div className="h-4 w-full max-w-2xl rounded bg-well" />
+            <div className="h-4 w-2/3 max-w-xl rounded bg-well" />
+          </div>
+        ))}
+      </div>
+    </output>
+  );
+}
+
+export default function WorkshopsPage(props: { searchParams: Promise<{ cursor?: string }> }) {
+  return (
+    <Container as="main" size="wide">
+      <SectionHeader
+        title="Workshops"
+        description="Upcoming workshops with the people building the tools you use."
+      />
+      <Suspense fallback={<WorkshopsSkeleton />}>
+        <Workshops {...props} />
+      </Suspense>
+    </Container>
   );
 }

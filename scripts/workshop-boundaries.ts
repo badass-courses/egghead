@@ -64,11 +64,7 @@ for (const path of existsSync("packages/workshop-catalog/src")
       specifier.startsWith("@egghead/workshops/") ||
       /^\.\/[^/]+$/.test(specifier),
   );
-for (const path of [
-  ...files("apps/web/src/app/workshops"),
-  "apps/web/src/content/workshop-page.tsx",
-  "apps/web/src/workshops/read.ts",
-]) {
+for (const path of files("apps/web/src/app/workshops")) {
   inspect(
     path,
     (specifier) =>

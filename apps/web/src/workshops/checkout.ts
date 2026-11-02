@@ -57,7 +57,7 @@ export async function startWorkshopCheckout(data: FormData) {
     subtotalCents: String(stripePrice.unit_amount),
     ...(user?.id ? { userId: user.id } : {}),
   };
-  const path = `/workshop/${encodeURIComponent(workshop.id)}`;
+  const path = `/workshops/${encodeURIComponent(workshop.id)}`;
   const session = await services.payments.stripe.checkout.sessions.create(
     {
       mode: "payment",
