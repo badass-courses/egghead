@@ -98,11 +98,35 @@ function SearchResults({
   );
 }
 
+// Varied widths so the skeleton reads as real results, not a striped block.
+const SKELETON_RESULTS = [
+  { title: "62%", description: ["94%", "71%"] },
+  { title: "48%", description: ["88%"] },
+  { title: "74%", description: ["91%", "56%"] },
+  { title: "41%", description: ["83%", "64%"] },
+  { title: "57%", description: ["78%"] },
+  { title: "66%", description: ["96%", "47%"] },
+];
+
 function SearchFallback() {
   return (
-    <p className="egghead-empty-state" data-search-state="pending">
-      Loading resources.
-    </p>
+    <Stack gap="tight">
+      <output className="sr-only">Loading resources.</output>
+      <div aria-hidden className="egghead-skeleton-block h-8 w-44" />
+      <ol aria-hidden className="egghead-search-results" data-search-state="pending">
+        {SKELETON_RESULTS.map((row) => (
+          <li key={row.title}>
+            <div className="egghead-search-skeleton">
+              <span className="egghead-skeleton-block h-3 w-16" />
+              <span className="egghead-skeleton-block h-6" style={{ width: row.title }} />
+              {row.description.map((width) => (
+                <span className="egghead-skeleton-block h-4" key={width} style={{ width }} />
+              ))}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </Stack>
   );
 }
 

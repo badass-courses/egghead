@@ -42,6 +42,8 @@ function CheckIcon() {
   );
 }
 
+const INSTRUCTOR_SKELETON_WIDTHS = ["72%", "58%", "81%", "49%", "66%", "54%"];
+
 function instructorsFromResponse(value: unknown): SearchInstructor[] {
   if (typeof value !== "object" || value === null || !("instructors" in value)) return [];
   const { instructors } = value;
@@ -178,6 +180,9 @@ export function SearchInstructorFilter({
             type="search"
             value={filterTerm}
           />
+          <output className="sr-only">
+            {lookupState === "loading" ? "Loading instructors." : ""}
+          </output>
           {/* A styled combobox popover — the native select/datalist the rule
               suggests is exactly what this component replaces. */}
           {/* oxlint-disable jsx-a11y/no-noninteractive-element-to-interactive-role, jsx-a11y/prefer-tag-over-role */}
@@ -212,13 +217,15 @@ export function SearchInstructorFilter({
                 </button>
               </li>
             ))}
-            {lookupState !== "ready" || matches.length === 0 ? (
+            {lookupState === "loading" ? (
+              INSTRUCTOR_SKELETON_WIDTHS.map((width) => (
+                <li aria-hidden className="egghead-search-filter-skeleton" key={width}>
+                  <span className="egghead-skeleton-block h-4" style={{ width }} />
+                </li>
+              ))
+            ) : lookupState === "error" || matches.length === 0 ? (
               <li className="egghead-search-filter-empty">
-                {lookupState === "loading"
-                  ? "Loading instructors."
-                  : lookupState === "error"
-                    ? "Unable to load instructors."
-                    : "No instructors found."}
+                {lookupState === "error" ? "Unable to load instructors." : "No instructors found."}
               </li>
             ) : null}
           </ul>
