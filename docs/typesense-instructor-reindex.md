@@ -55,9 +55,17 @@ lookups. No larger timeout or disabled check was introduced.
 
 ## Rollout status
 
-Implementation and validation are in progress. The contribution apply and Typesense promotion
-require the content-write freeze to be confirmed. No Typesense collection, alias, or beta
-configuration has been changed yet. Existing collections are retained for rollback.
+The contribution backfill was applied to the approved migration branch on 2026-11-02.
+A fresh dry run matched the reviewed plan: 7,201 pending rows, zero conflicts/blocked mappings,
+and one unmatched course left unchanged. All 7,201 inserts completed. A second dry run found
+7,201 already-present attributions, zero pending, zero conflicts, and the same plan digest.
+The search projection still has 6,639 documents; 6,360 now contain instructor names.
+All 91 search/backfill regression checks passed before applying. The temporary write lease
+was revoked after verification.
+
+Typesense collection rebuilding, alias promotion, and the beta deployment remain pending.
+No Typesense collection, alias, or beta configuration was changed by this backfill.
+Existing collections are retained for rollback.
 
 The original 781e checkout was removed by Codex during this task. Its changes were recovered
 from archive snapshot b041947 into the current checkout and continued on
