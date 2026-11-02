@@ -1,18 +1,22 @@
 import type { Metadata } from "next";
 import Form from "next/form";
+import Link from "next/link";
 import { Suspense } from "react";
 import { Container } from "@egghead/ui/container";
 import { SectionHeader, Stack } from "@egghead/ui/structure";
 
-import { searchContent, type SearchResult } from "../../../content/search";
+import { searchContentPage, type SearchResultsPage } from "../../../content/search";
 import {
   contentTypeFromSearchParams,
+  firstSearchParamValue,
   instructorFromSearchParams,
   searchTermFromRoute,
   type SearchRouteParams,
   type SearchRouteSearchParams,
 } from "../../../content/search-route";
 import { SearchInstructorFilter } from "./search-instructor-filter";
+import { searchHref } from "./search-href";
+import { SearchPaginationLabel } from "./search-pagination-label";
 import { SearchTypeFilter } from "./search-type-filter";
 
 type SearchPageProps = {
@@ -21,6 +25,7 @@ type SearchPageProps = {
 };
 
 type SearchRouteState = {
+  cursor: string;
   contentType: string | null;
   instructor: string | null;
   term: string;
@@ -30,6 +35,7 @@ async function searchRouteStateFromProps(props: SearchPageProps): Promise<Search
   const [params, searchParams] = await Promise.all([props.params, props.searchParams]);
 
   return {
+    cursor: firstSearchParamValue(searchParams.cursor),
     contentType: contentTypeFromSearchParams(searchParams),
     instructor: instructorFromSearchParams(searchParams),
     term: searchTermFromRoute({ params, searchParams }),
@@ -53,22 +59,66 @@ export async function generateMetadata(props: SearchPageProps): Promise<Metadata
   };
 }
 
+const countFormat = new Intl.NumberFormat("en-US");
+
+function searchSummary(total: number, term: string, contentType: string | null) {
+  const count = countFormat.format(total);
+  if (term) return `${count} ${total === 1 ? "result" : "results"} for "${term}"`;
+  const noun = total === 1 ? "resource" : "resources";
+  return contentType ? `${count} ${contentType} ${noun}` : `${count} ${noun}`;
+}
+
 function SearchResults({
   contentType,
-  results,
+  resultPage,
+  instructor,
   term,
-}: Pick<SearchRouteState, "contentType" | "term"> & {
-  results: SearchResult[];
+}: Pick<SearchRouteState, "contentType" | "term" | "instructor"> & {
+  resultPage: SearchResultsPage;
 }) {
+  const pageHref = (cursor?: string) =>
+    searchHref({
+      cursor,
+      term,
+      contentType: contentType || undefined,
+      instructor: instructor || undefined,
+    });
+  const linkClass =
+    "press inline-flex min-h-11 items-center gap-2 rounded-lg border border-border-strong bg-surface-grad px-4 font-extrabold text-foreground shadow-btn-ghost focus-visible:outline-2 focus-visible:outline-offset-2";
+  const disabledClass =
+    "inline-flex min-h-11 items-center gap-2 rounded-lg border border-transparent px-4 font-extrabold text-muted-foreground opacity-60";
+
+  if (resultPage.kind === "stale-page") {
+    return (
+      <Stack gap="tight">
+        <p className="egghead-empty-state" data-search-state="page-unavailable">
+          This page of results is no longer available.
+        </p>
+        <p>
+          <Link className={linkClass} href={pageHref()}>
+            Back to the first page
+          </Link>
+        </p>
+      </Stack>
+    );
+  }
+
+  const { results, pagination } = resultPage;
+  const { page, total, totalPages, firstIndex, lastIndex, previousCursor, nextCursor } = pagination;
+  const pageLabel = `Page ${countFormat.format(page)} of ${countFormat.format(totalPages)}`;
+
   return (
     <Stack gap="tight">
-      <p className="font-hand text-2xl text-muted-foreground">
-        {term
-          ? `${results.length} results for "${term}"`
-          : contentType
-            ? `${results.length} ${contentType} resources`
-            : `${results.length} resources`}
-      </p>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+        <p className="font-hand text-2xl text-muted-foreground" data-search-total={total}>
+          {searchSummary(total, term, contentType)}
+        </p>
+        {totalPages > 1 ? (
+          <p className="text-sm font-bold text-muted-foreground tabular-nums">
+            {`Showing ${countFormat.format(firstIndex)}–${countFormat.format(lastIndex)} · ${pageLabel}`}
+          </p>
+        ) : null}
+      </div>
 
       {results.length > 0 ? (
         <ol
@@ -76,6 +126,7 @@ function SearchResults({
           data-search-results-count={results.length}
           data-search-term={term || "browse"}
           data-search-type={contentType || "all"}
+          start={firstIndex}
         >
           {results.map((result) => (
             <li data-search-result-type={result.type} key={result.id}>
@@ -94,6 +145,43 @@ function SearchResults({
           No resources match this search.
         </p>
       )}
+      {previousCursor || nextCursor ? (
+        <nav
+          aria-label="Search pagination"
+          className="flex flex-wrap items-center justify-between gap-4 border-t border-border pt-6"
+        >
+          {previousCursor ? (
+            <Link className={linkClass} href={pageHref(previousCursor)} prefetch={false} rel="prev">
+              <span aria-hidden="true">←</span>
+              <SearchPaginationLabel>Previous</SearchPaginationLabel>
+            </Link>
+          ) : (
+            <span aria-disabled="true" className={disabledClass}>
+              <span aria-hidden="true">←</span>
+              Previous
+            </span>
+          )}
+          <span
+            aria-current="page"
+            className="font-bold text-muted-foreground tabular-nums"
+            data-search-page={page}
+            data-search-total-pages={totalPages}
+          >
+            {pageLabel}
+          </span>
+          {nextCursor ? (
+            <Link className={linkClass} href={pageHref(nextCursor)} prefetch={false} rel="next">
+              <SearchPaginationLabel>Next</SearchPaginationLabel>
+              <span aria-hidden="true">→</span>
+            </Link>
+          ) : (
+            <span aria-disabled="true" className={disabledClass}>
+              Next
+              <span aria-hidden="true">→</span>
+            </span>
+          )}
+        </nav>
+      ) : null}
     </Stack>
   );
 }
@@ -174,8 +262,8 @@ function SearchContentFallback() {
 }
 
 async function RoutedSearchContent(props: SearchPageProps) {
-  const { contentType, instructor, term } = await searchRouteStateFromProps(props);
-  const results = await searchContent(term, contentType, instructor);
+  const { contentType, instructor, term, cursor } = await searchRouteStateFromProps(props);
+  const resultPage = await searchContentPage({ term, contentType, instructor }, cursor);
 
   return (
     <>
@@ -184,7 +272,12 @@ async function RoutedSearchContent(props: SearchPageProps) {
         instructor={instructor || undefined}
         term={term || undefined}
       />
-      <SearchResults contentType={contentType} results={results} term={term} />
+      <SearchResults
+        contentType={contentType}
+        instructor={instructor}
+        resultPage={resultPage}
+        term={term}
+      />
     </>
   );
 }

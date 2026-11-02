@@ -3,6 +3,7 @@ export type SearchRouteParams = {
 };
 
 export type SearchRouteSearchParams = {
+  cursor?: string | string[];
   instructor?: string | string[];
   q?: string | string[];
   type?: string | string[];

@@ -1,3 +1,5 @@
+import { decodeSearchCursor, encodeSearchCursor } from "../apps/web/src/content/search-pagination";
+import { searchHref } from "../apps/web/src/app/q/[[...all]]/search-href";
 import { rejects } from "node:assert/strict";
 import { createServer } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
@@ -674,6 +676,57 @@ const checks = [
     "podcast",
   ),
 ];
+
+const paginationCursor = encodeSearchCursor({
+  page: 2,
+  source: "typesense",
+  scope: "react",
+});
+checks.push(
+  assertEqual(
+    "canonical reader requests the selected page",
+    typesenseSearchParameters("react", "course", "John", 3).page,
+    3,
+  ),
+  assertEqual(
+    "legacy reader requests the selected page",
+    legacyTypesenseSearchParameters("react", "course", ["John"], 3).page,
+    3,
+  ),
+  assertEqual(
+    "pagination rejects a cursor from a different search",
+    decodeSearchCursor(paginationCursor, "typescript") === null,
+    true,
+  ),
+  assertEqual(
+    "pagination rejects an SQL cursor without a boundary",
+    decodeSearchCursor(
+      encodeSearchCursor({ page: 2, source: "sql", scope: "react", direction: "next" }),
+      "react",
+    ) === null,
+    true,
+  ),
+  assertEqual(
+    "pagination rejects invalid input",
+    decodeSearchCursor("invalid", "react") === null,
+    true,
+  ),
+  assertEqual(
+    "pagination round-trips a page",
+    decodeSearchCursor(paginationCursor, "react")?.page ?? 0,
+    2,
+  ),
+  assertEqual(
+    "filter navigation resets pagination",
+    searchHref({ term: "react", instructor: "John", contentType: "course" }),
+    "/q?q=react&type=course&instructor=John",
+  ),
+  assertEqual(
+    "pagination links preserve all filters",
+    searchHref({ cursor: "next", term: "react", instructor: "John", contentType: "course" }),
+    "/q?cursor=next&q=react&type=course&instructor=John",
+  ),
+);
 
 checks.push(...(await instructorApiChecks()));
 

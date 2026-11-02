@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { after, beforeEach, mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 import type {
-  searchContent as SearchContent,
+  searchContentPage as SearchContentPage,
+  SearchResultsPage,
   SearchResult,
 } from "../../apps/web/src/content/search";
 import type { ContentResourceForSearch } from "../../apps/web/src/content/search-document";
@@ -12,12 +14,8 @@ function appModule(relative: string) {
   return fileURLToPath(new URL(`../../apps/web/src/${relative}`, import.meta.url));
 }
 
-function appImport(specifier: string) {
-  return import.meta.resolve(
-    specifier,
-    new URL("../../apps/web/package.json", import.meta.url).href,
-  );
-}
+const appRequire = createRequire(new URL("../../apps/web/package.json", import.meta.url));
+const appImport = (specifier: string) => appRequire.resolve(specifier);
 
 const environmentDefaults: Record<string, string | undefined> = {
   NODE_ENV: "test",
@@ -79,8 +77,23 @@ const sqlResults = [
   },
 ] satisfies SearchResult[];
 
+const sqlPage = {
+  kind: "page",
+  results: sqlResults,
+  pagination: {
+    page: 1,
+    total: 1,
+    totalPages: 1,
+    firstIndex: 1,
+    lastIndex: 1,
+    previousCursor: null,
+    nextCursor: null,
+  },
+} satisfies SearchResultsPage;
+
 // Only I/O is replaced: configuration, SQL readers, and document projection stay real.
 const executeFixture = mock.fn(async (sql: string) => {
+  if (sql.includes("SELECT COUNT(*) AS total")) return [[{ total: sqlRows.length }], []];
   if (sql.includes("FROM egghead_ContentResource resource")) return [sqlRows, []];
   if (sql.includes("FROM egghead_ContentContribution contribution")) return [[], []];
   throw new Error(`Unexpected search SQL fixture request: ${sql}`);
@@ -97,8 +110,11 @@ const createConnection = mock.fn(async () => ({
   query: queryFixture,
   end: endConnection,
 }));
+const databaseModule: typeof import("../../apps/web/src/db/local-docker") = await import(
+  appModule("db/local-docker.ts")
+);
 mock.module(appModule("db/local-docker.ts"), {
-  namedExports: { createLocalMysqlConnection: createConnection },
+  namedExports: { ...databaseModule, createLocalMysqlConnection: createConnection },
 });
 
 const typesenseFailure = new Error("Synthetic Typesense search failure");
@@ -120,7 +136,7 @@ mock.module(appImport("next/cache"), {
 });
 
 // Load after installing module mocks; a static import would bind real I/O.
-const { searchContent }: { searchContent: typeof SearchContent } = await import(
+const { searchContentPage }: { searchContentPage: typeof SearchContentPage } = await import(
   appModule("content/search.ts")
 );
 
@@ -145,7 +161,10 @@ after(() => {
 void test("legacy Typesense search failure rejects the original error without consulting SQL", async () => {
   process.env["TYPESENSE_COLLECTION_NAME"] = "content_production";
 
-  await assert.rejects(searchContent("fallback"), (error: unknown) => error === typesenseFailure);
+  await assert.rejects(
+    searchContentPage({ term: "fallback" }),
+    (error: unknown) => error === typesenseFailure,
+  );
 
   assert.equal(searchTypesense.mock.callCount(), 1);
   assert.equal(createConnection.mock.callCount(), 0);
@@ -154,7 +173,7 @@ void test("legacy Typesense search failure rejects the original error without co
 });
 
 void test("canonical Typesense search failure falls back to SQL query results", async () => {
-  assert.deepEqual(await searchContent("fallback"), sqlResults);
+  assert.deepEqual(await searchContentPage({ term: "fallback" }), sqlPage);
 
   assert.equal(searchTypesense.mock.callCount(), 1);
   assert.ok(createConnection.mock.callCount() > 0);
@@ -165,7 +184,7 @@ void test("unconfigured Typesense search uses SQL without invoking the provider"
   delete process.env["NEXT_PUBLIC_TYPESENSE_HOST"];
   delete process.env["NEXT_PUBLIC_TYPESENSE_API_KEY"];
 
-  assert.deepEqual(await searchContent("fallback"), sqlResults);
+  assert.deepEqual(await searchContentPage({ term: "fallback" }), sqlPage);
 
   assert.equal(selectCollection.mock.callCount(), 0);
   assert.equal(searchTypesense.mock.callCount(), 0);
@@ -176,7 +195,7 @@ void test("unconfigured Typesense search uses SQL without invoking the provider"
 void test("server canonical collection keeps SQL fallback despite a conflicting public legacy collection", async () => {
   process.env["NEXT_PUBLIC_TYPESENSE_COLLECTION_NAME"] = "content_production";
 
-  assert.deepEqual(await searchContent("fallback"), sqlResults);
+  assert.deepEqual(await searchContentPage({ term: "fallback" }), sqlPage);
 
   assert.equal(searchTypesense.mock.callCount(), 1);
   assert.ok(createConnection.mock.callCount() > 0);
