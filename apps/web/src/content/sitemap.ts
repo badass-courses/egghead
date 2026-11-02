@@ -2,8 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import type { MetadataRoute } from "next";
 import { cacheLife, cacheTag } from "next/cache";
 
-import { getWorkshopReferences } from "../workshops/read";
-import { createLocalMysqlConnection, getEggheadRuntime } from "../db/local-docker";
+import { createLocalMysqlConnection } from "../db/local-docker";
 import { contentResourceSlugSql } from "./resource-slug";
 import { publishedResourceSql, routeableLessonResourceSql } from "./publication";
 import {
@@ -316,12 +315,6 @@ export async function getEggheadSitemapEntriesUncached(): Promise<MetadataRoute.
     const collectionLessons = await collectionLessonRows(connection);
     const standaloneLessons = await standaloneLessonRows(connection);
     const publicResources = await publicContentRows(connection);
-    const workshops =
-      getEggheadRuntime() === "production"
-        ? []
-        : (await getWorkshopReferences()).map((row) =>
-            sitemapEntry(`/workshops/${row.slug}`, row.updatedAt, 0.8),
-          );
 
     const staticEntries = SITEMAP_STATIC_PATHS.map((path) =>
       sitemapEntry(path, null, path === "/" ? 1 : 0.6),
@@ -333,7 +326,6 @@ export async function getEggheadSitemapEntriesUncached(): Promise<MetadataRoute.
       ...collectionLessons,
       ...standaloneLessons,
       ...publicResources,
-      ...workshops,
     ]);
   } finally {
     await connection.end();

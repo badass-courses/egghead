@@ -38,7 +38,7 @@ async function WorkshopThanks({
           ? "Payment received. Your workshop purchase is being recorded."
           : "Your purchase will be confirmed after payment succeeds."}
       </p>
-      <Link className="underline" href={`/workshop/${encodeURIComponent(id)}`}>
+      <Link className="underline" href={`/workshops/${encodeURIComponent(id)}`}>
         Back to the workshop
       </Link>
     </main>

@@ -11,10 +11,7 @@ import { cn } from "@egghead/ui/utils";
    a floating tactile shelf — active page sits raised like the key you just
    pressed, search is a well, one yolk CTA per shelf. */
 
-const NAV_LINKS = [
-  { href: "/workshops", label: "Workshops" },
-  { href: "/live-events", label: "Live events" },
-];
+const NAV_LINKS = [{ href: "/workshops", label: "Workshops" }];
 
 export type SiteAccountState = "authenticated" | "anonymous" | "unknown";
 
@@ -26,11 +23,7 @@ type SiteNavAccount = {
 function isActive(pathname: string | null, href: string) {
   if (pathname === null) return false;
   if (href === "/") return pathname === "/";
-  return (
-    pathname === href ||
-    pathname.startsWith(`${href}/`) ||
-    (href === "/live-events" && pathname.startsWith("/workshop/"))
-  );
+  return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 function SearchIcon() {
