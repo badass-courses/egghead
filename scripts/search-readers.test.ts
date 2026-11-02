@@ -20,6 +20,7 @@ const rows = Array.from({ length: 49 }, (_, i) => ({
 let catalog = rows;
 let totalOverride: number | null = null;
 let resolutions = 0;
+let nativeMissing = false;
 const statements: { sql: string; params: readonly unknown[] }[] = [];
 const nativeRequests: URL[] = [];
 
@@ -81,6 +82,11 @@ mock.module(appRequire.resolve("next/cache"), {
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", "http://localhost");
   nativeRequests.push(url);
+  if (nativeMissing) {
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ message: "Synthetic missing index" }));
+    return;
+  }
   const page = Number(url.searchParams.get("page") ?? 1);
   const size = Number(url.searchParams.get("per_page"));
   const legacy = url.pathname.includes("content_production");
@@ -128,6 +134,7 @@ after(async () => {
 });
 beforeEach(() => {
   catalog = rows;
+  nativeMissing = false;
   totalOverride = null;
   resolutions = 0;
   statements.length = 0;
@@ -239,4 +246,46 @@ void test("SQL rejects an out-of-range claimed page even when the boundary retur
     boundary: { id: "synthetic-049", createdAt: "2030-01-01T00:00:00.000Z" },
   });
   assert.deepEqual(await searchContentPage(query, cursor), { kind: "stale-page" });
+});
+
+void test("a SQL fallback traversal stays on SQL when Typesense recovers", async () => {
+  process.env["TYPESENSE_COLLECTION_NAME"] = "fixture";
+  process.env["NEXT_PUBLIC_TYPESENSE_HOST"] = "127.0.0.1";
+  process.env["NEXT_PUBLIC_TYPESENSE_PROTOCOL"] = "http";
+  process.env["NEXT_PUBLIC_TYPESENSE_PORT"] = String(port);
+  process.env["NEXT_PUBLIC_TYPESENSE_API_KEY"] = "synthetic-reader";
+  nativeMissing = true;
+  const query = { term: "fixture" };
+  const first = await searchContentPage(query);
+  if (first.kind !== "page") throw new Error("Expected SQL fallback");
+  assert.ok(first.pagination.nextCursor);
+  const requestsBeforeRecovery = nativeRequests.length;
+  nativeMissing = false;
+  const second = await searchContentPage(query, first.pagination.nextCursor);
+  if (second.kind !== "page") throw new Error("Expected SQL continuation");
+  assert.deepEqual(
+    second.results.map((row) => row.id),
+    rows.slice(24, 48).map((row) => row.id),
+  );
+  assert.equal(
+    nativeRequests.length,
+    requestsBeforeRecovery,
+    "SQL cursor must not retry the recovered provider",
+  );
+});
+
+void test("legacy configuration rejects a SQL cursor without reading SQL", async () => {
+  process.env["TYPESENSE_COLLECTION_NAME"] = "content_production";
+  process.env["NEXT_PUBLIC_TYPESENSE_HOST"] = "127.0.0.1";
+  process.env["NEXT_PUBLIC_TYPESENSE_API_KEY"] = "synthetic-reader";
+  const cursor = encodeSearchCursor({
+    source: "sql",
+    page: 2,
+    scope: searchScope("fixture"),
+    direction: "next",
+    boundary: { id: "synthetic-025", createdAt: "2030-01-01T00:00:00.000Z" },
+  });
+  assert.deepEqual(await searchContentPage({ term: "fixture" }, cursor), { kind: "stale-page" });
+  assert.equal(statements.length, 0);
+  assert.equal(nativeRequests.length, 0);
 });

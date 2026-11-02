@@ -484,6 +484,16 @@ export async function searchContentPage(
   const typeFilter = query.contentType?.trim() || null;
   const instructorFilter = query.instructor?.trim() || null;
   const cursor = decodeSearchCursor(cursorToken, searchScope(term, typeFilter, instructorFilter));
+  if (cursor?.source === "sql") {
+    // A configured legacy catalog must never serve an unrelated SQL traversal.
+    if (
+      isEggheadTypesenseSearchConfigured() &&
+      getEggheadTypesenseConfig().searchSchema === "legacy"
+    ) {
+      return { kind: "stale-page" };
+    }
+    return searchSqlContent(term, typeFilter, instructorFilter, cursor);
+  }
   try {
     const typesenseResults = await searchTypesenseContent(
       term,
