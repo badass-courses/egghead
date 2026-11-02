@@ -35,6 +35,8 @@ import {
   legacyTypesenseContentFilter,
 } from "../apps/web/src/content/typesense";
 import { legacyInstructorNamesForFilter } from "../apps/web/src/content/instructors";
+import { contributionPlanChecks } from "./rails-instructor-contributions-contract";
+import { reindexApiChecks } from "./typesense-reindex-contract";
 import { GET as getInstructors } from "../apps/web/src/app/api/instructors/route";
 
 function assertEqual(
@@ -204,7 +206,7 @@ async function instructorApiChecks() {
         found: 0,
         facet_counts: [
           {
-            field_name: "instructor_name",
+            field_name: requests.at(-1)?.searchParams.get("facet_by") ?? "instructor_name",
             counts: [
               { value: "John Lindquist", count: 200 },
               { value: "Matías Hernández", count: 80 },
@@ -343,7 +345,38 @@ async function instructorApiChecks() {
         true,
       ),
     );
+    process.env["TYPESENSE_COLLECTION_NAME"] = "egghead_content";
+    const canonical: unknown = await (
+      await getInstructors(new Request("http://localhost/api/instructors?q=matias"))
+    ).json();
+    fixtureChecks.push(
+      assertEqual(
+        "canonical API discovers names from indexed facets without SQL",
+        JSON.stringify(canonical),
+        JSON.stringify({ instructors: [{ name: "Matías Hernández", resourceCount: 100 }] }),
+      ),
+      assertEqual(
+        "canonical discovery uses stable alias and instructorNames facet",
+        requests.at(-1)?.pathname ?? "",
+        "/collections/egghead_content/documents/search",
+      ),
+      assertEqual(
+        "canonical discovery facets instructorNames",
+        requests.at(-1)?.searchParams.get("facet_by") ?? "",
+        "instructorNames",
+      ),
+      assertEqual(
+        "canonical facets share supported search scope",
+        requests.at(-1)?.searchParams.get("filter_by") ?? "",
+        typesenseSearchParameters("").filter_by,
+      ),
+    );
     fail = true;
+    await rejects(
+      () => getInstructors(new Request("http://localhost/api/instructors")),
+      /fixture missing instructor_name facet/,
+    );
+    process.env["TYPESENSE_COLLECTION_NAME"] = "content_production";
     await rejects(
       () => getInstructors(new Request("http://localhost/api/instructors")),
       /fixture missing instructor_name facet/,
@@ -676,6 +709,8 @@ const checks = [
 ];
 
 checks.push(...(await instructorApiChecks()));
+checks.push(...(await reindexApiChecks()));
+checks.push(...contributionPlanChecks());
 
 console.log(
   JSON.stringify({
@@ -691,6 +726,7 @@ console.log(
       instructorApiFixtureOnly: true,
       legacyInstructorDiscoveryUsesIndexedFacets: true,
       canonicalInstructorFieldsRequireSchemaAndIndexData: true,
+      canonicalInstructorDiscoveryUsesIndexedFacets: true,
       podcastEpisodeUrlShape: "/:podcastShowSlug/:episodeSlug",
       legacyUrlsPreservedAsMetadata: true,
       liveTypesenseDependencyAdded: hasTypesenseDependency(),

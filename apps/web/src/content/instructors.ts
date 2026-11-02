@@ -7,7 +7,7 @@ import {
   normalizeInstructorDisplayName,
 } from "./encoding";
 import { publishedResourceSql } from "./publication";
-import type { LegacySearchIndexDocument } from "./search-document";
+import { SEARCH_CONTENT_TYPE_VALUES } from "./search-document";
 import {
   createEggheadTypesenseSearchClient,
   getEggheadTypesenseConfig,
@@ -99,27 +99,31 @@ function withoutUserIds({ name, resourceCount }: ResolvedInstructor): SearchInst
 
 type LegacySearchInstructor = SearchInstructor & { indexedNames: string[] };
 
-async function legacySearchInstructors(): Promise<LegacySearchInstructor[]> {
+async function indexedSearchInstructors(): Promise<LegacySearchInstructor[]> {
   const config = getEggheadTypesenseConfig();
   const client = createEggheadTypesenseSearchClient();
+  const legacy = config.searchSchema === "legacy";
+  const instructorField = legacy ? "instructor_name" : "instructorNames";
   // Read the small instructor vocabulary before folding names in JS. A
   // facet_query would miss accent/mojibake variants that the SQL path repairs.
   const maxFacetValues = 1_000;
   const response = await client
-    .collections<LegacySearchIndexDocument>(config.collectionName)
+    .collections(config.collectionName)
     .documents()
     .search({
       q: "*",
       query_by: "title,description,summary",
-      filter_by: legacyTypesenseContentFilter(),
-      facet_by: "instructor_name",
+      filter_by: legacy
+        ? legacyTypesenseContentFilter()
+        : `type:=[${SEARCH_CONTENT_TYPE_VALUES.join(", ")}]`,
+      facet_by: instructorField,
       max_facet_values: maxFacetValues,
       per_page: 0,
     });
-  const facet = response.facet_counts?.find((entry) => entry.field_name === "instructor_name");
-  if (!facet) throw new Error("Legacy Typesense search did not return instructor_name facets.");
+  const facet = response.facet_counts?.find((entry) => entry.field_name === instructorField);
+  if (!facet) throw new Error(`Typesense search did not return ${instructorField} facets.`);
   if (facet.counts.length >= maxFacetValues) {
-    throw new Error("Legacy Typesense instructor vocabulary exceeds the facet read limit.");
+    throw new Error("Typesense instructor vocabulary exceeds the facet read limit.");
   }
 
   const byKey = new Map<string, LegacySearchInstructor>();
@@ -143,7 +147,7 @@ async function legacySearchInstructors(): Promise<LegacySearchInstructor[]> {
 export async function legacyInstructorNamesForFilter(name: string): Promise<string[]> {
   const key = instructorMatchKey(name);
   if (!key) return [];
-  const instructors = await legacySearchInstructors();
+  const instructors = await indexedSearchInstructors();
   return (
     instructors.find((instructor) => instructorMatchKey(instructor.name) === key)?.indexedNames ??
     []
@@ -151,11 +155,8 @@ export async function legacyInstructorNamesForFilter(name: string): Promise<stri
 }
 
 async function searchInstructors(): Promise<SearchInstructor[]> {
-  if (
-    isEggheadTypesenseSearchConfigured() &&
-    getEggheadTypesenseConfig().searchSchema === "legacy"
-  ) {
-    const instructors = await legacySearchInstructors();
+  if (isEggheadTypesenseSearchConfigured()) {
+    const instructors = await indexedSearchInstructors();
     return instructors.map(({ name, resourceCount }) => ({ name, resourceCount }));
   }
   return (await allInstructors()).map(withoutUserIds);
