@@ -1,16 +1,17 @@
 import { createAuthJsAdapter } from "../server/auth-js-adapter";
 import type { NextAuthConfig } from "next-auth";
-import GithubProvider from "@auth/core/providers/github";
 import { logger } from "@coursebuilder/utils/logger";
 
 import { getCourseBuilderAdapter } from "../db/adapter";
 import { getEggheadRuntime } from "../db/local-docker";
 import { getEnv } from "../env";
 import { claimAnonymousLessonCompletions } from "../progress/anonymous-lesson-progress";
+import { createAuthConfig } from "./auth-config-factory";
 import { getAuthSecret } from "./auth-secret";
 import { isEmailAuthEnabled } from "./email-auth";
 import { isEmailDeliveryEnabled } from "./email-delivery";
 import { createPostmarkEmailProvider } from "./email-provider";
+import { createGithubProvider } from "./github-provider";
 
 const LOCAL_EMAIL_FROM = "egghead development <no-reply@egghead.local>";
 const authSecret = getAuthSecret();
@@ -43,11 +44,7 @@ function getAuthProviders(): NextAuthConfig["providers"] {
 
   if (githubClientId && githubClientSecret) {
     providers.push(
-      GithubProvider({
-        clientId: githubClientId,
-        clientSecret: githubClientSecret,
-        allowDangerousEmailAccountLinking: true,
-      }),
+      createGithubProvider({ clientId: githubClientId, clientSecret: githubClientSecret }),
     );
   }
 
@@ -63,41 +60,20 @@ function getAuthProviders(): NextAuthConfig["providers"] {
   return providers;
 }
 
-export const authConfig = {
+async function claimAnonymousProgressOnSignIn(userId: string) {
+  try {
+    await claimAnonymousLessonCompletions(userId);
+  } catch (error) {
+    logger.error(
+      error instanceof Error ? error : new Error("Unknown anonymous lesson progress claim failure"),
+      { operation: "claimAnonymousLessonCompletions" },
+    );
+  }
+}
+
+export const authConfig = createAuthConfig({
   adapter: createAuthJsAdapter(getCourseBuilderAdapter()),
   providers: getAuthProviders(),
-  events: {
-    signIn: async ({ user }) => {
-      if (!user.id) return;
-
-      try {
-        await claimAnonymousLessonCompletions(user.id);
-      } catch (error) {
-        logger.error(
-          error instanceof Error
-            ? error
-            : new Error("Unknown anonymous lesson progress claim failure"),
-          { operation: "claimAnonymousLessonCompletions" },
-        );
-      }
-    },
-  },
-  callbacks: {
-    session: ({ session, user }) => {
-      if (session.user && user.id) {
-        session.user.id = user.id;
-        session.user.role =
-          user.role === "admin" || user.role === "contributor" ? user.role : "user";
-      }
-
-      return session;
-    },
-  },
-  pages: {
-    error: "/login",
-    signIn: "/login",
-    verifyRequest: "/check-your-email",
-  },
-  ...(authSecret ? { secret: authSecret } : {}),
-  trustHost: true,
-} satisfies NextAuthConfig;
+  onSignIn: claimAnonymousProgressOnSignIn,
+  secret: authSecret,
+}) satisfies NextAuthConfig;

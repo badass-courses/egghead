@@ -90,6 +90,10 @@ function loginErrorMessage(error: string | undefined) {
     return "That sign-in link is invalid, expired, or has already been used. Request a new link below.";
   }
 
+  if (error === "OAuthAccountNotLinked") {
+    return "That GitHub account isn't connected to an egghead account with this email yet. Sign in with an email link, then connect GitHub from your profile.";
+  }
+
   if (error === "EmailSignin") {
     return "We couldn't send that sign-in link. Check the address and try again.";
   }

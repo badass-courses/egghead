@@ -2,20 +2,21 @@ import { createAuthJsAdapter } from './auth-js-adapter'
 import { getAbility } from '@/ability'
 import { emailProvider } from '@/coursebuilder/email-provider'
 import { courseBuilderAdapter, db } from '@/db'
-import { accounts } from '@/db/schema'
+import { accounts, users } from '@/db/schema'
 import { env } from '@/env.mjs'
 import { USER_CREATED_EVENT } from '@/inngest/events/user-created'
 import { inngest } from '@/inngest/inngest.server'
 import { addRoleToUser } from '@/lib/users'
 import GithubProvider from '@auth/core/providers/github'
 import TwitterProvider from '@auth/core/providers/twitter'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import NextAuth, { type DefaultSession, type NextAuthConfig } from 'next-auth'
 import { z } from 'zod'
 
 import { userSchema } from '@coursebuilder/core/schemas'
 
 import egghead from './egghead-auth-provider'
+import { decideEggheadEmailLink } from './egghead-auth-link-guard'
 
 type Role = 'admin' | 'user' | string
 
@@ -77,7 +78,12 @@ export const authOptions: NextAuthConfig = {
 						access_token: account.access_token,
 						expires_at: account.expires_at,
 					})
-					.where(eq(accounts.providerAccountId, account.providerAccountId))
+					.where(
+						and(
+							eq(accounts.provider, account.provider),
+							eq(accounts.providerAccountId, account.providerAccountId),
+						),
+					)
 			}
 
 			if (user.id && profile.roles.includes('instructor')) {
@@ -86,6 +92,42 @@ export const authOptions: NextAuthConfig = {
 		},
 	},
 	callbacks: {
+		signIn: async ({ account, profile }) => {
+			if (account?.provider !== 'egghead') return true
+
+			const [linkedAccount] = await db
+				.select({ userId: accounts.userId })
+				.from(accounts)
+				.where(
+					and(
+						eq(accounts.provider, account.provider),
+						eq(accounts.providerAccountId, account.providerAccountId),
+					),
+				)
+				.limit(1)
+			const email = typeof profile?.email === 'string' ? profile.email : null
+			const [emailUser] = email
+				? await db
+						.select({
+							id: users.id,
+							legacyRailsUserId: users.legacyRailsUserId,
+						})
+						.from(users)
+						.where(eq(users.email, email))
+						.limit(1)
+				: []
+			const decision = decideEggheadEmailLink({
+				linkedUserId: linkedAccount?.userId ?? null,
+				emailUser: emailUser ?? null,
+				providerAccountId: account.providerAccountId,
+			})
+
+			if (!decision.allow) {
+				console.warn('egghead sign-in refused', { reason: decision.reason })
+			}
+
+			return decision.allow
+		},
 		session: async ({ session, user }) => {
 			const dbUser = await db.query.users.findFirst({
 				where: (users, { eq }) => eq(users.id, user.id),
@@ -116,6 +158,8 @@ export const authOptions: NextAuthConfig = {
 		egghead({
 			clientId: process.env.EGGHEAD_CLIENT_ID,
 			clientSecret: process.env.EGGHEAD_CLIENT_SECRET,
+			// Guarded by callbacks.signIn: links by email only when the existing
+			// user's legacyRailsUserId equals the Rails id the provider returned.
 			allowDangerousEmailAccountLinking: true,
 		}),
 	],
