@@ -17,7 +17,12 @@ these paths alone.
 `/i/:slug/rss.xml` reads the legacy Typesense collection
 (`EGGHEAD_INSTRUCTOR_FEED_TYPESENSE_COLLECTION`, default `content_production`,
 independent of the search page's collection) with the search host and key.
-Its GUIDs are `https://egghead.io` plus each document's `path`.
+Its GUIDs are `https://egghead.io` plus each document's `path`. Without
+`NEXT_PUBLIC_TYPESENSE_HOST` and `NEXT_PUBLIC_TYPESENSE_API_KEY` it answers 503
+(retryable). They are read at request time, but a Vercel deployment only sees
+the env it was built with, so an env change needs a redeploy. Any Typesense
+error (for example a key without access to the collection) is also a 503,
+logged as `[feeds] instructor podcast feed failed`.
 
 Rails also answered each route with a `.rss` suffix (`/feed.rss` returned 200).
 `feeds/rewrites.ts` rewrites those six suffixed paths to the same handlers
@@ -74,7 +79,11 @@ so numeric `course_feed` ids return 404.
 
 - lessons: state `published`, `flagged` or `revised`
 - courses: state `published`
-- `/feed` additionally requires `visibilityState = indexed` and `visibility = public`
+- `/feed` additionally requires `visibilityState = indexed` (or the migrated
+  `public`) and `visibility = public`. When the migrated `railsVisibilityState`
+  is present it must be `indexed` too: the migration wrote `public` for some
+  rows Rails had hidden. It only narrows; a CB `hidden` still hides. The same
+  rule picks an instructor's indexed playlists.
 - blocked visibility values are always excluded
 
 Rails `Lesson.without_series` is `series_id IN (0, NULL)`. Only the legacy
@@ -171,7 +180,11 @@ runtime.
 ## Parity against a saved Rails feed
 
 `pnpm feeds:parity --rails <saved-feed.xml> --feed lessons` runs the shipped `/feed` reader and
-builder against `DATABASE_URL` and diffs GUIDs with the saved Rails feed. Rails items newer than
+builder against `DATABASE_URL` and diffs GUIDs with the saved Rails feed. The member feeds
+work the same way: `--feed pro [--tech react,node]`, `--feed course --param <id or slug>` and
+`--feed playlist --param <id or slug>`. Save the Rails XML with any member's feed token; the
+script never reads a token. Miss reasons follow each feed's Rails scopes (only `/feed` is
+indexed and `without_series`), and window reasons appear only when CB hit its item limit. Rails items newer than
 the database's newest content row are reported separately. Every connection is a read-only
 session and refuses non-read statements (`EGGHEAD_DB_READ_ONLY`). For beta:
 `EGGHEAD_RUNTIME=beta EGGHEAD_BETA_DB_APPROVED=true DATABASE_URL=… pnpm feeds:parity …`.

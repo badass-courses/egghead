@@ -9,17 +9,58 @@ import {
   createEggheadMysqlConnection,
   getDatabaseReadOnlyMode,
 } from "../db/local-docker";
-import { jsonString, readPublicFeedEntries } from "./content";
-import { publicFeedChannel } from "./feeds";
+import { jsonString, readFeedCourse, readProFeedLessons, readPublicFeedEntries } from "./content";
+import {
+  courseFeedChannel,
+  playlistFeedChannel,
+  proFeedChannel,
+  PRO_FEED_LIMIT,
+  PUBLIC_FEED_LIMIT,
+  publicFeedChannel,
+} from "./feeds";
 import {
   diffFeedItems,
   guidPath,
+  LESSONS_FEED_RULES,
   missReason,
   type CbSlugFacts,
   type DuplicateCounts,
+  type MissRules,
   type ParityDiff,
   type ParityItem,
 } from "./parity";
+import type { RssChannel } from "./rss";
+
+/**
+ * Which CB feed to compare. `lessons` is /feed and /lessons/feed; `pro` is
+ * lessons#pro_feed with optional tech tags; `course` and `playlist` are the
+ * course_feed and playlist_feed for one Rails id or slug.
+ */
+export type ParityTarget =
+  | { feed: "lessons" }
+  | { feed: "pro"; tech: readonly string[] }
+  | { feed: "course" | "playlist"; param: string };
+
+const MEMBER_FEED_RULES: MissRules = { requireIndexed: false, withoutSeries: false };
+
+/** The CB channel the route would render, its item limit and its scopes. */
+async function cbChannelFor(
+  target: ParityTarget,
+): Promise<{ channel: RssChannel; limit: number | null; rules: MissRules }> {
+  if (target.feed === "lessons") {
+    const channel = publicFeedChannel(await readPublicFeedEntries());
+    return { channel, limit: PUBLIC_FEED_LIMIT, rules: LESSONS_FEED_RULES };
+  }
+  if (target.feed === "pro") {
+    const channel = proFeedChannel(await readProFeedLessons([...target.tech]), new Date());
+    return { channel, limit: PRO_FEED_LIMIT, rules: MEMBER_FEED_RULES };
+  }
+  const course = await readFeedCourse(target.param, target.feed);
+  if (!course) throw new Error(`No published CB ${target.feed} for "${target.param}".`);
+  const channel =
+    target.feed === "course" ? courseFeedChannel(course) : playlistFeedChannel(course);
+  return { channel, limit: null, rules: MEMBER_FEED_RULES };
+}
 
 type FactsRow = RowDataPacket & {
   slug: string | null;
@@ -31,6 +72,7 @@ type FactsRow = RowDataPacket & {
   postType: string | null;
   state: string | null;
   visibilityState: string | null;
+  railsVisibilityState: string | null;
   visibility: string | null;
   deletedAt: Date | null;
   seriesId: string | null;
@@ -52,6 +94,7 @@ function toFacts(row: FactsRow): CbSlugFacts {
     type: row.type === "post" ? (row.postType ?? "post") : row.type,
     state: row.state,
     visibilityState: row.visibilityState,
+    railsVisibilityState: row.railsVisibilityState,
     visibility: row.visibility,
     deleted: row.deletedAt !== null,
     hasSeriesId: row.seriesId !== null && !["0", "", "null"].includes(row.seriesId),
@@ -85,9 +128,9 @@ function duplicateGroupsSql(idKeys: readonly [string, string], typeCondition: st
 }
 
 /**
- * Rows the feed treats as indexed because CB says visibilityState "public",
- * while the migrated railsVisibilityState says Rails did not index them
- * (judge-3 #11). Non-zero means "public" is not always "indexed".
+ * Rows CB marks visibilityState "public" while the migrated
+ * railsVisibilityState says Rails did not index them (judge-3 #11). The
+ * indexed feeds exclude them; this reports how many there are.
  */
 const PUBLIC_BUT_RAILS_UNINDEXED_SQL = `
   SELECT COUNT(*) AS count
@@ -108,9 +151,10 @@ export type FeedsParityResult = {
   duplicates: DuplicateCounts;
 };
 
-/** Compare the CB lessons#feed output with saved Rails items. */
-export async function runLessonsFeedParity(
+/** Compare one CB feed's output with saved Rails items for the same feed. */
+export async function runFeedParity(
   rails: readonly ParityItem[],
+  target: ParityTarget,
 ): Promise<FeedsParityResult> {
   const readOnly = getDatabaseReadOnlyMode();
   if (!readOnly) throw new Error("Set EGGHEAD_DB_READ_ONLY before running feed parity.");
@@ -142,7 +186,8 @@ export async function runLessonsFeedParity(
       publicButRailsUnindexed: Number(publicHidden[0]?.count ?? 0),
     };
 
-    const cb = publicFeedChannel(await readPublicFeedEntries()).items.map(
+    const { channel, limit, rules } = await cbChannelFor(target);
+    const cb = channel.items.map(
       (item): ParityItem => ({
         guid: item.guid,
         title: item.title,
@@ -150,8 +195,10 @@ export async function runLessonsFeedParity(
       }),
     );
     const diff = diffFeedItems({ rails, cb, snapshotNewest });
+    // Window reasons only apply when the CB feed was cut at its item limit.
+    const truncated = limit !== null && cb.length >= limit;
     const cbDates = cb.flatMap((item) => (item.pubDate ? [item.pubDate.getTime()] : []));
-    const cbWindowOldest = cbDates.length > 0 ? new Date(Math.min(...cbDates)) : null;
+    const cbWindowOldest = truncated && cbDates.length > 0 ? new Date(Math.min(...cbDates)) : null;
 
     const slugs = [
       ...new Set(
@@ -177,6 +224,7 @@ export async function runLessonsFeedParity(
                  CAST(ROUND(UNIX_TIMESTAMP(resource.createdAt) * 1000) AS SIGNED) AS createdAtMs,
                  resource.type, ${json("postType")} AS postType,
                  ${json("state")} AS state, ${json("visibilityState")} AS visibilityState,
+                 ${json("railsVisibilityState")} AS railsVisibilityState,
                  ${json("visibility")} AS visibility, resource.deletedAt,
                  COALESCE(${json("legacyRailsSeriesId")}, ${json("eggheadSeriesId")}) AS seriesId
           FROM egghead_ContentResource resource
@@ -200,7 +248,7 @@ export async function runLessonsFeedParity(
 
     const reasons = new Map<string, string>();
     for (const item of diff.missing) {
-      reasons.set(item.guid, missReason(factsFor(item.guid), cbWindowOldest, item));
+      reasons.set(item.guid, missReason(factsFor(item.guid), cbWindowOldest, item, rules));
     }
     for (const drift of diff.slugDrift) {
       reasons.set(drift.rails.guid, `slug drift: CB emits ${drift.cb.guid}`);
