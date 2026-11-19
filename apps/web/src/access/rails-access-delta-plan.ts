@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import type { DeltaOp } from "./rails-access-delta";
 
-export const PLAN_FORMAT = "egghead-access-delta-plan/v4";
+export const PLAN_FORMAT = "egghead-access-delta-plan/v5";
 export const CURSOR_FORMAT = "egghead-access-delta-cursor/v1";
 
 const jsonRecord = z.record(z.string(), z.unknown());
@@ -104,8 +104,6 @@ const gateInputsSchema = z.object({
   acceptBarePro: z.string().nullable(),
   /** sha256 of the accepted held legacy-subscription id list. */
   acceptStaleLegacy: z.string().nullable(),
-  /** sha256 of the accepted orphan Rails user id list. */
-  acceptOrphanGrants: z.string().nullable(),
   /** First-run backing counts a person accepted, per source type. */
   acceptFirstBacking: z.record(z.string(), z.number().int().nonnegative()),
   /** sha256 of the `--previous-receipt` file's bytes. */
@@ -143,6 +141,12 @@ const planFile = z.object({
   database: z.string(),
   /** sha256 of the database host: binds the plan without storing the host. */
   hostSha256: z.string(),
+  /**
+   * sha256 of the database user. A PlanetScale branch and its production
+   * share a host; each branch password has its own user, so this binds the
+   * plan to the branch it was reviewed on.
+   */
+  databaseUserSha256: z.string(),
   /** `identity` plans hold only email updates and links (see --identity-pass). */
   pass: z.enum(["full", "identity"]),
   /** The gate inputs the plan was reviewed with; apply and resume must pass the same. */
@@ -174,6 +178,11 @@ export function hostSha256(host: string) {
   return createHash("sha256").update(host.trim().toLowerCase()).digest("hex");
 }
 
+/** Case kept: MySQL user names are case-sensitive. */
+export function databaseUserSha256(user: string) {
+  return createHash("sha256").update(user).digest("hex");
+}
+
 export function planSha256(ops: readonly DeltaOp[]) {
   return createHash("sha256").update(JSON.stringify(ops)).digest("hex");
 }
@@ -182,6 +191,7 @@ export function serializePlan(input: {
   exportSha256: string;
   database: string;
   hostSha256: string;
+  databaseUserSha256: string;
   pass: "full" | "identity";
   gateInputs: GateInputs;
   generatedAt: string;
@@ -192,6 +202,7 @@ export function serializePlan(input: {
     exportSha256: input.exportSha256,
     database: input.database,
     hostSha256: input.hostSha256,
+    databaseUserSha256: input.databaseUserSha256,
     pass: input.pass,
     gateInputs: input.gateInputs,
     generatedAt: input.generatedAt,

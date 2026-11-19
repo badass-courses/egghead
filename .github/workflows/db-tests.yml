@@ -2,7 +2,7 @@
 #
 # Each suite is one step against the throwaway MySQL and Postgres service
 # containers below. No secrets: every database here is created for the run.
-# Add other MySQL suites (access, feeds, subscriptions) as further steps, and
+# Add other MySQL suites (feeds, subscriptions) as further steps or jobs, and
 # their paths to the pull_request filter.
 name: db-tests
 
@@ -13,6 +13,9 @@ on:
       - "apps/web/src/db/**"
       - "scripts/progress-import*"
       - "scripts/sql/rails-progress-export*"
+      - "apps/web/src/access/**"
+      - "scripts/access-delta*"
+      - "scripts/sql/rails-access-*"
       - ".github/workflows/db-tests.yml"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -79,3 +82,37 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Progress import (MySQL) and Rails export SQL (psql)
         run: pnpm progress:import:test
+
+  access-delta:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: access_delta_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      LEFTHOOK: "0"
+      # The CLI refuses to run outside UTC; the suite spawns it.
+      TZ: UTC
+      ACCESS_DELTA_MYSQL_URL: mysql://root:root@127.0.0.1:3306/access_delta_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Access delta (pure and MySQL)
+        run: pnpm access:delta:test
