@@ -8,150 +8,152 @@ import {
 } from "./access-rule";
 import {
   createOwnershipRecord,
-  decideStripeEvent,
-  handoverRejections,
-  settledOwner,
+  ownershipPolicyProblems,
   suggestedOwnershipPolicy,
   transition,
-  type HandoverFacts,
+  transitionRejections,
+  type MarkerWriteFailure,
+  type OwnershipEffect,
   type OwnershipEvent,
   type OwnershipPolicy,
   type OwnershipRecord,
   type OwnershipState,
+  type SubscriptionFacts,
+  type TransitionFacts,
   type TransitionResult,
 } from "./machine";
 import {
-  oneTimePaymentOwner,
-  ownerMarkerIdempotencyKey,
   ownerMarkerMetadata,
   readOwnerMarker,
   type OwnerMarker,
+  type OwnerTimeline,
 } from "./marker";
 
-const SUB = "sub_synthetic_1";
+const CUS = "cus_synthetic_1";
 const NOW = 1_800_000_000;
 const DAY = 86_400;
 
-const policy: OwnershipPolicy = {
-  cbAccessRule: lenientStatusRule,
-  railsAccessRule: lenientStatusRule,
-  accessReadSide: "cb",
-  handoverStatuses: new Set<StripeSubscriptionStatus>(["active", "trialing", "canceled"]),
-  renewalQuietWindowSeconds: DAY,
-  eventSettleSeconds: 600,
-  maxMarkerWriteAttempts: 3,
-  railsAcceptsHandback: true,
-};
+const policy = suggestedOwnershipPolicy({ cbAccessRule: lenientStatusRule, accessReadSide: "cb" });
+const LEAD = policy.flipLeadSeconds;
+const FLIP = NOW + LEAD;
+const DEADLINE = FLIP - policy.markerCacheTtlSeconds - policy.landingMarginSeconds;
 
-function marker(owner: "rails" | "cb", generation: number): OwnerMarker {
-  return { owner, generation, source: "explicit" };
+function liveMarker(timeline: OwnerTimeline, generation: number): OwnerMarker {
+  return readOwnerMarker(ownerMarkerMetadata(timeline, generation));
 }
 
-const eligibleFacts: HandoverFacts = {
-  liveMarker: { owner: "rails", generation: 0, source: "absent" },
+const subscription: SubscriptionFacts = {
+  subscriptionId: "sub_1",
   status: "active",
   paidThroughAt: NOW + 10 * DAY,
-  lastStripeEventAt: NOW - 3600,
-  otherRailsOwnedSubscriptionsOnCustomer: 0,
   team: null,
-  acceptAccessChange: false,
 };
 
-function record(state: OwnershipState, generation = 2): OwnershipRecord {
-  switch (state) {
-    case "rails_owned":
-    case "cb_owned":
-      return { subscriptionId: SUB, state, generation, updatedAt: NOW - DAY };
-    case "handover_pending":
-    case "handback_pending":
-      return {
-        subscriptionId: SUB,
-        state,
-        generation,
-        updatedAt: NOW - DAY,
-        pending: {
-          generation: generation + 1,
-          batchId: "batch-1",
-          attempts: 1,
-          requestedAt: NOW - DAY,
-        },
-      };
-    default:
-      throw new Error(`unknown state ${String(state)}`);
+function factsFor(
+  record: OwnershipRecord,
+  overrides: Partial<TransitionFacts> = {},
+): TransitionFacts {
+  const marker =
+    record.generation === 0 && record.timeline.length === 1 && record.timeline[0]?.owner === "rails"
+      ? readOwnerMarker({})
+      : liveMarker(record.timeline, record.generation);
+  return {
+    liveMarker: marker,
+    subscriptions: [subscription],
+    lastStripeEventAt: NOW - 3600,
+    acceptAccessChange: false,
+    ...overrides,
+  };
+}
+
+function railsRecord(): OwnershipRecord {
+  return createOwnershipRecord({ customerId: CUS, marker: readOwnerMarker({}), at: NOW - DAY })
+    .record;
+}
+
+function request(
+  record: OwnershipRecord,
+  type: "HANDOVER_REQUESTED" | "HANDBACK_REQUESTED" = "HANDOVER_REQUESTED",
+  at = NOW,
+  batchId = "batch-1",
+  facts?: TransitionFacts,
+): OwnershipEvent {
+  return { type, batchId, at, facts: facts ?? factsFor(record) };
+}
+
+function step(
+  record: OwnershipRecord,
+  event: OwnershipEvent,
+  p: OwnershipPolicy = policy,
+): TransitionResult {
+  return transition(record, event, p);
+}
+
+function pendingOf(record: OwnershipRecord) {
+  if (record.state !== "handover_pending" && record.state !== "handback_pending") {
+    throw new Error(`expected pending, got ${record.state}`);
   }
+  return record.pending;
 }
 
-function expectTransitioned(result: TransitionResult): OwnershipRecord {
-  expect(result.outcome).toBe("transitioned");
-  return result.record;
+function writes(effects: readonly OwnershipEffect[]) {
+  return effects.filter((effect) => effect.type === "write_marker");
 }
 
-function pendingOf(r: OwnershipRecord) {
-  if (r.state !== "handover_pending" && r.state !== "handback_pending") {
-    throw new Error(`expected a pending record, got ${r.state}`);
-  }
-  return r.pending;
+function alertCodes(effects: readonly OwnershipEffect[]) {
+  return effects.flatMap((effect) => (effect.type === "alert" ? [effect.code] : []));
 }
 
-const allStates: readonly OwnershipState[] = [
-  "rails_owned",
-  "handover_pending",
-  "cb_owned",
-  "handback_pending",
-];
+/** rails_owned -> handover_pending (gen 1) */
+function handoverPending(): OwnershipRecord {
+  return step(railsRecord(), request(railsRecord())).record;
+}
 
-describe("marker", () => {
-  it("reads only the exact string cb as CourseBuilder, like the Rails guard", () => {
-    expect(readOwnerMarker({ egghead_owner: "cb", egghead_owner_generation: "4" })).toEqual({
-      owner: "cb",
-      generation: 4,
-      source: "explicit",
+/** handover committed: cb from FLIP, gen 1 */
+function cbRecord(): OwnershipRecord {
+  const pending = handoverPending();
+  const p = pendingOf(pending);
+  return step(pending, {
+    type: "MARKER_OBSERVED",
+    marker: liveMarker(p.timeline, p.generation),
+    at: NOW + 5,
+    landedAt: NOW + 5,
+  }).record;
+}
+
+function failure(
+  generation: number,
+  kind: MarkerWriteFailure,
+  at: number,
+  facts: TransitionFacts | null,
+): OwnershipEvent {
+  return { type: "MARKER_WRITE_FAILED", generation, failure: kind, at, error: kind, facts };
+}
+
+describe("policy", () => {
+  it("suggests a usable policy and takes the access law as an input", () => {
+    expect(ownershipPolicyProblems(policy)).toEqual([]);
+    const strict = suggestedOwnershipPolicy({
+      cbAccessRule: strictPaidThroughRule,
+      accessReadSide: "rails",
     });
-    expect(readOwnerMarker({ egghead_owner: "rails" })).toEqual({
-      owner: "rails",
-      generation: 0,
-      source: "explicit",
-    });
-    expect(readOwnerMarker({ egghead_owner: "CB" })).toEqual({
-      owner: "rails",
-      generation: 0,
-      source: "unrecognized",
-    });
-    expect(readOwnerMarker({})).toEqual({ owner: "rails", generation: 0, source: "absent" });
-    expect(readOwnerMarker({ egghead_owner: "" }).source).toBe("absent");
-    expect(readOwnerMarker(null)).toEqual({ owner: "rails", generation: 0, source: "absent" });
-    expect(readOwnerMarker("cb").owner).toBe("rails");
+    expect(strict.cbAccessRule).toBe(strictPaidThroughRule);
+    expect(strict.railsAccessRule).toBe(lenientStatusRule);
   });
 
-  it("ignores generations that are not non-negative integers", () => {
-    for (const raw of ["-1", "1.5", "abc", "", "1e3"]) {
-      expect(
-        readOwnerMarker({ egghead_owner: "cb", egghead_owner_generation: raw }).generation,
-      ).toBe(0);
-    }
-    expect(readOwnerMarker({ egghead_owner: "cb", egghead_owner_generation: 7 }).generation).toBe(
-      0,
-    );
-  });
-
-  it("writes string metadata and a stable idempotency key", () => {
-    expect(ownerMarkerMetadata("cb", 3)).toEqual({
-      egghead_owner: "cb",
-      egghead_owner_generation: "3",
+  it("rejects a lead time that cannot outlast the marker cache, and refuses to flip with it", () => {
+    const bad = { ...policy, flipLeadSeconds: 100 };
+    expect(ownershipPolicyProblems(bad)).toHaveLength(1);
+    expect(ownershipPolicyProblems({ ...policy, timelineRetentionSeconds: DAY })).toHaveLength(1);
+    expect(step(railsRecord(), request(railsRecord()), bad)).toMatchObject({
+      outcome: "rejected",
+      reasons: ["policy_invalid"],
     });
-    expect(ownerMarkerIdempotencyKey(SUB, "cb", 3)).toBe(`egghead-owner:${SUB}:cb:3`);
-    expect(readOwnerMarker(ownerMarkerMetadata("cb", 3))).toEqual(marker("cb", 3));
-  });
-
-  it("gives one-time payments to whoever created the checkout session", () => {
-    expect(oneTimePaymentOwner({ egghead_owner: "cb" })).toBe("cb");
-    expect(oneTimePaymentOwner({ site: "egghead" })).toBe("rails");
-    expect(oneTimePaymentOwner(undefined)).toBe("rails");
   });
 });
 
 describe("access rules", () => {
-  it("lenient grants by status alone (ADR-0006)", () => {
+  it("lenient grants by status (ADR-0006); strict needs an active paid period (ADR-0008)", () => {
     for (const status of ["active", "trialing", "past_due"] as const) {
       expect(
         accessGranted(lenientStatusRule.evaluate({ status, paidThroughAt: NOW - DAY, now: NOW })),
@@ -160,9 +162,6 @@ describe("access rules", () => {
     expect(
       lenientStatusRule.evaluate({ status: "canceled", paidThroughAt: NOW + DAY, now: NOW }),
     ).toBe("status_no_grant");
-  });
-
-  it("strict grants only an active subscription inside its paid period (ADR-0008)", () => {
     expect(
       strictPaidThroughRule.evaluate({ status: "active", paidThroughAt: NOW + 1, now: NOW }),
     ).toBe("paid_through");
@@ -170,584 +169,713 @@ describe("access rules", () => {
       "not_paid_through",
     );
     expect(
-      strictPaidThroughRule.evaluate({ status: "active", paidThroughAt: null, now: NOW }),
-    ).toBe("not_paid_through");
-    expect(
       strictPaidThroughRule.evaluate({ status: "trialing", paidThroughAt: NOW + DAY, now: NOW }),
     ).toBe("not_paid_through");
   });
 });
 
-describe("single owner invariant", () => {
-  const markers: OwnerMarker[] = [
-    marker("rails", 0),
-    marker("rails", 1),
-    marker("rails", 3),
-    marker("rails", 9),
-    marker("cb", 0),
-    marker("cb", 1),
-    marker("cb", 3),
-    marker("cb", 9),
-    { owner: "rails", generation: 0, source: "absent" },
-    { owner: "rails", generation: 5, source: "unrecognized" },
-  ];
-
-  it("CB processes an event exactly when the live marker says cb, in every state", () => {
-    for (const state of allStates) {
-      for (const liveMarker of markers) {
-        const decision = decideStripeEvent(record(state), {
-          subscriptionId: SUB,
-          liveMarker,
-          at: NOW,
-        });
-        // Rails' guard skips exactly when marker == cb, so this makes one side act.
-        expect(decision.action, `${state} with ${JSON.stringify(liveMarker)}`).toBe(
-          liveMarker.owner === "cb" ? "process" : "ignore",
-        );
-        expect(decision.owner).toBe(liveMarker.owner);
-        expect(settledOwner(decision.record.state)).toBe(liveMarker.owner);
-        expect(decision.record.generation).toBeGreaterThanOrEqual(record(state).generation);
-      }
-    }
-  });
-
-  it("holds for a subscription CB has never seen", () => {
-    for (const liveMarker of markers) {
-      const decision = decideStripeEvent(null, { subscriptionId: SUB, liveMarker, at: NOW });
-      expect(decision.action).toBe(liveMarker.owner === "cb" ? "process" : "ignore");
-      expect(decision.recordChanged).toBe(true);
-      expect(decision.record.state).toBe(liveMarker.owner === "cb" ? "cb_owned" : "rails_owned");
-    }
-  });
-});
-
-describe("state x event matrix", () => {
-  const events: Record<OwnershipEvent["type"], OwnershipEvent> = {
-    HANDOVER_REQUESTED: {
-      type: "HANDOVER_REQUESTED",
-      batchId: "batch-2",
-      at: NOW,
-      facts: eligibleFacts,
-    },
-    HANDBACK_REQUESTED: {
-      type: "HANDBACK_REQUESTED",
-      batchId: "batch-2",
-      at: NOW,
-      reason: "rollback",
-    },
-    MARKER_OBSERVED: { type: "MARKER_OBSERVED", marker: marker("cb", 3), at: NOW },
-    MARKER_WRITE_FAILED: { type: "MARKER_WRITE_FAILED", generation: 3, at: NOW, error: "timeout" },
-    ABORT_REQUESTED: { type: "ABORT_REQUESTED", at: NOW, reason: "operator" },
-  };
-
-  const expected: Record<
-    OwnershipState,
-    Record<OwnershipEvent["type"], [string, OwnershipState]>
-  > = {
-    rails_owned: {
-      HANDOVER_REQUESTED: ["transitioned", "handover_pending"],
-      HANDBACK_REQUESTED: ["unchanged", "rails_owned"],
-      MARKER_OBSERVED: ["transitioned", "cb_owned"],
-      MARKER_WRITE_FAILED: ["unchanged", "rails_owned"],
-      ABORT_REQUESTED: ["rejected", "rails_owned"],
-    },
-    handover_pending: {
-      HANDOVER_REQUESTED: ["rejected", "handover_pending"],
-      HANDBACK_REQUESTED: ["rejected", "handover_pending"],
-      MARKER_OBSERVED: ["transitioned", "cb_owned"],
-      MARKER_WRITE_FAILED: ["unchanged", "handover_pending"],
-      ABORT_REQUESTED: ["transitioned", "rails_owned"],
-    },
-    cb_owned: {
-      HANDOVER_REQUESTED: ["unchanged", "cb_owned"],
-      HANDBACK_REQUESTED: ["transitioned", "handback_pending"],
-      MARKER_OBSERVED: ["unchanged", "cb_owned"],
-      MARKER_WRITE_FAILED: ["unchanged", "cb_owned"],
-      ABORT_REQUESTED: ["rejected", "cb_owned"],
-    },
-    handback_pending: {
-      HANDOVER_REQUESTED: ["rejected", "handback_pending"],
-      HANDBACK_REQUESTED: ["rejected", "handback_pending"],
-      MARKER_OBSERVED: ["unchanged", "handback_pending"],
-      MARKER_WRITE_FAILED: ["unchanged", "handback_pending"],
-      ABORT_REQUESTED: ["transitioned", "cb_owned"],
-    },
-  };
-
-  for (const state of allStates) {
-    for (const [type, event] of Object.entries(events)) {
-      const want = expected[state][event.type];
-      it(`${state} + ${type} -> ${want[0]} ${want[1]}`, () => {
-        const result = transition(record(state), event, policy);
-        expect(result.outcome).toBe(want[0]);
-        expect(result.record.state).toBe(want[1]);
-        expect(result.record.subscriptionId).toBe(SUB);
-        if (result.outcome === "rejected") expect(result.effects).toEqual([]);
-      });
-    }
-  }
-});
-
-describe("handover", () => {
-  const request = (facts: HandoverFacts = eligibleFacts, batchId = "batch-1"): OwnershipEvent => ({
-    type: "HANDOVER_REQUESTED",
-    batchId,
-    at: NOW,
-    facts,
-  });
-
-  it("writes cb at the next generation, then commits when the marker is observed", () => {
-    const start = record("rails_owned", 0);
-    const pending = expectTransitioned(transition(start, request(), policy));
-    expect(pending.state).toBe("handover_pending");
-    expect(pendingOf(pending)).toMatchObject({ generation: 1, batchId: "batch-1", attempts: 1 });
-
-    const write = transition(start, request(), policy).effects;
-    expect(write).toEqual([
+describe("handover happy path", () => {
+  it("schedules the flip ahead, writes before a deadline, and commits when the write is seen", () => {
+    const start = railsRecord();
+    const result = step(start, request(start));
+    expect(result.outcome).toBe("transitioned");
+    const pending = pendingOf(result.record);
+    expect(pending).toMatchObject({
+      generation: 1,
+      flipAt: FLIP,
+      deadline: DEADLINE,
+      attempts: 1,
+      keyNonce: 0,
+    });
+    expect(pending.timeline).toEqual([
+      { owner: "rails", since: 0 },
+      { owner: "cb", since: FLIP },
+    ]);
+    expect(result.effects).toEqual([
       {
         type: "write_marker",
-        subscriptionId: SUB,
-        owner: "cb",
+        customerId: CUS,
         generation: 1,
-        idempotencyKey: `egghead-owner:${SUB}:cb:1`,
-        metadata: { egghead_owner: "cb", egghead_owner_generation: "1" },
+        timeline: pending.timeline,
+        metadata: {
+          egghead_owner: "cb",
+          egghead_owner_timeline: `rails@0;cb@${FLIP}`,
+          egghead_owner_generation: "1",
+        },
+        idempotencyKey: `egghead-owner:${CUS}:1:0`,
+        notAfter: DEADLINE,
       },
     ]);
 
-    // Write not landed yet: Rails still owns, nothing changes.
-    const early = transition(
-      pending,
-      { type: "MARKER_OBSERVED", marker: marker("rails", 0), at: NOW },
-      policy,
-    );
-    expect(early).toEqual({ outcome: "unchanged", record: pending, effects: [] });
+    // Not landed yet: nothing changes.
+    expect(
+      step(result.record, {
+        type: "MARKER_OBSERVED",
+        marker: readOwnerMarker({}),
+        at: NOW + 1,
+        landedAt: NOW + 1,
+      }),
+    ).toEqual({
+      outcome: "unchanged",
+      record: result.record,
+      effects: [],
+    });
 
-    const committed = transition(
-      pending,
-      { type: "MARKER_OBSERVED", marker: marker("cb", 1), at: NOW + 5 },
-      policy,
-    );
-    expect(committed.record).toEqual({
-      subscriptionId: SUB,
+    const committed = step(result.record, {
+      type: "MARKER_OBSERVED",
+      marker: liveMarker(pending.timeline, 1),
+      at: NOW + 5,
+      landedAt: NOW + 4,
+    });
+    expect(committed.record).toMatchObject({
       state: "cb_owned",
       generation: 1,
-      updatedAt: NOW + 5,
+      issuedGeneration: 1,
+      fence: null,
     });
-    expect(committed.effects).toEqual([{ type: "sync_cb_from_stripe", subscriptionId: SUB }]);
+    expect(committed.effects).toEqual([
+      { type: "sync_cb_from_stripe", customerId: CUS, notBefore: FLIP },
+    ]);
   });
 
-  it("picks a generation above anything seen on the live marker", () => {
-    const facts = { ...eligibleFacts, liveMarker: marker("rails", 7) };
-    const pending = expectTransitioned(
-      transition(record("rails_owned", 2), request(facts), policy),
-    );
-    expect(pendingOf(pending).generation).toBe(8);
+  it("alerts when the write lands too late for every cache to see it before the flip", () => {
+    const pending = handoverPending();
+    const p = pendingOf(pending);
+    const late = step(pending, {
+      type: "MARKER_OBSERVED",
+      marker: liveMarker(p.timeline, p.generation),
+      at: FLIP + 10,
+      landedAt: FLIP - policy.markerCacheTtlSeconds + 1,
+    });
+    expect(late.record.state).toBe("cb_owned");
+    expect(alertCodes(late.effects)).toEqual(["flip_landed_late"]);
   });
 
-  it("is idempotent for an already moved subscription", () => {
-    const owned = record("cb_owned");
-    expect(transition(owned, request(), policy)).toEqual({
+  it("is a no-op for a customer that already moved", () => {
+    const owned = cbRecord();
+    expect(step(owned, request(owned))).toEqual({
       outcome: "unchanged",
       record: owned,
       effects: [],
     });
   });
+});
 
-  it("re-drives the same write when the same batch asks again, and refuses another batch", () => {
-    const pending = record("handover_pending");
-    const again = transition(pending, request(eligibleFacts, "batch-1"), policy);
-    expect(again.outcome).toBe("unchanged");
-    expect(again.effects).toEqual([
-      expect.objectContaining({ type: "write_marker", owner: "cb", generation: 3 }),
-    ]);
-    expect(pendingOf(again.record).attempts).toBe(1);
+describe("customer as the unit (2.6)", () => {
+  it("guards every subscription on the customer", () => {
+    const start = railsRecord();
+    const facts = factsFor(start, {
+      subscriptions: [
+        subscription,
+        { ...subscription, subscriptionId: "sub_2", status: "past_due" },
+      ],
+    });
+    expect(step(start, request(start, "HANDOVER_REQUESTED", NOW, "b", facts))).toMatchObject({
+      outcome: "rejected",
+      reasons: ["status_not_eligible"],
+    });
+  });
 
-    const other = transition(pending, request(eligibleFacts, "batch-9"), policy);
-    expect(other).toMatchObject({ outcome: "rejected", reasons: ["transition_in_flight"] });
+  it("moves a customer with no live subscription", () => {
+    const start = railsRecord();
+    const facts = factsFor(start, {
+      subscriptions: [{ ...subscription, status: "canceled", paidThroughAt: NOW - DAY }],
+    });
+    expect(step(start, request(start, "HANDOVER_REQUESTED", NOW, "b", facts)).outcome).toBe(
+      "transitioned",
+    );
+    expect(
+      step(
+        start,
+        request(start, "HANDOVER_REQUESTED", NOW, "b", factsFor(start, { subscriptions: [] })),
+      ).outcome,
+    ).toBe("transitioned");
   });
 });
 
-describe("handover guards", () => {
-  const reasonsFor = (facts: Partial<HandoverFacts>, overrides: Partial<OwnershipPolicy> = {}) =>
-    handoverRejections({ ...eligibleFacts, ...facts }, { ...policy, ...overrides }, NOW);
+describe("guards", () => {
+  const reasonsFor = (
+    overrides: Partial<TransitionFacts>,
+    direction: "handover" | "handback" = "handover",
+    p: OwnershipPolicy = policy,
+  ) => {
+    const record = direction === "handover" ? railsRecord() : cbRecord();
+    return transitionRejections({
+      direction,
+      facts: factsFor(record, overrides),
+      record,
+      policy: p,
+      at: NOW,
+      flipAt: FLIP,
+    });
+  };
 
-  it("passes an eligible subscription", () => {
+  it("passes an eligible customer", () => {
     expect(reasonsFor({})).toEqual([]);
   });
 
-  it("refuses when the live marker already says cb", () => {
-    expect(reasonsFor({ liveMarker: marker("cb", 1) })).toEqual(["marker_already_cb"]);
+  it("refuses an unrecognized or out-of-sync live marker", () => {
+    expect(reasonsFor({ liveMarker: readOwnerMarker({ egghead_owner: "cb" }) })).toEqual([
+      "marker_unrecognized",
+    ]);
+    expect(reasonsFor({ liveMarker: liveMarker([{ owner: "rails", since: 0 }], 7) })).toEqual([
+      "marker_out_of_sync",
+    ]);
   });
 
-  it("refuses while access is still read from Rails", () => {
-    expect(reasonsFor({}, { accessReadSide: "rails" })).toEqual(["access_read_side_is_rails"]);
+  it("refuses while access is read from Rails", () => {
+    expect(reasonsFor({}, "handover", { ...policy, accessReadSide: "rails" })).toEqual([
+      "access_read_side_is_rails",
+    ]);
   });
 
-  it("refuses statuses with dunning or incomplete payment in flight", () => {
+  it("refuses dunning and incomplete statuses", () => {
     for (const status of [
       "past_due",
       "unpaid",
       "incomplete",
-      "incomplete_expired",
       "paused",
-    ] as const) {
-      expect(reasonsFor({ status })).toContain("status_not_eligible");
+    ] as StripeSubscriptionStatus[]) {
+      expect(reasonsFor({ subscriptions: [{ ...subscription, status }] })).toContain(
+        "status_not_eligible",
+      );
     }
-    expect(reasonsFor({ status: "canceled", paidThroughAt: NOW - DAY })).toEqual([]);
   });
 
-  it("refuses inside the renewal quiet window or without a known period end", () => {
-    expect(reasonsFor({ paidThroughAt: NOW + DAY - 1 })).toEqual(["renewal_window"]);
-    expect(reasonsFor({ paidThroughAt: NOW + DAY })).toEqual([]);
-    expect(reasonsFor({ paidThroughAt: null })).toContain("renewal_window");
+  it("measures the renewal window from the flip time", () => {
+    const window = policy.renewalQuietWindowSeconds;
+    expect(
+      reasonsFor({ subscriptions: [{ ...subscription, paidThroughAt: FLIP + window - 1 }] }),
+    ).toEqual(["renewal_window"]);
+    expect(
+      reasonsFor({ subscriptions: [{ ...subscription, paidThroughAt: FLIP + window }] }),
+    ).toEqual([]);
+    expect(reasonsFor({ subscriptions: [{ ...subscription, paidThroughAt: null }] })).toEqual([
+      "renewal_window",
+    ]);
   });
 
-  it("waits for Rails jobs from a recent event to drain", () => {
+  it("waits for recent Stripe activity to settle", () => {
     expect(reasonsFor({ lastStripeEventAt: NOW - 599 })).toEqual(["recent_stripe_activity"]);
     expect(reasonsFor({ lastStripeEventAt: NOW - 600 })).toEqual([]);
-    expect(reasonsFor({ lastStripeEventAt: null })).toEqual([]);
   });
 
-  it("refuses to split a Stripe customer across owners", () => {
-    expect(reasonsFor({ otherRailsOwnedSubscriptionsOnCustomer: 1 })).toEqual(["customer_split"]);
-  });
-
-  it("refuses team subscriptions until CB holds the seats and no seat change is in flight", () => {
+  it("guards team seats", () => {
     const team = { quantity: 5, seatsProjectedToCb: true, pendingSeatChange: false };
-    expect(reasonsFor({ team })).toEqual([]);
-    expect(reasonsFor({ team: { ...team, seatsProjectedToCb: false } })).toEqual([
-      "team_seats_not_projected",
-    ]);
-    expect(reasonsFor({ team: { ...team, pendingSeatChange: true } })).toEqual([
-      "team_seat_change_pending",
-    ]);
-  });
-
-  it("refuses a move that would change access under the chosen CB law unless acknowledged", () => {
-    const strict = { cbAccessRule: strictPaidThroughRule };
-    // Trialing: Rails grants by status, strict CB does not.
-    expect(reasonsFor({ status: "trialing" }, strict)).toEqual(["access_would_change"]);
-    expect(reasonsFor({ status: "trialing", acceptAccessChange: true }, strict)).toEqual([]);
-    // Under the lenient law the same subscription moves cleanly.
-    expect(reasonsFor({ status: "trialing" })).toEqual([]);
-    // Active and paid through: both laws grant.
-    expect(reasonsFor({}, strict)).toEqual([]);
-  });
-
-  it("reports every failing guard at once for batch reports", () => {
-    const result = transition(
-      record("rails_owned"),
-      {
-        type: "HANDOVER_REQUESTED",
-        batchId: "b",
-        at: NOW,
-        facts: {
-          ...eligibleFacts,
-          status: "past_due",
-          otherRailsOwnedSubscriptionsOnCustomer: 2,
-          lastStripeEventAt: NOW,
-        },
-      },
-      policy,
-    );
-    expect(result).toMatchObject({
-      outcome: "rejected",
-      reasons: ["status_not_eligible", "recent_stripe_activity", "customer_split"],
-      effects: [],
-    });
-  });
-});
-
-describe("events during handover", () => {
-  it("leaves the event to Rails until the marker flips, then commits and processes", () => {
-    const pending = record("handover_pending");
-
-    const before = decideStripeEvent(pending, {
-      subscriptionId: SUB,
-      liveMarker: marker("rails", 2),
-      at: NOW,
-    });
-    expect(before).toMatchObject({
-      action: "ignore",
-      owner: "rails",
-      recordChanged: false,
-      effects: [],
-    });
-    expect(before.record).toBe(pending);
-
-    // The marker write itself emits customer.subscription.updated, which confirms the move.
-    const after = decideStripeEvent(pending, {
-      subscriptionId: SUB,
-      liveMarker: marker("cb", 3),
-      at: NOW,
-    });
-    expect(after.action).toBe("process");
-    expect(after.recordChanged).toBe(true);
-    expect(after.record).toMatchObject({ state: "cb_owned", generation: 3 });
-    expect(after.effects).toEqual([{ type: "sync_cb_from_stripe", subscriptionId: SUB }]);
-  });
-
-  it("keeps CB acting during a handback until the rails marker lands", () => {
-    const pending = record("handback_pending");
+    expect(reasonsFor({ subscriptions: [{ ...subscription, team }] })).toEqual([]);
     expect(
-      decideStripeEvent(pending, { subscriptionId: SUB, liveMarker: marker("cb", 2), at: NOW })
-        .action,
-    ).toBe("process");
-    const back = decideStripeEvent(pending, {
-      subscriptionId: SUB,
-      liveMarker: marker("rails", 3),
-      at: NOW,
-    });
-    expect(back).toMatchObject({ action: "ignore", recordChanged: true, effects: [] });
-    expect(back.record).toMatchObject({ state: "rails_owned", generation: 3 });
+      reasonsFor({
+        subscriptions: [{ ...subscription, team: { ...team, seatsProjectedToCb: false } }],
+      }),
+    ).toEqual(["team_seats_not_projected"]);
+    expect(
+      reasonsFor({
+        subscriptions: [{ ...subscription, team: { ...team, pendingSeatChange: true } }],
+      }),
+    ).toEqual(["team_seat_change_pending"]);
   });
 
-  it("commits on the target owner even when someone else wrote another generation, and alerts", () => {
-    const result = transition(
-      record("handover_pending"),
-      { type: "MARKER_OBSERVED", marker: marker("cb", 9), at: NOW },
-      policy,
-    );
-    expect(result.record).toMatchObject({ state: "cb_owned", generation: 9 });
-    expect(result.effects).toEqual([
-      expect.objectContaining({ type: "alert", code: "marker_changed_externally" }),
-      { type: "sync_cb_from_stripe", subscriptionId: SUB },
+  it("refuses an access change under the chosen law unless acknowledged", () => {
+    const strict = { ...policy, cbAccessRule: strictPaidThroughRule };
+    const trialing = [{ ...subscription, status: "trialing" as const }];
+    expect(reasonsFor({ subscriptions: trialing }, "handover", strict)).toEqual([
+      "access_would_change",
     ]);
+    expect(
+      reasonsFor({ subscriptions: trialing, acceptAccessChange: true }, "handover", strict),
+    ).toEqual([]);
+    expect(reasonsFor({ subscriptions: trialing })).toEqual([]);
+  });
+
+  it("reports every failing guard at once", () => {
+    expect(
+      reasonsFor({
+        lastStripeEventAt: NOW,
+        subscriptions: [{ ...subscription, status: "past_due" }],
+      }),
+    ).toEqual(["recent_stripe_activity", "status_not_eligible"]);
   });
 });
 
-describe("marker write failures", () => {
-  const fail = (generation: number): OwnershipEvent => ({
-    type: "MARKER_WRITE_FAILED",
-    generation,
-    at: NOW,
-    error: "stripe 500",
-  });
-
-  it("retries with the same idempotency key until the attempt limit, then alerts and stays pending", () => {
-    let current = record("handover_pending");
-    const keys: string[] = [];
-    for (let attempt = 1; attempt < policy.maxMarkerWriteAttempts; attempt++) {
-      const result = transition(current, fail(3), policy);
-      expect(result.outcome).toBe("unchanged");
-      const [effect] = result.effects;
-      if (effect?.type !== "write_marker") throw new Error("expected a retry write");
-      keys.push(effect.idempotencyKey);
-      current = result.record;
-      expect(pendingOf(current).attempts).toBe(attempt + 1);
-    }
-    expect(new Set(keys)).toEqual(new Set([`egghead-owner:${SUB}:cb:3`]));
-
-    const exhausted = transition(current, fail(3), policy);
-    expect(exhausted.record).toBe(current);
-    expect(exhausted.record.state).toBe("handover_pending");
-    expect(exhausted.effects).toEqual([
-      expect.objectContaining({ type: "alert", code: "marker_write_retries_exhausted" }),
-    ]);
-
-    // An ambiguous timeout may have landed after all: observing it still commits.
-    const landed = transition(
-      current,
-      { type: "MARKER_OBSERVED", marker: marker("cb", 3), at: NOW },
-      policy,
-    );
-    expect(landed.record.state).toBe("cb_owned");
-  });
-
-  it("retries handback writes toward rails", () => {
-    const result = transition(record("handback_pending"), fail(3), policy);
-    expect(result.effects).toEqual([
-      expect.objectContaining({ type: "write_marker", owner: "rails", generation: 3 }),
-    ]);
-  });
-
-  it("ignores failure reports for an older generation", () => {
-    const pending = record("handover_pending");
-    expect(transition(pending, fail(2), policy)).toEqual({
-      outcome: "unchanged",
-      record: pending,
-      effects: [],
+describe("handback (2.5)", () => {
+  it("applies the same guards, renewal window included", () => {
+    const owned = cbRecord();
+    const facts = factsFor(owned, {
+      subscriptions: [{ ...subscription, paidThroughAt: NOW + 3600 }],
     });
-  });
-});
-
-describe("abort", () => {
-  it("returns a handover to Rails with a newer rails marker that beats a late cb write", () => {
-    const result = transition(
-      record("handover_pending"),
-      { type: "ABORT_REQUESTED", at: NOW, reason: "bad batch" },
-      policy,
+    expect(step(owned, request(owned, "HANDBACK_REQUESTED", NOW + 100, "rb", facts))).toMatchObject(
+      {
+        outcome: "rejected",
+        reasons: ["renewal_window"],
+      },
     );
-    expect(result.record).toEqual({
-      subscriptionId: SUB,
-      state: "rails_owned",
-      generation: 4,
-      updatedAt: NOW,
-    });
-    expect(result.effects).toEqual([
-      expect.objectContaining({ type: "write_marker", owner: "rails", generation: 4 }),
-      expect.objectContaining({ type: "alert", code: "transition_aborted", detail: "bad batch" }),
+  });
+
+  it("takes generation max(live, issued) + 1 and schedules rails after the cb entry", () => {
+    const owned = cbRecord();
+    const at = FLIP + 100;
+    const result = step(owned, request(owned, "HANDBACK_REQUESTED", at, "rb"));
+    const pending = pendingOf(result.record);
+    expect(result.record.state).toBe("handback_pending");
+    expect(pending.generation).toBe(2);
+    expect(pending.timeline).toEqual([
+      { owner: "rails", since: 0 },
+      { owner: "cb", since: FLIP },
+      { owner: "rails", since: at + LEAD },
     ]);
-
-    // A stale observation of the aborted cb write (generation 3) cannot be newer than ours,
-    // but the live marker still wins if it really says cb, and we alert.
-    const late = transition(
-      result.record,
-      { type: "MARKER_OBSERVED", marker: marker("cb", 3), at: NOW },
-      policy,
-    );
-    expect(late.record).toMatchObject({ state: "cb_owned", generation: 4 });
-    expect(late.effects).toContainEqual(
-      expect.objectContaining({ code: "marker_changed_externally" }),
-    );
-  });
-
-  it("keeps a handback with CB when aborted", () => {
-    const result = transition(
-      record("handback_pending"),
-      { type: "ABORT_REQUESTED", at: NOW, reason: "x" },
-      policy,
-    );
-    expect(result.record).toMatchObject({ state: "cb_owned", generation: 4 });
-    expect(result.effects[0]).toMatchObject({ type: "write_marker", owner: "cb", generation: 4 });
-  });
-});
-
-describe("handback (rollback)", () => {
-  const handback: OwnershipEvent = {
-    type: "HANDBACK_REQUESTED",
-    batchId: "rollback-1",
-    at: NOW,
-    reason: "rollback",
-  };
-
-  it("writes rails at the next generation and commits without a CB sync", () => {
-    const pending = expectTransitioned(transition(record("cb_owned", 4), handback, policy));
-    expect(pending.state).toBe("handback_pending");
-    expect(pendingOf(pending).generation).toBe(5);
-    const done = transition(
-      pending,
-      { type: "MARKER_OBSERVED", marker: marker("rails", 5), at: NOW },
-      policy,
-    );
-    expect(done.record).toMatchObject({ state: "rails_owned", generation: 5 });
+    const done = step(result.record, {
+      type: "MARKER_OBSERVED",
+      marker: liveMarker(pending.timeline, 2),
+      at: at + 3,
+      landedAt: at + 3,
+    });
+    expect(done.record).toMatchObject({ state: "rails_owned", generation: 2 });
     expect(done.effects).toEqual([]);
   });
 
   it("refuses once Rails is retired", () => {
+    const owned = cbRecord();
     expect(
-      transition(record("cb_owned"), handback, { ...policy, railsAcceptsHandback: false }),
+      step(owned, request(owned, "HANDBACK_REQUESTED", FLIP + 100, "rb"), {
+        ...policy,
+        railsAcceptsHandback: false,
+      }),
     ).toMatchObject({
       outcome: "rejected",
       reasons: ["rails_retired"],
     });
   });
+});
 
-  it("re-drives the same handback batch", () => {
-    const pending = {
-      ...record("handback_pending"),
-      pending: { ...pendingOf(record("handback_pending")), batchId: "rollback-1" },
-    };
-    const result = transition(pending, handback, policy);
-    expect(result.effects).toEqual([
-      expect.objectContaining({ type: "write_marker", owner: "rails", generation: 3 }),
+describe("idempotency keys on retry (2.3)", () => {
+  const pending = handoverPending();
+  const facts = factsFor(railsRecord());
+
+  it("mints a new key after a 5xx, because Stripe replays a cached 5xx", () => {
+    const result = step(pending, failure(1, "server_error", NOW + 10, facts));
+    expect(writes(result.effects)).toEqual([
+      expect.objectContaining({ idempotencyKey: `egghead-owner:${CUS}:1:1`, notAfter: DEADLINE }),
     ]);
+    expect(pendingOf(result.record)).toMatchObject({ attempts: 2, keyNonce: 1 });
   });
 
-  it("adopts a marker flipped back by hand in the Stripe dashboard", () => {
-    // Joel's rollback lever: set egghead_owner back to rails without touching CB.
-    const decision = decideStripeEvent(record("cb_owned", 4), {
-      subscriptionId: SUB,
-      liveMarker: { owner: "rails", generation: 4, source: "explicit" },
-      at: NOW,
-    });
-    expect(decision).toMatchObject({ action: "ignore", recordChanged: true });
-    expect(decision.record).toMatchObject({ state: "rails_owned", generation: 4 });
-    expect(decision.effects).toEqual([
-      expect.objectContaining({ code: "marker_changed_externally" }),
-    ]);
+  it("reuses the key after a transport timeout or rate limit", () => {
+    for (const kind of ["timeout", "rate_limited"] as const) {
+      const result = step(pending, failure(1, kind, NOW + 10, facts));
+      expect(writes(result.effects)).toEqual([
+        expect.objectContaining({ idempotencyKey: `egghead-owner:${CUS}:1:0` }),
+      ]);
+    }
+  });
+
+  it("cancels on a 4xx instead of retrying", () => {
+    const result = step(pending, failure(1, "client_error", NOW + 10, facts));
+    expect(result.record).toMatchObject({ state: "rails_owned", issuedGeneration: 2 });
+    expect(alertCodes(result.effects)).toEqual(["marker_write_rejected"]);
   });
 });
 
-describe("Stripe retries and out-of-order delivery", () => {
-  it("gives the same answer for a redelivered event and does not rewrite the record", () => {
-    const owned = record("cb_owned", 3);
-    const input = { subscriptionId: SUB, liveMarker: marker("cb", 3), at: NOW };
-    const first = decideStripeEvent(owned, input);
-    const second = decideStripeEvent(first.record, input);
-    expect(first).toMatchObject({ action: "process", recordChanged: false, effects: [] });
-    expect(second).toEqual(first);
-  });
+describe("retries and re-drives re-check facts (2.4)", () => {
+  const pending = handoverPending();
 
-  it("decides from the live marker, so an old event delivered late follows today's owner", () => {
-    // Event created while Rails owned it, delivered after the handover committed.
-    const decision = decideStripeEvent(record("cb_owned", 3), {
-      subscriptionId: SUB,
-      liveMarker: marker("cb", 3),
-      at: NOW,
+  it("needs fresh facts to retry", () => {
+    expect(step(pending, failure(1, "timeout", NOW + 10, null))).toMatchObject({
+      outcome: "rejected",
+      reasons: ["fresh_facts_required"],
     });
-    expect(decision.action).toBe("process");
   });
 
-  it("raises the stored generation when the live marker is ahead for the same owner", () => {
-    const result = transition(
-      record("cb_owned", 3),
-      { type: "MARKER_OBSERVED", marker: marker("cb", 6), at: NOW },
-      policy,
-    );
-    expect(result).toMatchObject({ outcome: "unchanged", effects: [] });
-    expect(result.record.generation).toBe(6);
-  });
-
-  it("never lowers the stored generation", () => {
-    const owned = record("cb_owned", 6);
-    const result = transition(
-      owned,
-      { type: "MARKER_OBSERVED", marker: marker("cb", 2), at: NOW },
-      policy,
-    );
-    expect(result.record).toBe(owned);
-  });
-});
-
-describe("suggested policy", () => {
-  it("takes the CB access law and read side as inputs and models Rails as lenient", () => {
-    const suggested = suggestedOwnershipPolicy({
-      cbAccessRule: strictPaidThroughRule,
-      accessReadSide: "rails",
+  it("cancels and fences when the fresh facts fail a guard", () => {
+    const facts = factsFor(railsRecord(), { lastStripeEventAt: NOW + 5 });
+    const result = step(pending, failure(1, "timeout", NOW + 10, facts));
+    expect(result.record).toMatchObject({
+      state: "rails_owned",
+      issuedGeneration: 2,
+      fence: { generation: 2 },
     });
-    expect(suggested.cbAccessRule).toBe(strictPaidThroughRule);
-    expect(suggested.railsAccessRule).toBe(lenientStatusRule);
-    expect(handoverRejections(eligibleFacts, suggested, NOW)).toEqual([
-      "access_read_side_is_rails",
+    expect(alertCodes(result.effects)).toEqual(["flip_guard_failed"]);
+  });
+
+  it("commits when the fresh facts show the 'failed' write landed", () => {
+    const p = pendingOf(pending);
+    const facts = factsFor(railsRecord(), { liveMarker: liveMarker(p.timeline, p.generation) });
+    expect(step(pending, failure(1, "timeout", NOW + 10, facts)).record.state).toBe("cb_owned");
+  });
+
+  it("re-drives the same batch with fresh guards and a new key; refuses another batch", () => {
+    const again = step(pending, request(railsRecord(), "HANDOVER_REQUESTED", NOW + 30));
+    expect(again.outcome).toBe("unchanged");
+    expect(writes(again.effects)).toEqual([
+      expect.objectContaining({ idempotencyKey: `egghead-owner:${CUS}:1:1` }),
     ]);
-    expect(
-      handoverRejections(
-        eligibleFacts,
-        suggestedOwnershipPolicy({ cbAccessRule: lenientStatusRule, accessReadSide: "cb" }),
-        NOW,
+    const failing = step(
+      pending,
+      request(
+        railsRecord(),
+        "HANDOVER_REQUESTED",
+        NOW + 30,
+        "batch-1",
+        factsFor(railsRecord(), { lastStripeEventAt: NOW + 29 }),
       ),
-    ).toEqual([]);
+    );
+    expect(failing.record.state).toBe("rails_owned");
+    expect(
+      step(pending, request(railsRecord(), "HANDOVER_REQUESTED", NOW + 30, "batch-9")),
+    ).toMatchObject({
+      outcome: "rejected",
+      reasons: ["transition_in_flight"],
+    });
+    expect(step(pending, request(railsRecord(), "HANDBACK_REQUESTED", NOW + 30))).toMatchObject({
+      outcome: "rejected",
+      reasons: ["transition_in_flight"],
+    });
+  });
+
+  it("expires at the deadline, whether by timer or by a late retry", () => {
+    expect(step(pending, { type: "DEADLINE_REACHED", at: DEADLINE - 1 }).outcome).toBe("unchanged");
+    const expired = step(pending, { type: "DEADLINE_REACHED", at: DEADLINE });
+    expect(expired.record).toMatchObject({ state: "rails_owned", fence: { generation: 2 } });
+    expect(alertCodes(expired.effects)).toEqual(["flip_deadline_missed"]);
+    const lateRetry = step(pending, failure(1, "timeout", DEADLINE + 1, factsFor(railsRecord())));
+    expect(alertCodes(lateRetry.effects)).toEqual(["flip_deadline_missed"]);
+  });
+
+  it("cancels after the attempt limit", () => {
+    let record = pending;
+    for (let attempt = 1; attempt < policy.maxMarkerWriteAttempts; attempt++) {
+      record = step(record, failure(1, "timeout", NOW + attempt, factsFor(railsRecord()))).record;
+    }
+    expect(pendingOf(record).attempts).toBe(policy.maxMarkerWriteAttempts);
+    const exhausted = step(record, failure(1, "timeout", NOW + 50, factsFor(railsRecord())));
+    expect(exhausted.record.state).toBe("rails_owned");
+    expect(alertCodes(exhausted.effects)).toEqual(["marker_write_retries_exhausted"]);
   });
 });
 
-describe("first sightings", () => {
-  it("creates a CB-owned record for a subscription born in CB checkout", () => {
-    expect(
-      createOwnershipRecord({ subscriptionId: SUB, marker: marker("cb", 1), at: NOW }),
-    ).toEqual({
-      record: { subscriptionId: SUB, state: "cb_owned", generation: 1, updatedAt: NOW },
+describe("fencing (2.2)", () => {
+  const pending = handoverPending();
+  const p = pendingOf(pending);
+  const aborted = step(pending, { type: "ABORT_REQUESTED", at: NOW + 60, reason: "bad batch" });
+
+  it("abort writes the confirmed timeline at a newer generation and stops writing the old one", () => {
+    expect(aborted.record).toMatchObject({
+      state: "rails_owned",
+      generation: 0,
+      issuedGeneration: 2,
+      fence: { generation: 2 },
+    });
+    expect(writes(aborted.effects)).toEqual([
+      expect.objectContaining({
+        generation: 2,
+        timeline: [{ owner: "rails", since: 0 }],
+        notAfter: null,
+      }),
+    ]);
+    // A failure report for the fenced generation issues nothing.
+    expect(step(aborted.record, failure(1, "timeout", NOW + 70, factsFor(railsRecord())))).toEqual({
+      outcome: "unchanged",
+      record: aborted.record,
       effects: [],
     });
   });
 
-  it("treats an unknown marker value as Rails and alerts", () => {
-    const created = createOwnershipRecord({
-      subscriptionId: SUB,
-      marker: { owner: "rails", generation: 0, source: "unrecognized" },
-      at: NOW,
+  it("a late cb write after abort is a conflict, not a silent adopt", () => {
+    const late = step(aborted.record, {
+      type: "MARKER_OBSERVED",
+      marker: liveMarker(p.timeline, 1),
+      at: NOW + 90,
+      landedAt: NOW + 90,
     });
-    expect(created.record.state).toBe("rails_owned");
-    expect(created.effects).toEqual([expect.objectContaining({ code: "marker_unrecognized" })]);
+    expect(late.record.state).toBe("conflict");
+    expect(late.record).toMatchObject({
+      conflict: { reason: "fenced_write_landed", observed: { generation: 1 } },
+    });
+    expect(alertCodes(late.effects)).toEqual(["fenced_write_landed"]);
+    // Automation is frozen.
+    expect(step(late.record, request(railsRecord()))).toMatchObject({
+      outcome: "rejected",
+      reasons: ["conflict_unresolved"],
+    });
+    // Seeing it again stays quiet.
+    expect(
+      step(late.record, {
+        type: "MARKER_OBSERVED",
+        marker: liveMarker(p.timeline, 1),
+        at: NOW + 99,
+        landedAt: NOW + 99,
+      }).effects,
+    ).toEqual([]);
   });
+
+  it("an operator resolves by adopting the live marker or restoring the confirmed one", () => {
+    const conflict = step(aborted.record, {
+      type: "MARKER_OBSERVED",
+      marker: liveMarker(p.timeline, 1),
+      at: NOW + 90,
+      landedAt: NOW + 90,
+    }).record;
+    const adopted = step(conflict, {
+      type: "CONFLICT_RESOLVED",
+      at: NOW + 120,
+      decision: "adopt_live",
+      liveMarker: liveMarker(p.timeline, 1),
+      operator: "desk",
+    });
+    expect(adopted.record).toMatchObject({
+      state: "cb_owned",
+      generation: 1,
+      issuedGeneration: 2,
+      fence: null,
+    });
+    expect(adopted.effects[0]).toEqual({
+      type: "sync_cb_from_stripe",
+      customerId: CUS,
+      notBefore: NOW + 120,
+    });
+
+    const restored = step(conflict, {
+      type: "CONFLICT_RESOLVED",
+      at: NOW + 120,
+      decision: "restore_confirmed",
+      liveMarker: liveMarker(p.timeline, 1),
+      operator: "desk",
+    });
+    expect(restored.record).toMatchObject({
+      state: "rails_owned",
+      issuedGeneration: 3,
+      fence: { generation: 3 },
+    });
+    expect(writes(restored.effects)).toEqual([
+      expect.objectContaining({ generation: 3, timeline: [{ owner: "rails", since: 0 }] }),
+    ]);
+    expect(
+      step(railsRecord(), {
+        type: "CONFLICT_RESOLVED",
+        at: NOW,
+        decision: "adopt_live",
+        liveMarker: readOwnerMarker({}),
+        operator: "desk",
+      }),
+    ).toMatchObject({
+      reasons: ["no_conflict"],
+    });
+  });
+
+  it("clears the fence when it lands, and blocks new flips until then", () => {
+    expect(
+      step(aborted.record, request(aborted.record, "HANDOVER_REQUESTED", NOW + 100)),
+    ).toMatchObject({
+      reasons: ["fence_outstanding"],
+    });
+    const landed = step(aborted.record, {
+      type: "MARKER_OBSERVED",
+      marker: liveMarker([{ owner: "rails", since: 0 }], 2),
+      at: NOW + 100,
+      landedAt: NOW + 100,
+    });
+    expect(landed.record).toMatchObject({ state: "rails_owned", generation: 2, fence: null });
+    const next = step(
+      landed.record,
+      request(landed.record, "HANDOVER_REQUESTED", NOW + 200, "batch-2"),
+    );
+    expect(pendingOf(next.record).generation).toBe(3);
+  });
+
+  it("a fence write that keeps failing becomes a conflict", () => {
+    let record = aborted.record;
+    for (let attempt = 1; attempt < policy.maxMarkerWriteAttempts; attempt++) {
+      const result = step(record, failure(2, "server_error", NOW + 100 + attempt, null));
+      expect(writes(result.effects)).toEqual([
+        expect.objectContaining({ idempotencyKey: `egghead-owner:${CUS}:2:${attempt}` }),
+      ]);
+      record = result.record;
+    }
+    const failed = step(record, failure(2, "server_error", NOW + 200, null));
+    expect(failed.record).toMatchObject({
+      state: "conflict",
+      conflict: { reason: "fence_write_failed" },
+    });
+  });
+
+  it("an unknown newer generation is an external write and freezes automation", () => {
+    const owned = cbRecord();
+    const external = step(owned, {
+      type: "MARKER_OBSERVED",
+      marker: liveMarker([{ owner: "rails", since: 0 }], 9),
+      at: FLIP + 5,
+      landedAt: FLIP + 5,
+    });
+    expect(external.record).toMatchObject({
+      state: "conflict",
+      conflict: { reason: "external_write" },
+    });
+  });
+
+  it("abort is refused once the flip time has passed", () => {
+    expect(step(pending, { type: "ABORT_REQUESTED", at: FLIP, reason: "x" })).toMatchObject({
+      reasons: ["flip_time_passed"],
+    });
+    expect(step(railsRecord(), { type: "ABORT_REQUESTED", at: NOW, reason: "x" })).toMatchObject({
+      reasons: ["nothing_to_abort"],
+    });
+  });
+});
+
+describe("unrecognized marker alerts are deduplicated (2.10)", () => {
+  const garbled = readOwnerMarker({ egghead_owner: "cb" });
+
+  it("alerts once per cooldown", () => {
+    const first = step(railsRecord(), {
+      type: "MARKER_OBSERVED",
+      marker: garbled,
+      at: NOW,
+      landedAt: NOW,
+    });
+    expect(first.record).toMatchObject({
+      state: "conflict",
+      conflict: { reason: "marker_unrecognized" },
+    });
+    expect(alertCodes(first.effects)).toEqual(["marker_unrecognized"]);
+
+    const soon = step(first.record, {
+      type: "MARKER_OBSERVED",
+      marker: garbled,
+      at: NOW + 3600,
+      landedAt: NOW + 3600,
+    });
+    expect(soon).toEqual({ outcome: "unchanged", record: first.record, effects: [] });
+
+    const later = step(first.record, {
+      type: "MARKER_OBSERVED",
+      marker: garbled,
+      at: NOW + policy.alertCooldownSeconds,
+      landedAt: NOW,
+    });
+    expect(alertCodes(later.effects)).toEqual(["marker_unrecognized"]);
+    expect(later.record.lastUnrecognizedAlertAt).toBe(NOW + policy.alertCooldownSeconds);
+  });
+
+  it("first sighting of a garbled marker starts in conflict with one alert", () => {
+    const created = createOwnershipRecord({ customerId: CUS, marker: garbled, at: NOW });
+    expect(created.record.state).toBe("conflict");
+    expect(alertCodes(created.effects)).toEqual(["marker_unrecognized"]);
+    expect(
+      step(created.record, {
+        type: "MARKER_OBSERVED",
+        marker: garbled,
+        at: NOW + 10,
+        landedAt: NOW,
+      }).effects,
+    ).toEqual([]);
+  });
+});
+
+describe("state x event matrix", () => {
+  const states: Record<OwnershipState, () => OwnershipRecord> = {
+    rails_owned: railsRecord,
+    handover_pending: handoverPending,
+    cb_owned: cbRecord,
+    handback_pending: () => {
+      const owned = cbRecord();
+      return step(owned, request(owned, "HANDBACK_REQUESTED", FLIP + 100, "rb")).record;
+    },
+    conflict: () =>
+      step(railsRecord(), {
+        type: "MARKER_OBSERVED",
+        marker: readOwnerMarker({ egghead_owner: "x" }),
+        at: NOW,
+        landedAt: NOW,
+      }).record,
+  };
+
+  const events: Record<string, (record: OwnershipRecord) => OwnershipEvent> = {
+    handover: (record) => request(record, "HANDOVER_REQUESTED", FLIP + 200, "matrix"),
+    handback: (record) => request(record, "HANDBACK_REQUESTED", FLIP + 200, "matrix"),
+    observe_same: (record) => ({
+      type: "MARKER_OBSERVED",
+      marker: factsFor(record).liveMarker,
+      at: FLIP + 200,
+      landedAt: FLIP + 200,
+    }),
+    write_failed_stale: () => failure(99, "timeout", FLIP + 200, null),
+    deadline: () => ({ type: "DEADLINE_REACHED", at: FLIP + 200 }),
+    abort: () => ({ type: "ABORT_REQUESTED", at: FLIP + 200, reason: "matrix" }),
+    resolve: () => ({
+      type: "CONFLICT_RESOLVED",
+      at: FLIP + 200,
+      decision: "adopt_live",
+      liveMarker: readOwnerMarker({}),
+      operator: "desk",
+    }),
+  };
+
+  const expected: Record<OwnershipState, Record<string, [string, OwnershipState]>> = {
+    rails_owned: {
+      handover: ["transitioned", "handover_pending"],
+      handback: ["unchanged", "rails_owned"],
+      observe_same: ["unchanged", "rails_owned"],
+      write_failed_stale: ["unchanged", "rails_owned"],
+      deadline: ["unchanged", "rails_owned"],
+      abort: ["rejected", "rails_owned"],
+      resolve: ["rejected", "rails_owned"],
+    },
+    handover_pending: {
+      handover: ["rejected", "handover_pending"],
+      handback: ["rejected", "handover_pending"],
+      observe_same: ["unchanged", "handover_pending"],
+      write_failed_stale: ["unchanged", "handover_pending"],
+      deadline: ["transitioned", "rails_owned"],
+      abort: ["rejected", "handover_pending"],
+      resolve: ["rejected", "handover_pending"],
+    },
+    cb_owned: {
+      handover: ["unchanged", "cb_owned"],
+      handback: ["transitioned", "handback_pending"],
+      observe_same: ["unchanged", "cb_owned"],
+      write_failed_stale: ["unchanged", "cb_owned"],
+      deadline: ["unchanged", "cb_owned"],
+      abort: ["rejected", "cb_owned"],
+      resolve: ["rejected", "cb_owned"],
+    },
+    handback_pending: {
+      handover: ["rejected", "handback_pending"],
+      handback: ["rejected", "handback_pending"],
+      observe_same: ["unchanged", "handback_pending"],
+      write_failed_stale: ["unchanged", "handback_pending"],
+      deadline: ["unchanged", "handback_pending"],
+      abort: ["transitioned", "cb_owned"],
+      resolve: ["rejected", "handback_pending"],
+    },
+    conflict: {
+      handover: ["rejected", "conflict"],
+      handback: ["rejected", "conflict"],
+      observe_same: ["unchanged", "conflict"],
+      write_failed_stale: ["unchanged", "conflict"],
+      deadline: ["unchanged", "conflict"],
+      abort: ["rejected", "conflict"],
+      resolve: ["transitioned", "rails_owned"],
+    },
+  };
+
+  const allStates: readonly OwnershipState[] = [
+    "rails_owned",
+    "handover_pending",
+    "cb_owned",
+    "handback_pending",
+    "conflict",
+  ];
+  for (const state of allStates) {
+    const build = states[state];
+    for (const [name, make] of Object.entries(events)) {
+      const want = expected[state][name];
+      it(`${state} + ${name}`, () => {
+        if (want === undefined) throw new Error("missing expectation");
+        const record = build();
+        expect(record.state).toBe(state);
+        const result = step(record, make(record));
+        expect([result.outcome, result.record.state]).toEqual(want);
+        if (result.outcome === "rejected") expect(result.effects).toEqual([]);
+      });
+    }
+  }
 });
