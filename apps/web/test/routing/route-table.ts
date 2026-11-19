@@ -20,7 +20,7 @@ import { getRouteRegex } from "next/dist/shared/lib/router/utils/route-regex";
 import { getSortedRoutes } from "next/dist/shared/lib/router/utils/sorted-routes";
 import { z } from "zod";
 
-import { LEGACY_REDIRECTS } from "../../src/routing/legacy-redirects";
+import { LEGACY_REDIRECTS, RETIRED_ROUTE_HANDLER_PREFIX } from "../../src/routing/legacy-redirects";
 
 export const webRoot = fileURLToPath(new URL("../..", import.meta.url));
 export const appDir = path.join(webRoot, "src", "app");
@@ -105,7 +105,16 @@ export const redirects: Rule[] = customRoutes.redirects.filter((route) => route.
 export const internalRedirects: Rule[] = customRoutes.redirects.filter(
   (route) => route.internal === true,
 );
-export const beforeFilesRewrites: Rule[] = customRoutes.rewrites.beforeFiles;
+// Every beforeFiles rewrite Next loaded, in order.
+export const allBeforeFilesRewrites: Rule[] = customRoutes.rewrites.beforeFiles;
+const isRetireRewrite = (rule: Rule) =>
+  rule.destination.startsWith(`${RETIRED_ROUTE_HANDLER_PREFIX}/`);
+// Retire rules: a match answers 410.
+export const beforeFilesRewrites: Rule[] = allBeforeFilesRewrites.filter(isRetireRewrite);
+// Content rewrites: a match is served by the destination's route.
+export const contentRewrites: Rule[] = allBeforeFilesRewrites.filter(
+  (rule) => !isRetireRewrite(rule),
+);
 export const routeTable = getSortedRoutes(await appRoutePaths(appDir)).map((route) => ({
   route,
   re: getRouteRegex(route).re,
@@ -134,8 +143,11 @@ export const publicFiles: ReadonlySet<string> = new Set(
 );
 
 // The app route that answers a path, or PUBLIC_FILE for a file in public/.
+// A content rewrite runs first (beforeFiles), so its destination's route
+// answers.
 export function resolveAppRoute(url: string) {
-  const pathname = pathnameOf(url);
+  const rewrite = firstMatch(contentRewrites, url);
+  const pathname = pathnameOf(rewrite ? rewrite.destination : url);
   if (publicFiles.has(decodeURI(pathname))) return PUBLIC_FILE;
   return routeTable.find(({ re }) => re.test(pathname))?.route;
 }
@@ -146,6 +158,13 @@ export function resolveAppRoute(url: string) {
 export function isFileLikePath(url: string) {
   const pathname = pathnameOf(url);
   return /\/\./.test(pathname) || /\.[A-Za-z0-9]+$/.test(pathname);
+}
+
+// True when the route's last segment is a dynamic param, so it would answer
+// a file path as if it were a slug (/[slug]/[entry]), unlike a route that
+// names the file (/i/[slug]/rss.xml).
+export function endsInDynamicSegment(route: string) {
+  return route.split("/").at(-1)?.startsWith("[") ?? false;
 }
 
 export function matchesPattern(source: string, url: string) {

@@ -5,7 +5,7 @@ Every URL that egghead.io answers today must work on the CourseBuilder app, redi
 ## Where it lives
 
 - `apps/web/src/routing/route-inventory.ts` has one row per egghead-next route file (`pages/**`, `app/**`, API routes), per egghead-next `next.config` redirect (61), per middleware search rule, per egghead-next `public/` file group, and per redirect CourseBuilder already shipped, at egghead-next `992ec9a1`. The full `public/` file list is `apps/web/test/routing/fixtures/egghead-next-public-files.txt`; every file in it must be served, redirected, retired or owned by a build row. Each row has a sample path and a class.
-- `apps/web/src/routing/legacy-redirects.ts` is the single rule table. Redirects are 308s, except placeholder mappings a later lane may replace (instructor pages, `/learn` topics, the `/workshop/*` fallback), which are 307s so browsers do not cache them forever. Retired paths go through a `beforeFiles` rewrite to `/api/retired/<id>`, which answers 410 for every method. The reason for each retirement stays in the table; responses name only the rule id.
+- `apps/web/src/routing/legacy-redirects.ts` is the single rule table. Redirects are 308s, except placeholder mappings a later lane may replace (instructor pages, `/learn` topics, the `/workshop/*` fallback), which are 307s so browsers do not cache them forever. Retired paths go through a `beforeFiles` rewrite to `/api/retired/<id>`, which answers 410 for every method. The reason for each retirement stays in the table; responses name only the rule id. `beforeFilesRewritesForNextConfig()` composes beforeFiles: the retire rules, then content rewrites owned by other lanes (`CONTENT_REWRITES`, today the feeds' `.rss` suffixes from `src/feeds/rewrites.ts`). A test fails if a redirect or retire rule catches a content rewrite.
 - `pnpm routing:parity-contract` (part of `pnpm check`) runs three test files under `apps/web/test/routing/`:
   - `route-parity.test.ts` loads the real Next config in a plain Node child and walks every inventory row. Served rows resolve to the named app route with no rule in front; redirect rows hit the named rule first and land on an app route; retire rows hit the named rule and return 410; build rows stay untouched. It also fails on unexplained rules and on rules that shadow a CourseBuilder route.
   - `traffic-replay.test.ts` walks a list of real egghead.io paths (`fixtures/egghead-top-paths.txt`: the most requested paths over seven days, paths only, sorted alphabetically) through the same table and route tree. Every path must be redirected, retired, owned by a build row, or answered by an app route or a `public/` file. A file-like path (an extension, or a dot directory such as `/.well-known`) that only a dynamic page matches counts as unrouted. `/.well-known/assetlinks.json` is listed as absent: egghead.io 404s it today, and egghead has no Android app links file.
@@ -32,10 +32,10 @@ These counts are asserted against `routeInventoryCounts()` by `route-parity.test
 
 | Class    | Rows | Meaning                                                                                                                   |
 | -------- | ---: | ------------------------------------------------------------------------------------------------------------------------- |
-| served   |   33 | A CourseBuilder route answers the same path. `/privacy`, `/faq` and `/code-of-conduct` were built from egghead-next copy. |
+| served   |   46 | A CourseBuilder route answers the same path. `/privacy`, `/faq` and `/code-of-conduct` were built from egghead-next copy. |
 | redirect |   89 | Moved to a CourseBuilder URL.                                                                                             |
 | retire   |   60 | 410 on purpose.                                                                                                           |
-| build    |   42 | No owner in CourseBuilder yet; see follow-ups.                                                                            |
+| build    |   35 | No owner in CourseBuilder yet; see follow-ups.                                                                            |
 
 ## Behavior to know before the flip
 
@@ -59,8 +59,8 @@ These counts are asserted against `routeInventoryCounts()` by `route-parity.test
 
 | Lane                 | Rows | Size (agent-hours) | Notes                                                                                                                                                                  |
 | -------------------- | ---: | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| feeds                |    6 | in flight          | Rails course, lesson and pro feeds. CourseBuilder `/feed` is a one-item placeholder.                                                                                   |
-| instructor-feeds     |    3 | 2–4                | `/i/:slug/rss.xml` is live podcast-app traffic. Fold into the feeds lane.                                                                                              |
+| feeds                |    0 | landed             | Rails course, lesson, pro, playlist and instructor feeds, plus their `.rss` suffixes, are served.                                                                      |
+| instructor-feeds     |    2 | 1                  | `/i/:slug/rss.xml` is served; the Atom and JSON forms are not built.                                                                                                   |
 | commerce-paid-paths  |   13 | 15–25              | Invoices and receipts (the FAQ links `/invoices`), lifetime pages and checkout, workshop invoices, gift claims, email change, and the ownership-transfer accept route. |
 | commerce-cutover     |    1 | in L3/L4           | `/api/stripe/webhook` is a registered Stripe endpoint.                                                                                                                 |
 | saml-sso             |    4 | 10–16, or drop     | Few logins. Needs a build-or-drop decision.                                                                                                                            |

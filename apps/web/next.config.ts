@@ -1,8 +1,8 @@
 import type { NextConfig } from "next";
 
 import {
+  beforeFilesRewritesForNextConfig,
   legacyRedirectsForNextConfig,
-  retiredRouteRewritesForNextConfig,
 } from "./src/routing/legacy-redirects";
 
 const nextConfig: NextConfig = {
@@ -18,7 +18,8 @@ const nextConfig: NextConfig = {
   },
   async rewrites() {
     return {
-      beforeFiles: retiredRouteRewritesForNextConfig(),
+      // Retire rules (410), then content rewrites such as the feeds' .rss suffixes.
+      beforeFiles: beforeFilesRewritesForNextConfig(),
       afterFiles: [],
       fallback: [],
     };

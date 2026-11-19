@@ -1,28 +1,18 @@
-const UPDATED_AT = "2026-06-07T00:00:00.000Z";
+// lessons#feed: the public egghead feed, formerly served by Rails at /feed.
+import { connection } from "next/server";
 
-function rssXml() {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
-  <channel>
-    <title>egghead</title>
-    <link>https://egghead.io</link>
-    <description>Standalone Egghead public content feed.</description>
-    <lastBuildDate>${new Date(UPDATED_AT).toUTCString()}</lastBuildDate>
-    <item>
-      <title>Array Goodness</title>
-      <link>https://egghead.io/courses/array-goodness-061118ff</link>
-      <guid>https://egghead.io/courses/array-goodness-061118ff</guid>
-      <pubDate>${new Date(UPDATED_AT).toUTCString()}</pubDate>
-    </item>
-  </channel>
-</rss>
-`;
-}
+import { publicFeedXml } from "../../feeds/cached";
+import { feedUnavailableResponse, publicRssResponse } from "../../feeds/response";
 
-export function GET() {
-  return new Response(rssXml(), {
-    headers: {
-      "content-type": "application/rss+xml; charset=utf-8",
-    },
-  });
+export async function GET() {
+  // Render per request (from the hours-long content cache), never at build
+  // time, so a build without DB access cannot bake a 503 into a static feed.
+  await connection();
+
+  try {
+    return publicRssResponse(await publicFeedXml());
+  } catch (error) {
+    console.error("[feeds] public feed failed", error);
+    return feedUnavailableResponse();
+  }
 }
