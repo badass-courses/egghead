@@ -132,8 +132,29 @@ export interface SubscriptionFacts {
   readonly team: TeamSeatFacts | null;
 }
 
+/**
+ * Billing work in flight on the customer (ADR-0001 §14 L3). Any of it straddling a
+ * flip splits one piece of billing across two owners: Rails' reconciler, for one,
+ * creates and pays invoices from pending invoice items.
+ */
+export interface BillingInFlightFacts {
+  /** Draft or open invoices. */
+  readonly openInvoices: number;
+  /** Invoice items not yet on an invoice. */
+  readonly pendingInvoiceItems: number;
+  /** Subscription schedules not started or active. */
+  readonly activeSubscriptionSchedules: number;
+  /** Disputes still open on any of the customer's charges. */
+  readonly openDisputes: number;
+  /** Refunds pending or needing action on any of the customer's charges. */
+  readonly refundsInFlight: number;
+  /** False when a list was truncated; incomplete facts never allow a flip. */
+  readonly complete: boolean;
+}
+
 /** Facts gathered fresh from Stripe and CB right before every write attempt. */
 export interface TransitionFacts {
+  readonly billingInFlight: BillingInFlightFacts;
   /** Marker read from the live Stripe customer (not from an event payload). */
   readonly liveMarker: OwnerMarker;
   /** Every subscription on the customer, ended ones included. */
@@ -149,6 +170,12 @@ export interface OwnershipPolicy {
   readonly railsAccessRule: AccessRule;
   /** Which app answers access checks for egghead.io traffic. */
   readonly accessReadSide: Owner;
+  /**
+   * Whether CB's membership writer runs (`membershipWritesAllowed()`). While it is
+   * blocked, CB acknowledges and skips every event, and the skipped events are not
+   * replayed, so a customer handed to CB would lose them. Lift the block first.
+   */
+  readonly cbMembershipWritesAllowed: boolean;
   readonly eligibleStatuses: ReadonlySet<StripeSubscriptionStatus>;
   /** Refuse a flip this close to any subscription's renewal, measured from `flipAt`. */
   readonly renewalQuietWindowSeconds: number;
@@ -256,6 +283,13 @@ export type TransitionRejection =
   | "team_seat_change_pending"
   | "access_would_change"
   | "access_read_side_is_rails"
+  | "cb_writes_blocked"
+  | "open_invoices"
+  | "pending_invoice_items"
+  | "subscription_schedule_active"
+  | "open_disputes"
+  | "refunds_in_flight"
+  | "billing_facts_incomplete"
   | "timeline_full"
   | "flip_not_after_last";
 
@@ -345,11 +379,13 @@ export const MIN_TIMELINE_RETENTION_SECONDS = 35 * DAY;
 export function suggestedOwnershipPolicy(input: {
   readonly cbAccessRule: AccessRule;
   readonly accessReadSide: Owner;
+  readonly cbMembershipWritesAllowed: boolean;
 }): OwnershipPolicy {
   return {
     cbAccessRule: input.cbAccessRule,
     railsAccessRule: lenientStatusRule,
     accessReadSide: input.accessReadSide,
+    cbMembershipWritesAllowed: input.cbMembershipWritesAllowed,
     eligibleStatuses: new Set<StripeSubscriptionStatus>([
       "active",
       "trialing",
@@ -536,12 +572,25 @@ export function transitionRejections(input: {
   if (direction === "handover" && policy.accessReadSide !== "cb") {
     reasons.add("access_read_side_is_rails");
   }
+  // Cutover rule: the write block lifts before the first flip to CB.
+  if (direction === "handover" && !policy.cbMembershipWritesAllowed) {
+    reasons.add("cb_writes_blocked");
+  }
   if (
     facts.lastStripeEventAt !== null &&
     at - facts.lastStripeEventAt < policy.eventSettleSeconds
   ) {
     reasons.add("recent_stripe_activity");
   }
+
+  // L3: never move a customer with billing work in flight, in either direction.
+  const billing = facts.billingInFlight;
+  if (!billing.complete) reasons.add("billing_facts_incomplete");
+  if (billing.openInvoices > 0) reasons.add("open_invoices");
+  if (billing.pendingInvoiceItems > 0) reasons.add("pending_invoice_items");
+  if (billing.activeSubscriptionSchedules > 0) reasons.add("subscription_schedule_active");
+  if (billing.openDisputes > 0) reasons.add("open_disputes");
+  if (billing.refundsInFlight > 0) reasons.add("refunds_in_flight");
 
   for (const subscription of facts.subscriptions) {
     if (!policy.eligibleStatuses.has(subscription.status)) reasons.add("status_not_eligible");

@@ -78,3 +78,18 @@ export function decideCheckoutReservation(input: {
     },
   };
 }
+
+/**
+ * Organization fields without this attempt's reservation, or null when there is
+ * nothing to release: the reservation belongs to another attempt, or it already
+ * holds a Stripe session (that one expires through Stripe).
+ */
+export function releaseCheckoutReservation(
+  fields: Record<string, unknown>,
+  token: string,
+): Record<string, unknown> | null {
+  const current = readCheckoutReservation(fields[CHECKOUT_RESERVATION_FIELD]);
+  if (!current || current.token !== token || current.sessionId) return null;
+  const { [CHECKOUT_RESERVATION_FIELD]: _released, ...rest } = fields;
+  return rest;
+}

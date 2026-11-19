@@ -1,9 +1,10 @@
 import { getCourseBuilderSchema } from "@coursebuilder/adapter-drizzle/mysql";
 
+import { withLifecycleIndexes } from "./lifecycle-indexes";
 import { mysqlTable } from "./mysql-table";
 import { getEggheadUsersSchema } from "./users";
 
-export const eggheadCourseBuilderSchema = getCourseBuilderSchema(mysqlTable, {
+export const eggheadCourseBuilderSchema = getCourseBuilderSchema(withLifecycleIndexes(mysqlTable), {
   getUsersSchema: getEggheadUsersSchema,
 });
 

@@ -7,7 +7,7 @@ import { getCurrentSubscriptionForUser } from "../../subscriptions/status";
 import { getOwnedTeamSubscription } from "../../subscriptions/team";
 import { membershipIntervalLabel } from "../../subscriptions/billing";
 import { getCurrentUser } from "../../coursebuilder/current-user";
-import { commerceWritesAreAllowed } from "../../db/local-docker";
+import { pricingPanel } from "../../subscriptions/pricing-state";
 import { getActiveMembershipProducts, membershipPrices } from "../../subscriptions/catalog";
 import { SubscriptionOptions, type SubscriptionOption } from "./subscription-options";
 
@@ -62,16 +62,26 @@ async function ResolvedPricingState({ searchParams }: PricingProps) {
         ];
       }),
   );
+  const panel = pricingPanel({
+    hasCurrentSubscription: Boolean(currentSubscription),
+    optionCount: options.length,
+    ownedTeamPaused:
+      teamSubscription !== null &&
+      teamSubscription.id === currentSubscription?.id &&
+      teamSubscription.capacityReviewRequired,
+  });
   const notice =
     query["error"] === "missing-email"
       ? "Your account needs a valid email address before checkout."
-      : query["error"] === "checkout-pending"
-        ? "Another checkout is still open or being processed. Try again shortly."
-        : query["cancelled"]
-          ? "Checkout cancelled. Choose a billing option to try again."
-          : query["error"]
-            ? "We couldn’t start checkout. Please refresh the page and try again."
-            : null;
+      : query["error"] === "billing-elsewhere"
+        ? "Your egghead billing is managed on the current egghead site, so a new membership can’t start here yet."
+        : query["error"] === "checkout-pending"
+          ? "Another checkout is still open or being processed. Try again shortly."
+          : query["cancelled"]
+            ? "Checkout cancelled. Choose a billing option to try again."
+            : query["error"]
+              ? "We couldn’t start checkout. Please refresh the page and try again."
+              : null;
 
   return (
     <section className={subscriptionPanelClassName}>
@@ -89,7 +99,7 @@ async function ResolvedPricingState({ searchParams }: PricingProps) {
           {notice}
         </output>
       ) : null}
-      {currentSubscription ? (
+      {panel === "current" ? (
         <div className="grid gap-3 rounded-2xl bg-sage-wash p-5 text-center shadow-well">
           <p className="font-extrabold text-sage-foreground">Your membership is active.</p>
           <Link
@@ -99,10 +109,30 @@ async function ResolvedPricingState({ searchParams }: PricingProps) {
             {teamSubscription ? "Manage team seats" : "Browse courses"}
           </Link>
         </div>
-      ) : options.length > 0 ? (
+      ) : panel === "paused" ? (
+        <div className="grid gap-3 rounded-2xl bg-well p-5 text-center shadow-well">
+          <p className="font-extrabold">Your team&rsquo;s access is paused.</p>
+          <p className="font-semibold text-muted-foreground">
+            Your team has more members than paid seats. Choose who keeps a seat to restore access.
+          </p>
+          <Link
+            className="press inline-flex items-center justify-center rounded-xl border border-border-strong bg-surface-grad px-7 pt-[15px] pb-[13px] font-extrabold shadow-btn-ghost"
+            href="/team"
+          >
+            Choose who keeps a seat
+          </Link>
+        </div>
+      ) : panel === "closed" ? (
+        <div className="grid gap-3 rounded-2xl bg-well p-6 text-center shadow-well">
+          <h2 className="text-xl font-black">Membership checkout isn’t open here yet.</h2>
+          <p className="font-semibold text-muted-foreground">
+            New memberships can’t be started on this site right now. Please check back soon.
+          </p>
+        </div>
+      ) : panel === "options" ? (
         <div aria-label="Subscription options" className="mx-auto w-full max-w-[32rem]">
           <SubscriptionOptions
-            checkoutAvailable={commerceWritesAreAllowed()}
+            checkoutAvailable
             configured
             options={options}
             defaultPriceId={products.at(0)?.price?.id}

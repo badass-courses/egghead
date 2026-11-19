@@ -4,7 +4,7 @@ This app is the final Rails-exit Egghead CourseBuilder integration app.
 
 Guardrails:
 
-- The web app owns production subscription reads, Stripe Checkout, and Stripe/Inngest subscription writes on PlanetScale. Beta remains read-only for commerce; the builder production runtime remains blocked.
+- The web app owns production subscription reads. Subscription checkout and membership writes (Stripe/Inngest lifecycle, team seats) run only in local Docker with a Stripe test key until the cutover gate lifts the block; in beta and production they acknowledge and skip, and the pricing page shows checkout as closed. That block is safe only while no CourseBuilder subscription exists (see `apps/web/tests/behaviors/subscriptions.md`). Even after the block lifts, CourseBuilder writes for a subscription only when the Stripe customer's ownership marker says CourseBuilder owns it (`docs/adr/0001-subscription-ownership-handover.md`). Cutover order: lift the write block before the first marker flip to CourseBuilder, because events skipped while blocked are never replayed; the ownership machine's `cb_writes_blocked` guard enforces this. Beta remains read-only for commerce; the builder production runtime remains blocked.
 - Consume published `@coursebuilder/*` packages.
 - Do not use `workspace:*` CourseBuilder dependencies.
 - Treat `/Users/joel/Code/skillrecordings/migrate-egghead/course-builder/apps/egghead` as extraction/reference source only.

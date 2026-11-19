@@ -35,7 +35,11 @@ const CUS = "cus_synthetic_1";
 const NOW = 1_800_000_000;
 const DAY = 86_400;
 
-const policy = suggestedOwnershipPolicy({ cbAccessRule: lenientStatusRule, accessReadSide: "cb" });
+const policy = suggestedOwnershipPolicy({
+  cbAccessRule: lenientStatusRule,
+  accessReadSide: "cb",
+  cbMembershipWritesAllowed: true,
+});
 const LEAD = policy.flipLeadSeconds;
 const TTL = policy.markerCacheTtlSeconds;
 const FLIP = NOW + LEAD;
@@ -62,12 +66,22 @@ const subscription: SubscriptionFacts = {
   team: null,
 };
 
+const NO_BILLING_IN_FLIGHT = {
+  openInvoices: 0,
+  pendingInvoiceItems: 0,
+  activeSubscriptionSchedules: 0,
+  openDisputes: 0,
+  refundsInFlight: 0,
+  complete: true,
+} as const;
+
 function factsWith(live: OwnerMarker, overrides: Partial<TransitionFacts> = {}): TransitionFacts {
   return {
     liveMarker: live,
     subscriptions: [subscription],
     lastStripeEventAt: NOW - 3600,
     acceptAccessChange: false,
+    billingInFlight: NO_BILLING_IN_FLIGHT,
     ...overrides,
   };
 }
@@ -170,6 +184,7 @@ describe("policy", () => {
     const strict = suggestedOwnershipPolicy({
       cbAccessRule: strictPaidThroughRule,
       accessReadSide: "rails",
+      cbMembershipWritesAllowed: false,
     });
     expect(strict.cbAccessRule).toBe(strictPaidThroughRule);
     expect(strict.railsAccessRule).toBe(lenientStatusRule);
@@ -425,6 +440,30 @@ describe("guards", () => {
       "marker_out_of_sync",
     ]);
     expect(reasonsFor({ liveMarker: liveMarker(RAILS_FROM_START, 7) })).toEqual([]);
+  });
+
+  it("refuses either flip while billing work is in flight (L3)", () => {
+    const cases = [
+      [{ openInvoices: 1 }, "open_invoices"],
+      [{ pendingInvoiceItems: 2 }, "pending_invoice_items"],
+      [{ activeSubscriptionSchedules: 1 }, "subscription_schedule_active"],
+      [{ openDisputes: 1 }, "open_disputes"],
+      [{ refundsInFlight: 1 }, "refunds_in_flight"],
+      [{ complete: false }, "billing_facts_incomplete"],
+    ] as const;
+    for (const [inFlight, reason] of cases)
+      for (const direction of ["handover", "handback"] as const)
+        expect(
+          reasonsFor({ billingInFlight: { ...NO_BILLING_IN_FLIGHT, ...inFlight } }, direction),
+        ).toEqual([reason]);
+  });
+
+  it("refuses a handover while CB's membership writes are blocked", () => {
+    // Events skipped during the block are not replayed: lift it before the first flip.
+    expect(reasonsFor({}, "handover", { ...policy, cbMembershipWritesAllowed: false })).toEqual([
+      "cb_writes_blocked",
+    ]);
+    expect(reasonsFor({}, "handback", { ...policy, cbMembershipWritesAllowed: false })).toEqual([]);
   });
 
   it("refuses while access is read from Rails", () => {
