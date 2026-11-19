@@ -13,6 +13,7 @@
 // match, or a rule exists that no inventory row explains.
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, test } from "node:test";
 
 import {
@@ -56,6 +57,20 @@ void describe("route inventory", () => {
       assert.ok(!seen.has(key), `duplicate inventory row ${key}`);
       seen.add(key);
     }
+  });
+
+  void test("the docs class table matches the inventory", async () => {
+    const doc = await readFile(
+      new URL("../../../../docs/routing/route-parity.md", import.meta.url),
+      "utf8",
+    );
+    const documented = Object.fromEntries(
+      [...doc.matchAll(/^\|\s*(served|redirect|retire|build)\s*\|\s*(\d+)\s*\|/gm)].map((m) => [
+        m[1],
+        Number(m[2]),
+      ]),
+    );
+    assert.deepEqual(documented, routeInventoryCounts().byClass);
   });
 
   void test("counts cover every row", () => {
@@ -151,6 +166,7 @@ void describe("retire rows answer 410 for every method, without the reason", () 
       });
       assert.equal(response.status, 410);
       assert.equal(response.headers.get("x-egghead-retired-route"), disposition.rule);
+      assert.equal(response.headers.get("cache-control"), "public, max-age=3600, s-maxage=3600");
       const body = await response.text();
       const reason = RETIRED_ROUTES.find(({ id }) => id === disposition.rule)?.reason ?? "";
       assert.ok(reason && !body.includes(reason), "the internal reason leaks into the body");

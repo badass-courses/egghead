@@ -1,6 +1,8 @@
 import type { RetiredRoute } from "./legacy-redirects";
 
-const RETIRED_CACHE_CONTROL = "public, max-age=3600, s-maxage=86400";
+// One hour at both the browser and the CDN, so a mistaken retire clears
+// within an hour of a revert.
+const RETIRED_CACHE_CONTROL = "public, max-age=3600, s-maxage=3600";
 
 // Neither body carries the internal reason. It stays in the route table; the
 // response names only the rule id (JSON body and x-egghead-retired-route).

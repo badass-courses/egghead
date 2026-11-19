@@ -6,20 +6,38 @@ Every URL that egghead.io answers today must work on the CourseBuilder app, redi
 
 - `apps/web/src/routing/route-inventory.ts` has one row per egghead-next route file (`pages/**`, `app/**`, API routes), per egghead-next `next.config` redirect (61), per middleware search rule, and per redirect CourseBuilder already shipped, at egghead-next `992ec9a1`. Each row has a sample path and a class.
 - `apps/web/src/routing/legacy-redirects.ts` is the single rule table. Redirects are 308s. Retired paths go through a `beforeFiles` rewrite to `/api/retired/<id>`, which answers 410 for every method. The reason for each retirement stays in the table; responses name only the rule id.
-- `apps/web/test/routing/route-parity.test.ts` (`pnpm routing:parity-contract`, part of `pnpm check`) loads the real Next config in a plain Node child and walks every row:
-  - `served`: the named app route answers, with no rule in front of it;
-  - `redirect`: the named rule matches first and lands on an app route;
-  - `retire`: the named rule matches and the handler returns 410;
-  - `build`: no rule from this table touches the URL, so its owner gets a clean path.
+- `pnpm routing:parity-contract` (part of `pnpm check`) runs three test files under `apps/web/test/routing/`:
+  - `route-parity.test.ts` loads the real Next config in a plain Node child and walks every inventory row. Served rows resolve to the named app route with no rule in front; redirect rows hit the named rule first and land on an app route; retire rows hit the named rule and return 410; build rows stay untouched. It also fails on unexplained rules and on rules that shadow a CourseBuilder route.
+  - `traffic-replay.test.ts` walks a list of real egghead.io paths (`fixtures/egghead-top-paths.txt`, paths only, highest traffic first) through the same table and route tree. Every path must be redirected, retired, owned by a build row, or answered by an app route.
+  - `not-found-guards.test.ts` keeps unknown content URLs on real 404s: no layout's module tree may read the session, no `loading.tsx` or `<Suspense>` may sit above a `notFound()` (except the listed known soft-404 pages), and no middleware may run outside the route model.
+- `pnpm routing:not-found:smoke --base <url>` checks a running server over HTTP: unknown content URLs 404, known URLs 200, every redirect row 308s to its Location with the query passed through, every retire row 410s (HTML for pages, JSON for APIs, also on POST and HEAD).
 
-  It also fails on rules that no row explains, and on any rule that shadows a CourseBuilder route.
+  Against beta, include an unknown entry under a known collection:
 
-- `apps/web/test/routing/traffic-replay.test.ts` walks a list of real egghead.io paths (`fixtures/egghead-top-paths.txt`, paths only, highest traffic first) through the same table and route tree. Every path must be redirected, retired, owned by a build row, or answered by an app route.
-- `pnpm routing:not-found:smoke --base <url>` checks HTTP statuses on a running server: unknown content URLs must 404, known ones must 200.
+  ```sh
+  pnpm routing:not-found:smoke --base https://beta.egghead.io \
+    --known /effective-runtime-type-checks-with-zod-22abf5f9 \
+    --known /cloud-infrastructure-fundamentals-with-aws-ee4bb845/aws-write-and-test-your-first-aws-lambda-function \
+    --unknown /effective-runtime-type-checks-with-zod-22abf5f9/zz-missing-lesson
+  ```
 
-## Limits of the contract
+## Classes
 
-The tests prove a URL reaches a route. They do not prove the route has content: root slugs such as `/some-course~abc12` always match `/[slug]`, so a redirect to a slug that is not in the database passes and 404s live. Literal redirect destinations were checked against the beta sitemap on 2026-11-19; the report lists any misses.
+These counts are asserted against `routeInventoryCounts()` by `route-parity.test.ts`.
+
+| Class    | Rows | Meaning                                                                                                                   |
+| -------- | ---: | ------------------------------------------------------------------------------------------------------------------------- |
+| served   |   24 | A CourseBuilder route answers the same path. `/privacy`, `/faq` and `/code-of-conduct` were built from egghead-next copy. |
+| redirect |   87 | Moved to a CourseBuilder URL.                                                                                             |
+| retire   |   58 | 410 on purpose.                                                                                                           |
+| build    |   41 | No owner in CourseBuilder yet; see follow-ups.                                                                            |
+
+## Behavior to know before the flip
+
+- Unknown content URLs answer a real 404. A server-side session read in the root layout used to turn every `notFound()` on a `generateStaticParams` route into a 500; the nav now reads account state from `/api/nav-account` in the browser.
+- These pages still answer a soft 200 for unknown ids, because they call `notFound()` inside their own `<Suspense>`: `workshops/[id]`, `workshops/[id]/thanks`, `profile/[publicId]`, `profile`, `team/invite/[token]` and the `local/workshops` pages.
+- Browsers cache 308s indefinitely. Reverting a wrong redirect does not reach visitors who already followed it. Retired 410s are cached for one hour.
+- The tests prove a URL reaches a route, not that the route has content. Root slugs such as `/some-course~abc12` always match `/[slug]`, so a redirect to a slug that is not in the database passes and 404s live.
 
 ## Follow-up lanes (build rows)
 
