@@ -19,6 +19,7 @@ import {
   assertRollbackCursorFits,
   manifestUserIds,
   parseRollbackCursor,
+  progressImportTarget,
   type RollbackCursor,
 } from "../apps/web/src/progress/import-cli";
 import { openProgressImportDatabase } from "../apps/web/src/progress/import-db";
@@ -50,7 +51,7 @@ async function main() {
   const batchUsers =
     values["batch-users"] === undefined ? undefined : Number(values["batch-users"]);
 
-  const { db, target } = await openProgressImportDatabase({ apply: values.apply });
+  const { db, identity } = await openProgressImportDatabase({ apply: values.apply });
   try {
     const receipt = await rollbackProgressImport({
       db,
@@ -74,7 +75,7 @@ async function main() {
         );
       },
     });
-    console.log(JSON.stringify({ target, receipt }, null, 2));
+    console.log(JSON.stringify({ target: progressImportTarget(identity), receipt }, null, 2));
   } finally {
     await db.end();
   }

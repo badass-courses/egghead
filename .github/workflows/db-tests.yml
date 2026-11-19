@@ -1,0 +1,81 @@
+# Database-backed test suites that `pnpm check` skips without a database.
+#
+# Each suite is one step against the throwaway MySQL and Postgres service
+# containers below. No secrets: every database here is created for the run.
+# Add other MySQL suites (access, feeds, subscriptions) as further steps, and
+# their paths to the pull_request filter.
+name: db-tests
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/src/progress/**"
+      - "apps/web/src/db/**"
+      - "scripts/progress-import*"
+      - "scripts/sql/rails-progress-export*"
+      - ".github/workflows/db-tests.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  schedule:
+    - cron: "17 11 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  progress-import:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: progress_import_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rails_export_test
+          # A non-UTC server default, as an operator's session may have: the
+          # export must not depend on the session zone.
+          TZ: Asia/Kolkata
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      LEFTHOOK: "0"
+      PROGRESS_IMPORT_TEST_DATABASE_URL: mysql://root:root@127.0.0.1:3306/progress_import_test
+      PROGRESS_EXPORT_TEST_PG_URL: postgresql://postgres:postgres@localhost:5432/rails_export_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: psql client
+        run: |
+          command -v psql >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client)
+          psql --version
+      - run: pnpm install --frozen-lockfile
+      - name: Progress import (MySQL) and Rails export SQL (psql)
+        run: pnpm progress:import:test
