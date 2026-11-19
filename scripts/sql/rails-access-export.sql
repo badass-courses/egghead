@@ -33,14 +33,19 @@
 --   * Purchases grant while expires_at is NULL or in the future and the
 --     purchase_state is not access_revoked. Bulk and country flags are exported;
 --     the delta script applies the bulk/country rules.
---   * Bare legacy `pro` (no special role, seat or live backing) never grants
---     (quarantine rows stay as the July projection wrote them). The pro_holder
---     lines exist only so the delta can cross-check the export against Rails'
---     decision; they grant nothing.
---   * Backed `pro` (ADR-0006 lenient; a deliberate departure from
---     Subscription::ProStatusChecker, which ignores these paths, while
---     Subscription#hard_cancel! keeps `pro` for them). Exported on the backing,
---     whether or not the user still holds `pro`:
+--   * pro_holder lines carry each `pro` holder's latest sign-in date
+--     (GREATEST(current_sign_in_at, last_sign_in_at)). Bare `pro` (no special
+--     role, basic, seat, membership purchase or live backing) is granted only
+--     when the delta's --bare-pro-active-days window covers that date; the rest
+--     is held (quarantine rows stay as the July projection wrote them). Pro
+--     holders get user lines so a recently active one can be resolved.
+--   * Backed `pro`: grants follow Rails `is_pro?` today, and backing only
+--     explains the grant and sets its expiry. Backing is exported only for
+--     users holding `pro`, `basic` or a special role (Ability#lesson_permissions
+--     unlocks pro content for is_basic?, is_pro? and is_instructor?). Backing
+--     for anyone else is counted in manifest.backedWithoutPro and never exported.
+--     ProStatusChecker ignores these paths; Subscription#hard_cancel! keeps
+--     `pro` for them:
 --       gift                  gifts.user_id while claimed_at +
 --                             COALESCE(duration_months, 12) months is in the
 --                             future (Gift.active, app/models/gift.rb). expiresAt
@@ -154,7 +159,11 @@ pro_holders AS (
   JOIN roles r ON r.id = ur.role_id
   WHERE r.resource_type IS NULL AND r.name = 'pro'
 ),
-backing AS (
+-- Live legacy backing. Gifts: Gift.active (claimed_at within COALESCE(duration_months, 12)
+-- months; NULL claimed_at never matches, 0 months is already over). Managed: is_active.
+-- Legacy subscriptions: Subscription.active (cancelled_on IS NULL and
+-- willCancelAfterPeriod = FALSE; NULL is not false, as in Rails' where(... false)).
+all_backing AS (
   SELECT 'gift' AS source, g.id AS source_id, g.user_id,
          g.claimed_at + (COALESCE(g.duration_months, 12) || ' months')::interval AS expires_at,
          NULL::date AS current_period_end
@@ -173,12 +182,26 @@ backing AS (
     AND ls.cancelled_on IS NULL
     AND ls."willCancelAfterPeriod" = FALSE
 ),
+-- Backing grants only users Rails grants as pro today (is_pro?, or the basic and
+-- special roles Ability#lesson_permissions treats the same). Everyone else is
+-- counted in the manifest and never exported.
+pro_eligible AS (
+  SELECT user_id FROM pro_holders
+  UNION SELECT user_id FROM special_roles
+  UNION SELECT user_id FROM basic_roles
+),
+backing AS (
+  SELECT * FROM all_backing WHERE user_id IN (SELECT user_id FROM pro_eligible)
+),
 referenced_users AS (
   SELECT user_id FROM special_roles
   UNION SELECT user_id FROM basic_roles
   UNION SELECT user_id FROM sub_members WHERE user_id IS NOT NULL
   UNION SELECT user_id FROM viewable_purchases WHERE user_id IS NOT NULL
   UNION SELECT user_id FROM backing
+  -- Bare pro holders may be granted when recently active; the delta ignores the
+  -- dormant ones (no create, no email sync).
+  UNION SELECT user_id FROM pro_holders
 ),
 user_lines AS (
   SELECT 1 AS ord, u.id AS sort_id, json_build_object(
@@ -262,9 +285,12 @@ purchase_lines AS (
 pro_holder_lines AS (
   SELECT 6 AS ord, ph.user_id AS sort_id, json_build_object(
     'kind', 'pro_holder',
-    'railsUserId', ph.user_id::text
+    'railsUserId', ph.user_id::text,
+    -- Date only. GREATEST ignores NULLs; null means never signed in.
+    'lastSignInOn', to_char(GREATEST(u.current_sign_in_at, u.last_sign_in_at), 'YYYY-MM-DD')
   )::text AS line
   FROM pro_holders ph
+  LEFT JOIN users u ON u.id = ph.user_id
 ),
 backing_lines AS (
   SELECT 7 AS ord, b.user_id AS sort_id, json_build_object(
@@ -290,6 +316,14 @@ manifest_line AS (
       'purchase', (SELECT COUNT(*) FROM purchase_lines),
       'pro_holder', (SELECT COUNT(*) FROM pro_holder_lines),
       'backing_grant', (SELECT COUNT(*) FROM backing_lines)
+    ),
+    'backedWithoutPro', json_build_object(
+      'gift', (SELECT COUNT(*) FROM all_backing b WHERE b.source = 'gift'
+               AND b.user_id NOT IN (SELECT user_id FROM pro_eligible)),
+      'managed_subscription', (SELECT COUNT(*) FROM all_backing b WHERE b.source = 'managed_subscription'
+               AND b.user_id NOT IN (SELECT user_id FROM pro_eligible)),
+      'legacy_subscription', (SELECT COUNT(*) FROM all_backing b WHERE b.source = 'legacy_subscription'
+               AND b.user_id NOT IN (SELECT user_id FROM pro_eligible))
     )
   )::text AS line
 )

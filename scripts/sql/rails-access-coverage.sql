@@ -5,9 +5,10 @@
 --
 -- Three legacy paths can keep a user's global `pro` role alive
 -- (Subscription#hard_cancel! skips removing `pro` for them). The access export
--- projects each live one as backed `pro` (ADR-0006 lenient). Each row counts
--- one path, and how many of its users hold `pro` today. A path with 0 users is
--- dead. Compare the counts with receipt.backingGrants.bySourceType.
+-- grants a live one only when its user holds `pro` (or basic or a special role)
+-- today; the rest is manifest.backedWithoutPro. Each row counts one path, and how
+-- many of its users hold `pro` today. A path with 0 users is dead. These count
+-- users; receipt.backingGrants.bySourceType counts rows (one per backing).
 --
 -- Aggregates only: no ids, emails or names leave Rails.
 

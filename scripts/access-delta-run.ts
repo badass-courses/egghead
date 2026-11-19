@@ -8,20 +8,32 @@ import {
   ACCESS_DELTA_LAW,
   computeDeltaPlan,
   BACKING_SOURCE_TYPES,
+  DEFAULT_BARE_PRO_ACTIVE_DAYS,
+  DEFAULT_LEGACY_STALE_DAYS,
   DELTA_OP_KINDS,
+  exportProEquivalent,
+  emailKeyFor,
   IDENTITY_OP_KINDS,
   identityConflicts,
   resolveIdentities,
   simulateApply,
+  BARE_PRO_ACTIVE_SOURCE_TYPE,
   type BackingSourceType,
   type CbSnapshot,
+  type GatedSourceType,
   type DeltaOp,
   type DeltaOpKind,
   type DeltaPlan,
   type RailsAccessExport,
+  type RailsBackingGrant,
   type SeatFlagRuling,
+  railsTimestampToIso,
 } from "../apps/web/src/access/rails-access-delta";
-import { planSha256, type ApplyCursor } from "../apps/web/src/access/rails-access-delta-plan";
+import {
+  planSha256,
+  type ApplyCursor,
+  type GateInputs,
+} from "../apps/web/src/access/rails-access-delta-plan";
 import {
   applyDeltaOps,
   type BatchTiming,
@@ -48,6 +60,65 @@ export type DeltaPass = "full" | "identity";
 export interface AnalyzeOptions {
   readonly pass?: DeltaPass;
   readonly seatFlagRulings?: ReadonlyMap<string, SeatFlagRuling>;
+  /** Default 45 days. */
+  readonly legacyStaleDays?: number;
+  /** Default 365 days. */
+  readonly bareProActiveDays?: number;
+}
+
+/** Default for `--max-identity-ops`: email updates plus links in one plan. */
+export const DEFAULT_MAX_IDENTITY_OPS = 50;
+
+export interface EmailMoveCollisions {
+  /** Two ops (email updates or creates) writing the same email key. */
+  readonly sameTarget: number;
+  /** An email update or create onto an email another CourseBuilder user holds now. */
+  readonly targetHeld: number;
+  /** Two links onto one user, or a link onto a user tied to another Rails id. */
+  readonly linkConflicts: number;
+  readonly total: number;
+}
+
+/**
+ * Collisions among the plan's identity writes, checked on the ops themselves
+ * (independent of `resolveIdentities`, which should never produce one). Emails
+ * compare by the column collation's key when the store read it.
+ */
+export function emailMoveCollisions(
+  ops: readonly DeltaOp[],
+  snapshot: Pick<CbSnapshot, "users" | "exportEmailKeys">,
+): EmailMoveCollisions {
+  const keyFor = emailKeyFor(snapshot);
+  const holders = new Map<string, Set<string>>();
+  for (const user of snapshot.users) {
+    for (const key of [
+      keyFor(user.email),
+      ...user.matchedExportEmails.map((email) => keyFor(email)),
+    ]) {
+      const set = holders.get(key) ?? new Set<string>();
+      set.add(user.id);
+      holders.set(key, set);
+    }
+  }
+  const legacyById = new Map(snapshot.users.map((user) => [user.id, user.legacyRailsUserId]));
+  const targets = new Map<string, number>();
+  let targetHeld = 0;
+  let linkConflicts = 0;
+  const linked = new Set<string>();
+  for (const op of ops) {
+    if (op.kind === "user_email_update" || op.kind === "user_create") {
+      const writer = op.kind === "user_create" ? op.user.id : op.userId;
+      const key = keyFor(op.kind === "user_create" ? op.user.email : op.email);
+      targets.set(key, (targets.get(key) ?? 0) + 1);
+      if ([...(holders.get(key) ?? [])].some((holder) => holder !== writer)) targetHeld++;
+    } else if (op.kind === "user_link") {
+      const legacy = legacyById.get(op.userId) ?? null;
+      if (linked.has(op.userId) || (legacy !== null && legacy !== op.railsUserId)) linkConflicts++;
+      linked.add(op.userId);
+    }
+  }
+  const sameTarget = [...targets.values()].reduce((sum, n) => sum + Math.max(0, n - 1), 0);
+  return { sameTarget, targetHeld, linkConflicts, total: sameTarget + targetHeld + linkConflicts };
 }
 
 export interface DeltaAnalysis {
@@ -81,26 +152,58 @@ export interface DeltaAnalysis {
     readonly tripped: boolean;
   };
   readonly proCrossCheck: ProCrossCheck;
+  /** `user_email_update` plus `user_link` in this pass, and collisions among identity writes. */
+  readonly identityOps: {
+    readonly emailUpdates: number;
+    readonly links: number;
+    readonly count: number;
+    readonly collisions: EmailMoveCollisions;
+  };
 }
 
 export interface ProCrossCheck {
   /** Rails users holding the global `pro` role. */
   readonly railsProHolders: number;
-  /** Export users granted pro-equivalent access: special roles, member seats, live backing. */
+  /** Export users granted all access without `pro`: roles, basic, seats, membership purchases, live backing. */
   readonly exportProEquivalent: number;
   /**
-   * Bare `pro`: Rails says pro, and the export has no special role, no member
-   * seat and no live backing for the user. Held for a person, by id.
+   * Bare `pro` held for a person: Rails says pro, nothing else in the export
+   * grants the user, and they did not sign in within `--bare-pro-active-days`.
    */
   readonly bareProHolders: {
     readonly count: number;
     /** sha256 of the sorted ids, one per line: what `--accept-bare-pro` names. */
     readonly sha256: string;
+    /** 20 ids spread across the sorted list, for checking by hand in Rails. */
+    readonly sample: readonly string[];
     readonly railsUserIds: readonly string[];
+  };
+  /** Bare `pro` granted (`rails_bare_pro_active`): signed in inside the window, or keeping an earlier row. */
+  readonly bareProActive: {
+    readonly count: number;
+    readonly keptFromEarlierRun: number;
+    readonly railsUserIds: readonly string[];
+  };
+  /** Every bare holder (granted or held) by latest sign-in before the export. */
+  readonly bareProSignIn: {
+    readonly within90Days: number;
+    readonly within1Year: number;
+    readonly within3Years: number;
+    readonly older: number;
+    readonly never: number;
   };
   /** The export grants pro-equivalent access, Rails has no `pro` (sync lag; reported). */
   readonly exportHasRailsLacks: number;
   readonly exportHasRailsLacksSample: readonly string[];
+}
+
+/** Up to 20 ids spread evenly across a sorted list (first and last included). */
+export function spreadSample(sorted: readonly string[], size = SAMPLE_SIZE): string[] {
+  if (sorted.length <= size) return [...sorted];
+  return Array.from({ length: size }, (_, index) => {
+    const at = Math.round((index * (sorted.length - 1)) / (size - 1));
+    return sorted[at] ?? "";
+  });
 }
 
 const byRailsId = (a: string, b: string) => Number(a) - Number(b) || a.localeCompare(b);
@@ -114,59 +217,112 @@ export function railsIdListSha256(railsUserIds: readonly string[]) {
 
 /**
  * Compare the export with Rails' own decision. Rails gates lessons on `is_pro?`
- * (`Ability#lesson_permissions`). The export grants the same people through
- * `Subscription::ProStatusChecker`'s two paths (special roles, `account_member`
- * on an enabled account subscription) plus live legacy backing (gifts, managed
- * subscriptions, legacy subscriptions), which ProStatusChecker ignores and
- * ADR-0006 lenient keeps. Anyone left is bare `pro`.
+ * (`Ability#lesson_permissions`, which also unlocks `is_basic?` and
+ * `is_instructor?`). The plan's `barePro` split holds the pro holders nothing
+ * else grants; held stale legacy subscriptions and orphans have their own lists.
  */
-export function proCrossCheck(railsExport: RailsAccessExport): ProCrossCheck {
-  const exportPro = new Set([
-    ...railsExport.roleGrants.map((grant) => grant.railsUserId),
-    ...railsExport.subscriptions.flatMap((sub) =>
-      sub.members.filter((member) => member.hasMemberRole).map((member) => member.railsUserId),
-    ),
-    ...railsExport.backingGrants.map((grant) => grant.railsUserId),
-  ]);
+export function proCrossCheck(
+  railsExport: RailsAccessExport,
+  plan: Pick<DeltaPlan, "liveBackingGrants" | "barePro">,
+  nowMs: number,
+): ProCrossCheck {
+  const exportPro = exportProEquivalent(railsExport, plan.liveBackingGrants);
   const railsPro = new Set(railsExport.proHolders.map((holder) => holder.railsUserId));
-  const bare = [...railsPro]
-    .filter((railsUserId) => !exportPro.has(railsUserId))
-    .toSorted(byRailsId);
+  // Granted without `pro` by Rails itself: roles, basic, membership purchases.
+  const withoutProByRails = new Set([
+    ...railsExport.roleGrants.map((grant) => grant.railsUserId),
+    ...railsExport.basicGrants.map((grant) => grant.railsUserId),
+    ...railsExport.purchases
+      .filter((purchase) => purchase.sellableType === "Resource::Membership")
+      .map((purchase) => purchase.railsUserId),
+  ]);
+  const held = plan.barePro.held.map((holder) => holder.railsUserId);
   const extra = [...exportPro]
-    .filter((railsUserId) => !railsPro.has(railsUserId))
+    .filter((railsUserId) => !railsPro.has(railsUserId) && !withoutProByRails.has(railsUserId))
     .toSorted(byRailsId);
+  const buckets = { within90Days: 0, within1Year: 0, within3Years: 0, older: 0, never: 0 };
+  for (const holder of plan.barePro.all) {
+    const iso = railsTimestampToIso(holder.lastSignInOn);
+    const days = iso === null ? Number.NaN : (nowMs - Date.parse(iso)) / 86_400_000;
+    if (Number.isNaN(days)) buckets.never++;
+    else if (days <= 90) buckets.within90Days++;
+    else if (days <= 365) buckets.within1Year++;
+    else if (days <= 3 * 365) buckets.within3Years++;
+    else buckets.older++;
+  }
   return {
     railsProHolders: railsPro.size,
     exportProEquivalent: exportPro.size,
-    bareProHolders: { count: bare.length, sha256: railsIdListSha256(bare), railsUserIds: bare },
+    bareProHolders: {
+      count: held.length,
+      sha256: railsIdListSha256(held),
+      sample: spreadSample(held),
+      railsUserIds: held,
+    },
+    bareProActive: {
+      count: plan.barePro.active.length,
+      keptFromEarlierRun: plan.barePro.kept.length,
+      railsUserIds: plan.barePro.active.map((holder) => holder.railsUserId),
+    },
+    bareProSignIn: buckets,
     exportHasRailsLacks: extra.length,
     exportHasRailsLacksSample: extra.slice(0, SAMPLE_SIZE),
   };
 }
 
-/** Backed-`pro` rows per source type, and legacy subscriptions past their period end. */
+function bySource(grants: readonly RailsBackingGrant[]): Record<BackingSourceType, number> {
+  const counts: Record<BackingSourceType, number> = {
+    rails_gift: 0,
+    rails_managed_subscription: 0,
+    rails_legacy_subscription: 0,
+  };
+  for (const grant of grants) counts[BACKING_SOURCE_TYPES[grant.source]]++;
+  return counts;
+}
+
+/**
+ * Backed-`pro` rows per source type (granted rows only), backing for users
+ * Rails does not grant as pro (counted, not granted), and granted legacy
+ * subscriptions already past their period end (inside the stale window).
+ */
 export function backingCounts(railsExport: RailsAccessExport, plan: DeltaPlan, nowMs: number) {
+  // The SQL counts these without exporting them; any that reach the export anyway add on.
+  const inExport = bySource(plan.backingWithoutPro);
+  const counted = railsExport.manifest.backedWithoutPro;
   return {
     bySourceType: plan.expected.policy.backingGrants,
-    legacySubscriptionsStalePeriodEnd: railsExport.backingGrants.filter((grant) => {
-      if (grant.source !== "legacy_subscription" || grant.currentPeriodEnd === null) return false;
-      const end = Date.parse(
-        /[zZ]|[+-]\d{2}:?\d{2}$/.test(grant.currentPeriodEnd)
-          ? grant.currentPeriodEnd
-          : `${grant.currentPeriodEnd.replace(" ", "T")}Z`,
-      );
-      return !Number.isNaN(end) && end < nowMs;
+    backedWithoutPro: {
+      rails_gift: inExport.rails_gift + (counted?.gift ?? 0),
+      rails_managed_subscription:
+        inExport.rails_managed_subscription + (counted?.managed_subscription ?? 0),
+      rails_legacy_subscription:
+        inExport.rails_legacy_subscription + (counted?.legacy_subscription ?? 0),
+    },
+    legacySubscriptionsPastPeriodEnd: plan.liveBackingGrants.filter((grant) => {
+      if (grant.source !== "legacy_subscription") return false;
+      const iso = railsTimestampToIso(grant.currentPeriodEnd);
+      return iso !== null && Date.parse(iso) < nowMs;
     }).length,
   };
 }
 
+/** A held list with the sha256 a person accepts it by. */
+function heldList(ids: readonly string[]) {
+  const sorted = [...ids].toSorted(byRailsId);
+  return { count: sorted.length, sha256: railsIdListSha256(sorted) };
+}
+
 /** Source types whose count more than doubled since the previous receipt. */
 export function backingGrowth(
-  current: Record<BackingSourceType, number>,
+  current: Record<GatedSourceType, number>,
   previous: Partial<Record<string, number>> | null,
 ) {
   if (previous === null) return [];
-  return Object.values(BACKING_SOURCE_TYPES).flatMap((sourceType) => {
+  const types: readonly GatedSourceType[] = [
+    ...Object.values(BACKING_SOURCE_TYPES),
+    BARE_PRO_ACTIVE_SOURCE_TYPE,
+  ];
+  return types.flatMap((sourceType) => {
     const before = previous[sourceType] ?? 0;
     const now = current[sourceType];
     return now > 2 * before ? [{ sourceType, previous: before, current: now }] : [];
@@ -184,17 +340,29 @@ export function analyze(
   options: AnalyzeOptions = {},
 ): DeltaAnalysis {
   const pass = options.pass ?? "full";
-  const planOptions =
-    options.seatFlagRulings === undefined ? {} : { seatFlagRulings: options.seatFlagRulings };
+  const planOptions = {
+    ...(options.seatFlagRulings === undefined ? {} : { seatFlagRulings: options.seatFlagRulings }),
+    ...(options.legacyStaleDays === undefined ? {} : { legacyStaleDays: options.legacyStaleDays }),
+    ...(options.bareProActiveDays === undefined
+      ? {}
+      : { bareProActiveDays: options.bareProActiveDays }),
+  };
   const nowIso = new Date(nowMs).toISOString();
   const fullPlan = computeDeltaPlan(railsExport, snapshot, nowMs, planOptions);
   const forPass = (ops: readonly DeltaOp[]) =>
     pass === "identity" ? ops.filter((op) => IDENTITY_OP_KINDS.has(op.kind)) : ops;
   const plan: DeltaPlan = { ...fullPlan, ops: forPass(fullPlan.ops) };
-  const before = compareShadow(railsExport, snapshot, plan.identities, nowMs);
+  // The shadow's Rails side is what the plan grants: held and pro-less backing
+  // removed, bare-active `pro` added, dormant pro-only users out of scope.
+  const projected = fullPlan.projectedExport;
+  const extra = fullPlan.barePro.active.map((holder) => ({
+    railsUserId: holder.railsUserId,
+    why: `bare pro, last sign-in ${holder.lastSignInOn ?? "never"}`,
+  }));
+  const before = compareShadow(projected, snapshot, plan.identities, nowMs, extra);
   const simulated = simulateApply(snapshot, plan.ops, nowIso);
-  const afterIdentities = resolveIdentities(railsExport, simulated);
-  const after = compareShadow(railsExport, simulated, afterIdentities, nowMs);
+  const afterIdentities = resolveIdentities(projected, simulated);
+  const after = compareShadow(projected, simulated, afterIdentities, nowMs, extra);
   const nextPlan = computeDeltaPlan(railsExport, simulated, nowMs, planOptions);
   const remainingAfterSimulation = forPass(nextPlan.ops).length;
 
@@ -202,10 +370,11 @@ export function analyze(
   if (pass === "identity") {
     const fullSimulated = simulateApply(simulated, nextPlan.ops, nowIso);
     const fullAfter = compareShadow(
-      railsExport,
+      projected,
       fullSimulated,
-      resolveIdentities(railsExport, fullSimulated),
+      resolveIdentities(projected, fullSimulated),
       nowMs,
+      extra,
     );
     afterIdentityPass = {
       underGrantUsers: fullAfter.summary.underGrantUsers,
@@ -265,7 +434,13 @@ export function analyze(
       threshold,
       tripped: revokes > threshold,
     },
-    proCrossCheck: proCrossCheck(railsExport),
+    proCrossCheck: proCrossCheck(railsExport, fullPlan, nowMs),
+    identityOps: {
+      emailUpdates: count((op) => op.kind === "user_email_update"),
+      links: count((op) => op.kind === "user_link"),
+      count: count((op) => IDENTITY_OP_KINDS.has(op.kind)),
+      collisions: emailMoveCollisions(plan.ops, snapshot),
+    },
   };
 }
 
@@ -481,16 +656,34 @@ export interface ReceiptContext {
     readonly hostSha256: string;
     readonly database: string;
   };
-  readonly allowLargeRevoke: boolean;
   /**
-   * The sha256 of the bare-`pro` id list a person reviewed and accepted as not
-   * paid access. A different list (even of the same size) fails the gate.
-   * Backed users are never on the list: they are granted.
+   * Every flag that moves the gate, as the plan records them. Held lists are
+   * accepted by the sha256 of the exact id set, so a changed list fails again
+   * even at the same size.
    */
-  readonly acceptBarePro: string | null;
+  readonly gateInputs: GateInputs;
   /** Backed-`pro` counts from the previous run's receipt, for the growth alarm. */
   readonly previousBackingCounts: Partial<Record<string, number>> | null;
-  readonly allowBackingGrowth: boolean;
+}
+
+/** Gate inputs with nothing accepted: a first dry run. */
+export function defaultGateInputs(overrides: Partial<GateInputs> = {}): GateInputs {
+  return Object.assign(
+    {
+      allowLargeRevoke: false,
+      acceptBarePro: null,
+      acceptStaleLegacy: null,
+      acceptOrphanGrants: null,
+      acceptFirstBacking: {},
+      previousReceiptSha256: null,
+      allowBackingGrowth: false,
+      seatFlagRulings: {},
+      maxIdentityOps: DEFAULT_MAX_IDENTITY_OPS,
+      legacyStaleDays: DEFAULT_LEGACY_STALE_DAYS,
+      bareProActiveDays: DEFAULT_BARE_PRO_ACTIVE_DAYS,
+    },
+    overrides,
+  );
 }
 
 export function buildReceipt(
@@ -519,20 +712,70 @@ export function buildReceipt(
   );
   const conflicts = identityConflicts(plan.identities);
   const pro = analysis.proCrossCheck;
+  const gate = context.gateInputs;
   const backing = backingCounts(railsExport, plan, Date.parse(railsExport.manifest.exportedAt));
   const growth = backingGrowth(backing.bySourceType, context.previousBackingCounts);
-  const keptSeatUsers = new Set(
-    plan.heldSeatFlags.filter((held) => held.ruling === "keep").map((held) => held.userId),
+  const heldLegacy = {
+    ...heldList(plan.heldLegacySubscriptions.map((held) => held.railsSourceId)),
+    staleDays: gate.legacyStaleDays,
+    subscriptions: plan.heldLegacySubscriptions,
+    rowsKept: plan.revokeHeldForStaleLegacy,
+  };
+  const orphans = {
+    ...heldList(railsExport.orphanRailsUserIds),
+    railsUserIds: railsExport.orphanRailsUserIds,
+    rowsKept: plan.revokeHeldForOrphan,
+  };
+  // An over-grant is accepted only when every owned row behind it is one a
+  // hold keeps, or reaches the user through a seat a person ruled `keep`.
+  const keptMemberships = new Set(
+    plan.heldSeatFlags.filter((held) => held.ruling === "keep").map((held) => held.membershipId),
   );
+  const pathAccepted = (path: UserShadow["overGrantPaths"][number]) =>
+    plan.heldEntitlementIds.has(path.entitlementId) ||
+    (path.membershipId !== null &&
+      (keptMemberships.has(path.membershipId) || plan.heldMembershipIds.has(path.membershipId)));
   const overGranted = after.users.filter((user) => user.overGrant.length > 0);
-  const overGrantAccepted = overGranted.filter(
-    (user) => user.cbUserId !== null && keptSeatUsers.has(user.cbUserId),
+  const accepted = overGranted.filter(
+    (user) => user.overGrantPaths.length > 0 && user.overGrantPaths.every(pathAccepted),
+  );
+  const overGrantAccepted = accepted.filter((user) =>
+    user.overGrantPaths.some(
+      (path) => path.membershipId !== null && keptMemberships.has(path.membershipId),
+    ),
   ).length;
+  const overGrantAcceptedByHold = accepted.length - overGrantAccepted;
+  const identityOps = {
+    ...analysis.identityOps,
+    max: gate.maxIdentityOps,
+    tripped: analysis.identityOps.count > gate.maxIdentityOps,
+  };
 
   const failures: string[] = [];
   if (analysis.remainingAfterSimulation > 0) {
     failures.push(
       `plan does not converge: ${analysis.remainingAfterSimulation} ops remain after simulation`,
+    );
+  }
+  // ShadowResult.users is the complete list; the summary is counted from it.
+  for (const shadow of [before, after]) {
+    const under = shadow.users.filter((user) => user.underGrant.length > 0).length;
+    const over = shadow.users.filter((user) => user.overGrant.length > 0).length;
+    if (under !== shadow.summary.underGrantUsers || over !== shadow.summary.overGrantUsers) {
+      failures.push("the shadow summary disagrees with its user list; refusing to trust either");
+    }
+  }
+  if (identityOps.tripped) {
+    failures.push(
+      `${identityOps.count} identity ops (${identityOps.emailUpdates} email updates, ${identityOps.links} links) ` +
+        `exceed --max-identity-ops ${gate.maxIdentityOps}; review them, then raise --max-identity-ops`,
+    );
+  }
+  if (identityOps.collisions.total > 0) {
+    failures.push(
+      `${identityOps.collisions.total} identity writes collide (${identityOps.collisions.sameTarget} onto the same email, ` +
+        `${identityOps.collisions.targetHeld} onto an email another user holds, ${identityOps.collisions.linkConflicts} conflicting links); ` +
+        "the store would refuse them; resolve the accounts by hand",
     );
   }
   if (analysis.pass === "full") {
@@ -541,7 +784,7 @@ export function buildReceipt(
         `${after.summary.underGrantUsers} users would still be under-granted after apply`,
       );
     }
-    const overGrantHeld = overGranted.length - overGrantAccepted;
+    const overGrantHeld = overGranted.length - accepted.length;
     if (overGrantHeld > 0) {
       failures.push(`${overGrantHeld} users would still be over-granted after apply`);
     }
@@ -553,14 +796,47 @@ export function buildReceipt(
           "run the identity pass (--identity-pass) first, then the full dry run again",
       );
     }
-    if (pro.bareProHolders.count > 0 && pro.bareProHolders.sha256 !== context.acceptBarePro) {
+    if (pro.bareProHolders.count > 0 && pro.bareProHolders.sha256 !== gate.acceptBarePro) {
       failures.push(
         `${pro.bareProHolders.count} bare pro holders (pro role, no special role, seat or live backing; ids in proCrossCheck.bareProHolders); ` +
           "rule on them, then pass --accept-bare-pro with proCrossCheck.bareProHolders.sha256",
       );
     }
+    if (heldLegacy.count > 0 && heldLegacy.sha256 !== gate.acceptStaleLegacy) {
+      failures.push(
+        `${heldLegacy.count} legacy subscriptions held as stale (period end over ${gate.legacyStaleDays} days past, or none; ` +
+          "ids in heldLegacySubscriptions); rule on them, then pass --accept-stale-legacy with heldLegacySubscriptions.sha256",
+      );
+    }
+    if (orphans.count > 0 && orphans.sha256 !== gate.acceptOrphanGrants) {
+      failures.push(
+        `${orphans.count} Rails users have grant lines but no user line (ids in orphanGrants); ` +
+          "their grants are held; pass --accept-orphan-grants with orphanGrants.sha256",
+      );
+    }
+    for (const [sourceType, current] of Object.entries(backing.bySourceType)) {
+      const acceptedCount = gate.acceptFirstBacking[sourceType];
+      if (acceptedCount !== undefined && acceptedCount !== current) {
+        failures.push(
+          `--accept-first-backing ${sourceType}=${acceptedCount} but the plan grants ${current}`,
+        );
+      } else if (
+        context.previousBackingCounts === null &&
+        current > 0 &&
+        acceptedCount === undefined
+      ) {
+        failures.push(
+          `first run: ${current} ${sourceType} grants and no --previous-receipt; review them, then pass --accept-first-backing ${sourceType}=${current}`,
+        );
+      }
+    }
+    for (const sourceType of Object.keys(gate.acceptFirstBacking)) {
+      if (!(sourceType in backing.bySourceType)) {
+        failures.push(`--accept-first-backing names an unknown source type: ${sourceType}`);
+      }
+    }
     for (const item of growth) {
-      if (context.allowBackingGrowth) break;
+      if (gate.allowBackingGrowth) break;
       failures.push(
         `${item.sourceType} grew from ${item.previous} to ${item.current} (over 2x the previous run); review, then pass --allow-backing-growth`,
       );
@@ -570,7 +846,7 @@ export function buildReceipt(
         `--held-seat-flag names memberships that are not held: ${plan.unusedSeatFlagOverrides.join(", ")}`,
       );
     }
-    if (analysis.largeRevoke.tripped && !context.allowLargeRevoke) {
+    if (analysis.largeRevoke.tripped && !gate.allowLargeRevoke) {
       failures.push(
         `${analysis.largeRevoke.revokes} revokes and access moves exceed the alarm threshold ${analysis.largeRevoke.threshold}; review samples, then pass --allow-large-revoke`,
       );
@@ -605,10 +881,15 @@ export function buildReceipt(
     },
     identity,
     identityConflicts: conflicts,
-    proCrossCheck: { ...pro, acceptedBareProSha256: context.acceptBarePro },
+    gateInputs: gate,
+    proCrossCheck: { ...pro, acceptedBareProSha256: gate.acceptBarePro },
     backingGrants: { ...backing, growth, previous: context.previousBackingCounts },
+    heldLegacySubscriptions: heldLegacy,
+    orphanGrants: orphans,
+    identityOps,
     heldSeatFlags: plan.heldSeatFlags,
     overGrantAcceptedBySeatFlagKeep: overGrantAccepted,
+    overGrantAcceptedByHold,
     afterIdentityPass: analysis.afterIdentityPass,
     policy: {
       ...plan.expected.policy,

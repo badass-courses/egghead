@@ -17,6 +17,10 @@
 // apply) when the full gate fails on identity conflicts the plan's own email
 // moves would free, then run the full dry run again.
 //
+// Every flag that moves the gate (acceptances, alarms, rulings, the previous
+// receipt's sha, --max-identity-ops, --legacy-stale-days) is recorded in
+// `plan.json`; `--apply` and `--resume` refuse unless they get the same values.
+//
 // `<out>` holds customer emails and names: it must be outside any git work
 // tree, and it is set to mode 0700. Without `--out` the tool uses a new folder
 // under `$XDG_STATE_HOME/egghead-access-delta` (default `~/.local/state`).
@@ -36,12 +40,17 @@
 // Runs in UTC only (the package script sets TZ=UTC): mysql2 writes Date values as
 // local wall-clock strings, and CourseBuilder runs in UTC.
 
+import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
 import {
+  BACKING_SOURCE_TYPES,
+  BARE_PRO_ACTIVE_SOURCE_TYPE,
+  DEFAULT_BARE_PRO_ACTIVE_DAYS,
+  DEFAULT_LEGACY_STALE_DAYS,
   emailUniquenessKey,
   normalizeEmail,
   parseRailsAccessExport,
@@ -49,6 +58,7 @@ import {
   type SeatFlagRuling,
 } from "../apps/web/src/access/rails-access-delta";
 import {
+  gateInputsDiff,
   hostSha256,
   newCursor,
   parseCursor,
@@ -79,6 +89,8 @@ import {
   applyRefusals,
   buildReceipt,
   DEFAULT_MAX_EXPORT_AGE_MS,
+  DEFAULT_MAX_IDENTITY_OPS,
+  defaultGateInputs,
   parseDurationMs,
   type DeltaAnalysis,
   type DeltaPass,
@@ -91,16 +103,39 @@ function usage(message?: string): never {
       "[--identity-pass] [--apply|--resume] [--expect-plan <sha256>] [--confirm-database <db>] " +
       "[--batch-size N] [--max-batches N] [--allow-large-revoke] [--accept-bare-pro <sha256>] " +
       "[--previous-receipt <receipt.json>] [--allow-backing-growth] [--held-seat-flag <membershipId>=clear|keep]... " +
+      "[--accept-first-backing <sourceType>=<count>]... [--accept-stale-legacy <sha256>] [--accept-orphan-grants <sha256>] " +
+      "[--max-identity-ops 50] [--legacy-stale-days 45] [--bare-pro-active-days 365] " +
       "[--max-export-age 2h] [--now <iso>] [--snapshot-transaction|--no-snapshot-transaction] [--json]",
   );
   process.exit(64);
 }
 
-function positiveInt(value: string | undefined, name: string, fallback: number) {
+function positiveInt(value: string | undefined, name: string, fallback: number, min = 1) {
   if (value === undefined) return fallback;
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) usage(`${name} must be a positive integer`);
+  if (!Number.isInteger(parsed) || parsed < min) usage(`${name} must be an integer >= ${min}`);
   return parsed;
+}
+
+/** `sourceType=count` pairs from repeated `--accept-first-backing`, sorted by type. */
+function firstBackingAcceptances(values: readonly string[]) {
+  const known = new Set<string>([
+    ...Object.values(BACKING_SOURCE_TYPES),
+    BARE_PRO_ACTIVE_SOURCE_TYPE,
+  ]);
+  const accepted: Record<string, number> = {};
+  for (const value of values) {
+    const match = /^([a-z_]+)=(\d+)$/.exec(value);
+    if (!match?.[1] || !match[2] || !known.has(match[1])) {
+      usage(
+        `--accept-first-backing ${value}: expected <sourceType>=<count>, sourceType one of ${[...known].join(", ")}`,
+      );
+    }
+    accepted[match[1]] = Number(match[2]);
+  }
+  return Object.fromEntries(
+    Object.entries(accepted).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
 }
 
 async function writePrivate(file: string, content: string) {
@@ -139,10 +174,12 @@ function seatFlagRulings(values: readonly string[]) {
   return rulings;
 }
 
-/** `backingGrants.bySourceType` from an earlier receipt, without trusting its shape. */
+/** `backingGrants.bySourceType` from an earlier receipt (and the file's sha256), without trusting its shape. */
 async function previousBackingCounts(file: string | undefined) {
   if (file === undefined) return null;
-  const json: unknown = JSON.parse(await readFile(file, "utf8"));
+  const text = await readFile(file, "utf8");
+  const sha256 = createHash("sha256").update(text).digest("hex");
+  const json: unknown = JSON.parse(text);
   const backing =
     typeof json === "object" && json !== null ? Reflect.get(json, "backingGrants") : null;
   const bySource =
@@ -154,7 +191,7 @@ async function previousBackingCounts(file: string | undefined) {
   for (const [key, value] of Object.entries(bySource)) {
     if (typeof value === "number") counts[key] = value;
   }
-  return counts;
+  return { counts, sha256 };
 }
 
 function describeUser(
@@ -223,6 +260,12 @@ async function main() {
       "previous-receipt": { type: "string" },
       "allow-backing-growth": { type: "boolean", default: false },
       "held-seat-flag": { type: "string", multiple: true },
+      "accept-first-backing": { type: "string", multiple: true },
+      "accept-stale-legacy": { type: "string" },
+      "accept-orphan-grants": { type: "string" },
+      "max-identity-ops": { type: "string" },
+      "legacy-stale-days": { type: "string" },
+      "bare-pro-active-days": { type: "string" },
       "expect-plan": { type: "string" },
       "snapshot-transaction": { type: "boolean", default: false },
       "no-snapshot-transaction": { type: "boolean", default: false },
@@ -259,6 +302,35 @@ async function main() {
     [...rulings].toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   );
   const previousBacking = await previousBackingCounts(values["previous-receipt"]);
+  const legacyStaleDays = positiveInt(
+    values["legacy-stale-days"],
+    "--legacy-stale-days",
+    DEFAULT_LEGACY_STALE_DAYS,
+  );
+  const bareProActiveDays = positiveInt(
+    values["bare-pro-active-days"],
+    "--bare-pro-active-days",
+    DEFAULT_BARE_PRO_ACTIVE_DAYS,
+    0,
+  );
+  const gateInputs = defaultGateInputs({
+    allowLargeRevoke: values["allow-large-revoke"],
+    acceptBarePro: values["accept-bare-pro"] ?? null,
+    acceptStaleLegacy: values["accept-stale-legacy"] ?? null,
+    acceptOrphanGrants: values["accept-orphan-grants"] ?? null,
+    acceptFirstBacking: firstBackingAcceptances(values["accept-first-backing"] ?? []),
+    previousReceiptSha256: previousBacking?.sha256 ?? null,
+    allowBackingGrowth: values["allow-backing-growth"],
+    seatFlagRulings: rulingsRecord,
+    maxIdentityOps: positiveInt(
+      values["max-identity-ops"],
+      "--max-identity-ops",
+      DEFAULT_MAX_IDENTITY_OPS,
+      0,
+    ),
+    legacyStaleDays,
+    bareProActiveDays,
+  });
 
   const safety = writing ? assertCommerceWritesAllowed() : assertDatabaseUrlForRuntime();
   if (writing && values["confirm-database"] !== safety.database) {
@@ -308,7 +380,7 @@ async function main() {
   }
   if (mode === "resume" && !existingCursor) usage(`--resume: no cursor.json in ${outDir}`);
   const analysisNowMs = analysisClockMs(railsExport, nowOverride);
-  const analyzeOptions = { pass, seatFlagRulings: rulings };
+  const analyzeOptions = { pass, seatFlagRulings: rulings, legacyStaleDays, bareProActiveDays };
   const db = getEggheadDatabase();
 
   try {
@@ -323,16 +395,13 @@ async function main() {
       mode,
       generatedAt,
       target,
-      allowLargeRevoke: values["allow-large-revoke"],
-      acceptBarePro: values["accept-bare-pro"] ?? null,
-      previousBackingCounts: previousBacking,
-      allowBackingGrowth: values["allow-backing-growth"],
+      gateInputs,
+      previousBackingCounts: previousBacking?.counts ?? null,
     });
     const receipt: Record<string, unknown> = {
       ...built,
       analysisClock: new Date(analysisNowMs).toISOString(),
       snapshotTransaction: readOptions.consistent,
-      seatFlagRulings: rulingsRecord,
     };
 
     const userQueries = values.user ?? [];
@@ -367,7 +436,7 @@ async function main() {
           database: safety.database,
           hostSha256: targetHost,
           pass,
-          seatFlagRulings: rulingsRecord,
+          gateInputs,
           generatedAt,
           ops: analysis.plan.ops,
         }),
@@ -406,8 +475,12 @@ async function main() {
           `the saved plan is a ${plan.pass} pass; ${plan.pass === "identity" ? "add" : "drop"} --identity-pass`,
         );
       }
-      if (JSON.stringify(plan.seatFlagRulings) !== JSON.stringify(rulingsRecord)) {
-        refusals.push("pass the same --held-seat-flag rulings the reviewed dry run used");
+      const changed = gateInputsDiff(plan.gateInputs, gateInputs);
+      if (changed.length > 0) {
+        refusals.push(
+          `gate inputs differ from the reviewed dry run (${changed.join(", ")}); ` +
+            "pass the same acceptances, alarms, rulings and --previous-receipt the dry run used",
+        );
       }
       if (existingCursor && existingCursor.planSha256 !== plan.planSha256) {
         refusals.push("cursor.json belongs to a different plan; dry-run into a NEW --out folder");
