@@ -1238,7 +1238,6 @@ export function buildExpectedProjection(
         idempotencyKey: key,
         source: "bare_pro_recently_active",
         railsUserId: holder.railsUserId,
-        lastSignInOn: holder.lastSignInOn ?? undefined,
         staleLegacySubscriptionIds: staleLegacyByUser.get(holder.railsUserId),
         accessReason: "bare_pro_recently_active",
         accessLaw: SUBSCRIPTION_ACCESS_LAW,
@@ -1338,7 +1337,8 @@ function classifyEntitlement(
   return { kind: extended && onlyExtension ? "entitlement_extend" : "entitlement_update", reasons };
 }
 
-function membershipGrants(membership: Pick<CbMembership, "fields">) {
+/** The seat flag that grants through organization-level entitlements. */
+export function membershipGrants(membership: Pick<CbMembership, "fields">) {
   const flag = membership.fields["hasAccountMemberRole"];
   return flag === true || flag === "true";
 }
@@ -1392,9 +1392,17 @@ export interface DeltaPlan {
   readonly heldLegacySubscriptions: readonly HeldLegacySubscription[];
   /** Every pro-eligible stale legacy subscription, before the one-list rule (for reconciliation). */
   readonly staleLegacyAll: readonly HeldLegacySubscription[];
-  /** Existing rows kept for a stale legacy subscription or an orphan Rails user. */
+  /** Existing rows kept for a held stale legacy subscription. */
   readonly revokeHeldForStaleLegacy: number;
-  readonly revokeHeldForOrphan: number;
+  /**
+   * Rows and seat flags kept because their user is held (bare `pro` or
+   * stale-only, outside the window): held means nothing revoked. Organization
+   * rows count when a held user holds a granting seat in that organization.
+   */
+  readonly revokeHeldForHeldUser: number;
+  readonly membershipRevokeHeldForHeldUser: number;
+  /** Revokes and expiries of rows and seats for orphan Rails users (deleted in Rails). */
+  readonly orphanRowsRevoked: number;
   /** Entitlement and membership ids kept by a hold; their over-grants are the hold's. */
   readonly heldEntitlementIds: ReadonlySet<string>;
   readonly heldMembershipIds: ReadonlySet<string>;
@@ -1495,7 +1503,7 @@ export function deltaScope(
     ...railsExport.roleGrants.map((grant) => grant.railsUserId),
     ...railsExport.basicGrants.map((grant) => grant.railsUserId),
     ...railsExport.purchases.map((purchase) => purchase.railsUserId),
-    ...railsExport.backingGrants.map((grant) => grant.railsUserId),
+    ...backing.live.map((grant) => grant.railsUserId),
     ...railsExport.subscriptions.flatMap((sub) => sub.members.map((member) => member.railsUserId)),
     ...barePro.active.map((holder) => holder.railsUserId),
   ]);
@@ -1560,7 +1568,36 @@ export function computeDeltaPlan(
   const heldEntitlementIds = new Set<string>();
   const heldMembershipIds = new Set<string>();
   let revokeHeldForStaleLegacy = 0;
-  let revokeHeldForOrphan = 0;
+  let orphanRowsRevoked = 0;
+  // Held means nothing revoked: a held bare or stale-only holder keeps every
+  // row and seat flag they have until a person rules on them.
+  const heldRailsUserIds = new Set([
+    ...barePro.held.map((holder) => holder.railsUserId),
+    ...heldLegacy.map((held) => held.railsUserId),
+  ]);
+  const heldCbUserIds = new Set(
+    snapshot.users
+      .filter(
+        (user) => user.legacyRailsUserId !== null && heldRailsUserIds.has(user.legacyRailsUserId),
+      )
+      .map((user) => user.id),
+  );
+  const isHeldUser = (cbUserId: string | null, railsUserId: unknown) =>
+    (typeof railsUserId === "string" && heldRailsUserIds.has(railsUserId)) ||
+    (cbUserId !== null && heldCbUserIds.has(cbUserId));
+  // An organization row grants a held member through their seat: keep it too.
+  const heldOrganizations = new Set(
+    snapshot.memberships
+      .filter(
+        (membership) =>
+          membership.organizationId !== null &&
+          membershipGrants(membership) &&
+          isHeldUser(membership.userId, membership.fields["legacyRailsUserId"]),
+      )
+      .map((membership) => membership.organizationId),
+  );
+  let revokeHeldForHeldUser = 0;
+  let membershipRevokeHeldForHeldUser = 0;
   // Organizations that also carry live grants this delta does not own (for
   // example a CourseBuilder Stripe team subscription). Their seat flags gate
   // those grants too, so the delta never clears them.
@@ -1644,6 +1681,11 @@ export function computeDeltaPlan(
     }
     const reasons = membershipReasons(membership, existing);
     const clearsFlag = membershipGrants(existing) && !membershipGrants(membership);
+    if (clearsFlag && isHeldUser(existing.userId, existing.fields["legacyRailsUserId"])) {
+      membershipRevokeHeldForHeldUser++;
+      heldMembershipIds.add(existing.id);
+      continue;
+    }
     if (
       clearsFlag &&
       existing.organizationId &&
@@ -1673,7 +1715,8 @@ export function computeDeltaPlan(
     // An expected row is handled above as create/update (no double count).
     if (expected.memberships.has(membership.id)) continue;
     const railsUserId = membership.fields["legacyRailsUserId"];
-    if (typeof railsUserId === "string" && orphanRailsUserIds.has(railsUserId)) {
+    if (isHeldUser(membership.userId, railsUserId)) {
+      membershipRevokeHeldForHeldUser++;
       heldMembershipIds.add(membership.id);
       continue;
     }
@@ -1687,6 +1730,11 @@ export function computeDeltaPlan(
       !holdSeatFlag(membership)
     ) {
       continue;
+    }
+    // Orphans (a grant line, no user line: deleted in Rails) are revoked:
+    // Rails grants a deleted user nothing.
+    if (typeof railsUserId === "string" && orphanRailsUserIds.has(railsUserId)) {
+      orphanRowsRevoked++;
     }
     ops.push({
       kind: "membership_revoke",
@@ -1721,8 +1769,11 @@ export function computeDeltaPlan(
       continue;
     }
     const railsUserId = row.metadata["railsUserId"];
-    if (typeof railsUserId === "string" && orphanRailsUserIds.has(railsUserId)) {
-      revokeHeldForOrphan++;
+    if (
+      isHeldUser(row.userId, railsUserId) ||
+      (row.organizationId !== null && heldOrganizations.has(row.organizationId))
+    ) {
+      revokeHeldForHeldUser++;
       heldEntitlementIds.add(row.id);
       continue;
     }
@@ -1736,6 +1787,9 @@ export function computeDeltaPlan(
       row.expiresAt !== null && Date.parse(row.expiresAt) <= nowMs
         ? "entitlement_expire"
         : "entitlement_revoke";
+    if (typeof railsUserId === "string" && orphanRailsUserIds.has(railsUserId)) {
+      orphanRowsRevoked++;
+    }
     ops.push({ kind, key: opKey(kind, row.id), entitlementId: row.id });
   }
 
@@ -1760,7 +1814,9 @@ export function computeDeltaPlan(
     heldLegacySubscriptions: heldLegacy,
     staleLegacyAll: backing.held,
     revokeHeldForStaleLegacy,
-    revokeHeldForOrphan,
+    revokeHeldForHeldUser,
+    membershipRevokeHeldForHeldUser,
+    orphanRowsRevoked,
     heldEntitlementIds,
     heldMembershipIds,
   };

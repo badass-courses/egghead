@@ -60,6 +60,7 @@ import {
 import {
   gateInputsDiff,
   hostSha256,
+  databaseUserSha256,
   newCursor,
   parseCursor,
   parsePlan,
@@ -92,6 +93,7 @@ import {
   DEFAULT_MAX_IDENTITY_OPS,
   defaultGateInputs,
   parseDurationMs,
+  previousReceiptProblems,
   type DeltaAnalysis,
   type DeltaPass,
 } from "./access-delta-run";
@@ -103,7 +105,7 @@ function usage(message?: string): never {
       "[--identity-pass] [--apply|--resume] [--expect-plan <sha256>] [--confirm-database <db>] " +
       "[--batch-size N] [--max-batches N] [--allow-large-revoke] [--accept-bare-pro <sha256>] " +
       "[--previous-receipt <receipt.json>] [--allow-backing-growth] [--held-seat-flag <membershipId>=clear|keep]... " +
-      "[--accept-first-backing <sourceType>=<count>]... [--accept-stale-legacy <sha256>] [--accept-orphan-grants <sha256>] " +
+      "[--accept-first-backing <sourceType>=<count>]... [--accept-stale-legacy <sha256>] " +
       "[--max-identity-ops 50] [--legacy-stale-days 45] [--bare-pro-active-days 365] " +
       "[--max-export-age 2h] [--now <iso>] [--snapshot-transaction|--no-snapshot-transaction] [--json]",
   );
@@ -191,7 +193,7 @@ async function previousBackingCounts(file: string | undefined) {
   for (const [key, value] of Object.entries(bySource)) {
     if (typeof value === "number") counts[key] = value;
   }
-  return { counts, sha256 };
+  return { counts, sha256, json };
 }
 
 function describeUser(
@@ -262,7 +264,6 @@ async function main() {
       "held-seat-flag": { type: "string", multiple: true },
       "accept-first-backing": { type: "string", multiple: true },
       "accept-stale-legacy": { type: "string" },
-      "accept-orphan-grants": { type: "string" },
       "max-identity-ops": { type: "string" },
       "legacy-stale-days": { type: "string" },
       "bare-pro-active-days": { type: "string" },
@@ -288,6 +289,9 @@ async function main() {
       : positiveInt(values["max-batches"], "--max-batches", 1);
   const nowOverride = values.now === undefined ? null : Date.parse(values.now);
   if (nowOverride !== null && Number.isNaN(nowOverride)) usage("--now must be an ISO timestamp");
+  // --now moves the analysis clock and so the plan; a write uses the export's.
+  if (nowOverride !== null && writing)
+    usage("--now is for dry runs only; drop it from --apply and --resume");
   const now = () => (nowOverride === null ? new Date() : new Date(nowOverride));
   if (values["snapshot-transaction"] && values["no-snapshot-transaction"]) {
     usage("--snapshot-transaction and --no-snapshot-transaction are exclusive");
@@ -317,7 +321,6 @@ async function main() {
     allowLargeRevoke: values["allow-large-revoke"],
     acceptBarePro: values["accept-bare-pro"] ?? null,
     acceptStaleLegacy: values["accept-stale-legacy"] ?? null,
-    acceptOrphanGrants: values["accept-orphan-grants"] ?? null,
     acceptFirstBacking: firstBackingAcceptances(values["accept-first-backing"] ?? []),
     previousReceiptSha256: previousBacking?.sha256 ?? null,
     allowBackingGrowth: values["allow-backing-growth"],
@@ -345,9 +348,20 @@ async function main() {
         : safety.runtime === "local",
   };
   const targetHost = hostSha256(safety.host);
-  const target = { runtime: safety.runtime, hostSha256: targetHost, database: safety.database };
+  const targetUser = databaseUserSha256(decodeURIComponent(safety.url.username));
+  const target = {
+    runtime: safety.runtime,
+    hostSha256: targetHost,
+    databaseUserSha256: targetUser,
+    database: safety.database,
+  };
 
   const railsExport = parseRailsAccessExport(await readFile(exportPath, "utf8"));
+  if (previousBacking) {
+    const problems = previousReceiptProblems(previousBacking.json, railsExport.manifest.exportedAt);
+    if (problems.length > 0)
+      usage(`--previous-receipt ${values["previous-receipt"]}: ${problems.join("; ")}`);
+  }
   const generatedAt = now().toISOString();
   if (writing && values.out === undefined)
     usage("--apply and --resume need --out <dry-run folder>");
@@ -435,6 +449,7 @@ async function main() {
           exportSha256: railsExport.sha256,
           database: safety.database,
           hostSha256: targetHost,
+          databaseUserSha256: targetUser,
           pass,
           gateInputs,
           generatedAt,
@@ -455,6 +470,7 @@ async function main() {
         exportSha256: railsExport.sha256,
         database: safety.database,
         hostSha256: targetHost,
+        databaseUserSha256: targetUser,
         exportedAtMs: analysisClockMs(railsExport, null),
         nowMs: Date.now(),
         maxExportAgeMs,

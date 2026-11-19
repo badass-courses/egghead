@@ -30,6 +30,7 @@ import {
 import {
   gateInputsDiff,
   hostSha256,
+  databaseUserSha256,
   newCursor,
   parsePlan,
   planSha256,
@@ -62,7 +63,10 @@ import {
   defaultGateInputs,
   emailMoveCollisions,
   parseDurationMs,
+  previousReceiptProblems,
+  RECEIPT_FORMAT,
   railsIdListSha256,
+  revokesOnHeldUsers,
   spreadSample,
   type DeltaAnalysis,
 } from "./access-delta-run";
@@ -93,7 +97,12 @@ const FIXTURE_ACCEPT_ARGS = [
 const CTX = {
   mode: "dry-run" as const,
   generatedAt: NOW_ISO,
-  target: { runtime: "local", hostSha256: hostSha256("127.0.0.1"), database: "fixture_test" },
+  target: {
+    runtime: "local",
+    hostSha256: hostSha256("127.0.0.1"),
+    databaseUserSha256: databaseUserSha256("root"),
+    database: "fixture_test",
+  },
   gateInputs: defaultGateInputs({
     acceptFirstBacking: FIXTURE_FIRST_BACKING,
     acceptStaleLegacy: FIXTURE_STALE_LEGACY_SHA,
@@ -155,7 +164,7 @@ function classCounts(ops: readonly DeltaOp[]) {
 }
 
 const EXPECTED_CLASSES = {
-  user_create: 9, // 103, 109, 113, 114, 115, backed 120, 121, 122, and held 123
+  user_create: 8, // 103, 109, 113, 114, 115, backed 120, 121, 122 (held 123 is not created)
   user_link: 1, // 111 -> beta signup
   organization_create: 2, // accounts 7003, 7014
   membership_create: 3, // 8003 (103), 8006 (106), role-only 115 on 7014
@@ -169,7 +178,7 @@ const EXPECTED_CLASSES = {
   entitlement_revoke: 3, // 9002 org+seat, 9004 seat 107
   entitlement_expire: 1, // purchase 6009 ran out in September
 };
-const EXPECTED_TOTAL = 39;
+const EXPECTED_TOTAL = 38;
 
 /** Export text for these data lines, with a manifest counted from them. */
 function exportText(lines: readonly string[], exportedAt = "2026-11-19T11:00:00.000Z") {
@@ -590,15 +599,18 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
   });
 
   void test("#14: losing account_member while staying in account_users is one update, not update plus revoke", () => {
-    const lines = novemberExportLines().map((value) =>
-      value.includes('"railsAccountSubscriptionId":"9004"')
-        ? value.replace(
-            '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":true',
-            '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":false',
-          )
-        : value,
-    );
-    const result = analyze(parseRailsAccessExport(lines.join("\n")), julySnapshot(), NOW_MS);
+    // Rails derives 105's `pro` from the seat, so losing it drops the pro line.
+    const lines = novemberData()
+      .filter((value) => value !== JSON.stringify(proHolder("105")))
+      .map((value) =>
+        value.includes('"railsAccountSubscriptionId":"9004"')
+          ? value.replace(
+              '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":true',
+              '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":false',
+            )
+          : value,
+      );
+    const result = analyze(parseRailsAccessExport(exportText(lines)), julySnapshot(), NOW_MS);
     const update = opFor(result.plan.ops, "membership_update", ids.membership("8005"));
     assert.ok(update && update.kind === "membership_update");
     assert.equal(update.membership.fields["hasAccountMemberRole"], false);
@@ -644,10 +656,12 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
         exportSha256: railsExport.sha256,
         database: "db_test",
         hostSha256: hostSha256("db.example.test"),
+        databaseUserSha256: databaseUserSha256("branch-user"),
       },
       exportSha256: railsExport.sha256,
       database: "db_test",
       hostSha256: hostSha256("db.example.test"),
+      databaseUserSha256: databaseUserSha256("branch-user"),
       exportedAtMs,
       nowMs: exportedAtMs + 30 * 60_000,
       maxExportAgeMs: 2 * 3_600_000,
@@ -665,6 +679,33 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     assert.match(applyRefusals({ ...base, database: "other_test" }).join(), /targets db_test/);
   });
 
+  void test("#2.9: --apply refuses a plan reviewed as another database user on the same host", () => {
+    const sha = planSha256(analysis.plan.ops);
+    const host = hostSha256("aws.connect.example.test");
+    const refusals = applyRefusals({
+      expectPlan: sha,
+      reviewedPlan: {
+        planSha256: sha,
+        exportSha256: railsExport.sha256,
+        database: "egghead",
+        hostSha256: host,
+        databaseUserSha256: databaseUserSha256("branch-user"),
+      },
+      exportSha256: railsExport.sha256,
+      database: "egghead",
+      hostSha256: host,
+      databaseUserSha256: databaseUserSha256("main-user"),
+      exportedAtMs: NOW_MS,
+      nowMs: NOW_MS,
+      maxExportAgeMs: 3_600_000,
+      freshPlanSha256: sha,
+      gate: { pass: true, failures: [] },
+    });
+    assert.equal(refusals.length, 1);
+    assert.match(refusals.join(), /different database user/);
+    assert.notEqual(databaseUserSha256("Branch-User"), databaseUserSha256("branch-user"));
+  });
+
   void test("#14: --apply refuses a plan made against another host with the same database name", () => {
     const sha = planSha256(analysis.plan.ops);
     const host = hostSha256("beta.example.test");
@@ -675,10 +716,12 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
         exportSha256: railsExport.sha256,
         database: "db",
         hostSha256: host,
+        databaseUserSha256: "u",
       },
       exportSha256: railsExport.sha256,
       database: "db",
       hostSha256: hostSha256("production.example.test"),
+      databaseUserSha256: "u",
       exportedAtMs: NOW_MS,
       nowMs: NOW_MS,
       maxExportAgeMs: 3_600_000,
@@ -698,10 +741,12 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
         exportSha256: railsExport.sha256,
         database: "db",
         hostSha256: "h",
+        databaseUserSha256: "u",
       },
       exportSha256: railsExport.sha256,
       database: "db",
       hostSha256: "h",
+      databaseUserSha256: "u",
       exportedAtMs: NOW_MS,
       maxExportAgeMs: 2 * 3_600_000,
       freshPlanSha256: sha,
@@ -1044,15 +1089,18 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
           ),
       ],
     };
-    const lines = novemberExportLines().map((value) =>
-      value.includes('"railsAccountSubscriptionId":"9004"')
-        ? value.replace(
-            '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":true',
-            '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":false',
-          )
-        : value,
-    );
-    const result = analyze(parseRailsAccessExport(lines.join("\n")), moved, NOW_MS);
+    // Rails derives 105's `pro` from the seat, so losing it drops the pro line.
+    const lines = novemberData()
+      .filter((value) => value !== JSON.stringify(proHolder("105")))
+      .map((value) =>
+        value.includes('"railsAccountSubscriptionId":"9004"')
+          ? value.replace(
+              '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":true',
+              '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":false',
+            )
+          : value,
+      );
+    const result = analyze(parseRailsAccessExport(exportText(lines)), moved, NOW_MS);
     assert.equal(
       result.largeRevoke.entitlementMoves,
       1,
@@ -1145,6 +1193,7 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
       exportSha256: railsExport.sha256,
       database: "fixture_test",
       hostSha256: hostSha256("127.0.0.1"),
+      databaseUserSha256: databaseUserSha256("root"),
       pass: "full",
       gateInputs: CTX.gateInputs,
       generatedAt: NOW_ISO,
@@ -1187,6 +1236,11 @@ function staleLegacyLine(id: string, user: string) {
   return JSON.stringify(
     backingGrant("legacy_subscription", id, user, { currentPeriodEnd: "2025-01-01" }),
   );
+}
+
+/** The two fields --previous-receipt checks. */
+function receiptStub(format: unknown, exportedAt: unknown) {
+  return { format, export: { exportedAt } };
 }
 
 /** No op of any kind names this row or membership id. */
@@ -1361,6 +1415,181 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     assert.equal(recon.grantedAnotherWaySignedInWithinWindow, 1, "108 signed in recently");
     assert.equal(recon.grantedAnotherWayWithoutProLine, 1, "114");
     assert.equal(recon.grantedAnotherWayWithoutAllAccess, 0);
+  });
+
+  void test("r7: held means nothing revoked: a dormant bare holder keeps their June seat, seat row and org row", () => {
+    // 102 lost the seat in Rails but still holds `pro`, never signed in: held bare.
+    const held = exportWith([proLine("102", null)]);
+    const result = analyze(held, julySnapshot(), NOW_MS);
+    assert.deepEqual(
+      result.plan.barePro.held.map((holder) => holder.railsUserId),
+      ["102"],
+    );
+    for (const id of [
+      ids.membership("8002"),
+      ids.seatEntitlement("9002", "8002"),
+      ids.subOrgEntitlement("9002", "7002"),
+    ]) {
+      assert.ok(noOpNames(result.plan.ops, id), id);
+    }
+    assert.ok(result.plan.heldMembershipIds.has(ids.membership("8002")));
+    assert.ok(result.plan.heldEntitlementIds.has(ids.seatEntitlement("9002", "8002")));
+    assert.ok(result.plan.heldEntitlementIds.has(ids.subOrgEntitlement("9002", "7002")));
+    const receipt = buildReceipt(held, result, CTX);
+    assert.deepEqual(receipt.revokesOnHeldUsers, { heldUsers: 2, ops: 0, users: 0, byKind: {} });
+    assert.doesNotMatch(receipt.gate.failures.join(), /over-granted|held users/);
+    assert.match(receipt.gate.failures.join(), /1 bare pro holders/);
+    // Without the hold, the same seat is revoked: the receipt join catches it.
+    const unheld = analyze(railsExport, julySnapshot(), NOW_MS);
+    assert.ok(!noOpNames(unheld.plan.ops, ids.membership("8002")));
+    const join = revokesOnHeldUsers(
+      {
+        ops: unheld.plan.ops,
+        barePro: result.plan.barePro,
+        heldLegacySubscriptions: result.plan.heldLegacySubscriptions,
+      },
+      julySnapshot(),
+    );
+    assert.equal(join.users, 1);
+    // The seat row by its user; the organization row through 102's granting seat.
+    assert.deepEqual(join.byKind, { membership_revoke: 1, entitlement_revoke: 2 });
+    // A plan that did revoke them fails the gate.
+    const leaky = buildReceipt(
+      held,
+      { ...result, plan: { ...result.plan, ops: unheld.plan.ops } },
+      CTX,
+    );
+    assert.match(leaky.gate.failures.join(), /ops revoke, expire or clear a seat for 1 held users/);
+  });
+
+  void test("r7: a held user's row is found through their linked CourseBuilder user too", () => {
+    // An owned row with no railsUserId in its metadata, on 102's linked user.
+    const snapshot = julySnapshot();
+    const row = "eh_ent_unlabelled_102";
+    const unlabelled: CbSnapshot = {
+      ...snapshot,
+      // The store reads 102 by Rails id; the default-export snapshot does not.
+      users: [
+        ...snapshot.users.filter((user) => user.id !== ids.user("102")),
+        {
+          id: ids.user("102"),
+          email: "u102@example.test",
+          legacyRailsUserId: "102",
+          matchedExportEmails: [],
+        },
+      ],
+      entitlements: [
+        ...snapshot.entitlements,
+        liveRow({
+          id: row,
+          entitlementType: "egghead_all_access_subscription",
+          userId: ids.user("102"),
+          sourceType: "rails_gift",
+          sourceId: "7790",
+          metadata: {},
+          expiresAt: null,
+        }),
+      ],
+    };
+    const held = exportWith([proLine("102", null)]);
+    const result = analyze(held, unlabelled, NOW_MS);
+    assert.ok(noOpNames(result.plan.ops, row));
+    assert.ok(result.plan.heldEntitlementIds.has(row));
+    assert.equal(buildReceipt(held, result, CTX).revokesOnHeldUsers.ops, 0);
+    // The receipt join finds the same user through the link.
+    const revoke: DeltaOp = {
+      kind: "entitlement_revoke",
+      key: `6:entitlement_revoke:${row}`,
+      entitlementId: row,
+    };
+    assert.equal(
+      revokesOnHeldUsers(
+        {
+          ops: [revoke],
+          barePro: result.plan.barePro,
+          heldLegacySubscriptions: result.plan.heldLegacySubscriptions,
+        },
+        unlabelled,
+      ).users,
+      1,
+    );
+  });
+
+  void test("r7: a held member's seat-flag clear is held too (membership_update)", () => {
+    // 105 loses account_member but keeps `pro` and never signed in: held bare.
+    const lines = novemberData().map((value) =>
+      value.includes('"railsAccountSubscriptionId":"9004"')
+        ? value.replace(
+            '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":true',
+            '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":false',
+          )
+        : value,
+    );
+    const held = parseRailsAccessExport(exportText(lines));
+    const result = analyze(held, julySnapshot(), NOW_MS);
+    assert.ok(result.plan.barePro.held.some((holder) => holder.railsUserId === "105"));
+    assert.ok(noOpNames(result.plan.ops, ids.membership("8005")));
+    assert.ok(noOpNames(result.plan.ops, ids.seatEntitlement("9004", "8005")));
+    assert.equal(buildReceipt(held, result, CTX).revokesOnHeldUsers.ops, 0);
+  });
+
+  void test("r7: a held stale-only holder's rows are kept and they get no user ops", () => {
+    // 123 (stale-only, never signed in) has a June row for an older subscription Rails
+    // no longer lists: kept, and no user_create.
+    const snapshot = julySnapshot();
+    const row = "eh_ent_june_123";
+    const june: CbSnapshot = {
+      ...snapshot,
+      entitlements: [
+        ...snapshot.entitlements,
+        liveRow({
+          id: row,
+          entitlementType: "egghead_all_access_subscription",
+          userId: ids.user("123"),
+          sourceType: "rails_legacy_subscription",
+          sourceId: "7799",
+          metadata: { railsUserId: "123", railsSubscriptionId: "7799" },
+          expiresAt: null,
+        }),
+      ],
+    };
+    const result = analyze(railsExport, june, NOW_MS);
+    assert.ok(noOpNames(result.plan.ops, row));
+    assert.ok(result.plan.heldEntitlementIds.has(row));
+    assert.ok(!result.plan.ops.some((op) => op.kind === "user_create" && op.railsUserId === "123"));
+    assert.equal(buildReceipt(railsExport, result, CTX).revokesOnHeldUsers.ops, 0);
+  });
+
+  void test("r7: rails_bare_pro_active metadata carries no sign-in date", () => {
+    const bare = exportWith([JSON.stringify(railsUser("135")), proLine("135", "2026-10-01")]);
+    const result = analyze(bare, julySnapshot(), NOW_MS);
+    const grant = opFor(
+      result.plan.ops,
+      "entitlement_grant",
+      projectionIds.entitlement("rails_bare_pro_active:135"),
+    );
+    assert.ok(grant && grant.kind === "entitlement_grant");
+    assert.equal("lastSignInOn" in grant.entitlement.metadata, false);
+    assert.equal(result.plan.barePro.active[0]?.lastSignInOn, "2026-10-01");
+  });
+
+  void test("r7: --previous-receipt must be this receipt format and not from a newer export", () => {
+    const at = railsExport.manifest.exportedAt;
+    assert.deepEqual(previousReceiptProblems(receiptStub(RECEIPT_FORMAT, at), at), []);
+    assert.deepEqual(
+      previousReceiptProblems(receiptStub(RECEIPT_FORMAT, "2026-11-01T00:00:00.000Z"), at),
+      [],
+    );
+    assert.match(
+      previousReceiptProblems(receiptStub("egghead-access-delta-receipt/v0", at), at).join(),
+      /format/,
+    );
+    assert.match(
+      previousReceiptProblems(receiptStub(RECEIPT_FORMAT, "2026-11-20T00:00:00.000Z"), at).join(),
+      /newer than this one/,
+    );
+    assert.match(previousReceiptProblems({ format: RECEIPT_FORMAT }, at).join(), /no export/);
+    assert.equal(previousReceiptProblems(null, at).length, 2);
   });
 
   void test("r6: a stale-only holder's bare-active row from an earlier run stays outside the window", () => {
@@ -1583,36 +1812,28 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     }
   });
 
-  void test("#1.1: an orphan Rails user is held: granted nothing, and their rows and seat are kept", () => {
+  void test("#1.1: an orphan Rails user (deleted in Rails) is revoked: rows and seat go, counted", () => {
     const lines = novemberData().filter((value) => !value.includes('"railsUserId":"101","email"'));
     const orphaned = parseRailsAccessExport(exportText(lines));
     assert.deepEqual(orphaned.orphanRailsUserIds, ["101"]);
     const result = analyze(orphaned, julySnapshot(), NOW_MS);
-    for (const id of [
-      ids.seatEntitlement("9001", "8001"),
-      ids.purchaseEntitlement("6009"),
-      ids.membership("8001"),
-    ]) {
-      assert.ok(
-        !result.plan.ops.some(
-          (op) =>
-            op.key.endsWith(`:${id}`) &&
-            (op.kind === "entitlement_revoke" ||
-              op.kind === "entitlement_expire" ||
-              op.kind === "membership_revoke"),
-        ),
-        id,
+    const revoking = (id: string) =>
+      result.plan.ops.some(
+        (op) =>
+          op.key.endsWith(`:${id}`) &&
+          (op.kind === "entitlement_revoke" ||
+            op.kind === "entitlement_expire" ||
+            op.kind === "membership_revoke"),
       );
+    for (const id of [ids.seatEntitlement("9001", "8001"), ids.membership("8001")]) {
+      assert.ok(revoking(id), id);
     }
+    assert.equal(result.plan.heldMembershipIds.has(ids.membership("8001")), false);
     const receipt = buildReceipt(orphaned, result, CTX);
     assert.deepEqual(receipt.orphanGrants.railsUserIds, ["101"]);
-    assert.match(receipt.gate.failures.join(), /1 Rails users have grant lines but no user line/);
-    const accepted = buildReceipt(
-      orphaned,
-      result,
-      ctx({ acceptOrphanGrants: railsIdListSha256(["101"]) }),
-    );
-    assert.equal(accepted.gate.pass, true, accepted.gate.failures.join());
+    assert.equal(receipt.orphanGrants.count, 1);
+    assert.ok(receipt.orphanGrants.rowsRevoked >= 2, String(receipt.orphanGrants.rowsRevoked));
+    assert.doesNotMatch(receipt.gate.failures.join(), /orphan|no user line/);
   });
 
   void test("#2.3: keep accepts only the kept seat's over-grant, not the same user's other held seat", () => {
@@ -1721,6 +1942,7 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
       exportSha256: railsExport.sha256,
       database: "fixture_test",
       hostSha256: hostSha256("127.0.0.1"),
+      databaseUserSha256: databaseUserSha256("root"),
       pass: "full",
       gateInputs: base,
       generatedAt: NOW_ISO,
@@ -2148,7 +2370,7 @@ void describe(
       const twice = await store.readCbSnapshot(db, railsExport, SMALL);
       assert.deepEqual(twice, once, "replaying every op leaves the same rows");
       const users = await query("SELECT COUNT(*) AS n FROM egghead_User");
-      assert.equal(users[0]?.["n"], 19, "no duplicate users");
+      assert.equal(users[0]?.["n"], 10 + EXPECTED_CLASSES.user_create, "no duplicate users");
     });
 
     void test("resume: a stopped run continues from its cursor, and a replayed batch is harmless", async () => {
@@ -2648,6 +2870,38 @@ void describe(
       assert.equal(JSON.stringify(await quarantine()), quarantineBefore);
     });
 
+    void test("rails_bare_pro_active: apply, re-read, a fresh plan is empty, and the runtime grants it", async () => {
+      await resetToJuly();
+      const bare = exportWith([JSON.stringify(railsUser("135")), proLine("135", "2026-10-01")]);
+      const row = projectionIds.entitlement("rails_bare_pro_active:135");
+      const analysis = await run.analyzeDatabase(db, bare, NOW_MS, SMALL);
+      assert.ok(opFor(analysis.plan.ops, "entitlement_grant", row));
+      const result = await applyAll(
+        analysis.plan.ops,
+        cursorFor(analysis.plan.ops),
+        { batchSize: 7 },
+        bare,
+      );
+      assert.equal(result.cursor.complete, true);
+      assert.equal(result.verify.remainingOps, 0);
+      assert.equal(result.verify.underGrantUsers, 0);
+      assert.equal(result.verify.overGrantUsers, 0);
+      const stored = await query(
+        "SELECT userId, sourceType, sourceId, metadata, expiresAt, deletedAt FROM egghead_Entitlement WHERE id = ?",
+        [row],
+      );
+      assert.equal(stored.length, 1);
+      assert.equal(stored[0]?.["userId"], ids.user("135"));
+      assert.equal(stored[0]?.["sourceType"], "rails_bare_pro_active");
+      assert.equal(stored[0]?.["sourceId"], "135");
+      assert.equal(stored[0]?.["expiresAt"], null);
+      assert.equal(stored[0]?.["deletedAt"], null);
+      assert.doesNotMatch(JSON.stringify(stored[0]?.["metadata"]), /lastSignInOn/);
+      const fresh = await run.analyzeDatabase(db, bare, NOW_MS, SMALL);
+      assert.deepEqual(fresh.plan.ops, []);
+      assert.equal((await runtimeAccess(ids.user("135"))).granted, true);
+    });
+
     void test("#2.5 and CLI paths: gate inputs bind the plan; --previous-receipt, default --out and flag errors", async () => {
       await resetToJuly();
       const dir = await mkdtemp(path.join(tmpdir(), "access-delta-cli3-"));
@@ -2718,6 +2972,33 @@ void describe(
           receiptPath,
         );
         assert.equal((await stat(path.dirname(receiptPath))).mode & 0o777, 0o700);
+
+        // --now is for dry runs only.
+        const nowApply = await cli([
+          "--export",
+          file,
+          "--out",
+          first,
+          "--apply",
+          "--confirm-database",
+          database,
+          "--now",
+          NOW_ISO,
+        ]);
+        assert.equal(nowApply.code, 64);
+        assert.match(nowApply.stderr, /--now is for dry runs only/);
+        // A previous receipt from a newer export is not an earlier run.
+        const older = await writeExportIn(dir, "older.jsonl", novemberData(), 90 * 60_000);
+        const backwards = await cliRaw([
+          "--export",
+          older,
+          "--out",
+          path.join(dir, "backwards"),
+          "--previous-receipt",
+          receiptFile,
+        ]);
+        assert.equal(backwards.code, 64);
+        assert.match(backwards.stderr, /is newer than this one/);
 
         // Writes need an explicit --out; malformed flags are usage errors.
         const noOut = await cliRaw(["--export", file, "--apply", "--confirm-database", database]);

@@ -48,7 +48,9 @@ The export needs a Rails read connection, and the dry run needs a CourseBuilder 
        [--previous-receipt "$WORK/<last run>/receipt.json"]
    ```
 
-   The analysis clock is the export's `exportedAt`, the moment Rails decided what had expired. `--now <iso>` overrides it.
+   `--previous-receipt` must be a receipt of this format whose export is not newer than this one (the same export is fine: dry runs repeat).
+
+   The analysis clock is the export's `exportedAt`, the moment Rails decided what had expired. `--now <iso>` overrides it for a dry run; `--apply` and `--resume` refuse `--now`, so a write always uses the export's clock.
 
    On beta and production, CourseBuilder is read query by query: PlanetScale caps transaction time, and a full read of every entitlement and membership does not fit in one transaction. A read that straddles a write can only produce a plan that a fresh read disagrees with, and `--apply` refuses that. On the local runtime the read runs in one `REPEATABLE READ, READ ONLY` transaction. `--snapshot-transaction` and `--no-snapshot-transaction` override the default; the receipt records which ran (`snapshotTransaction`).
 
@@ -58,12 +60,12 @@ The export needs a Rails read connection, and the dry run needs a CourseBuilder 
 
 4. Read `<out>/receipt.json`. Before trusting the total, read `changes.reasons`: a reason that covers nearly every row means the real July rows differ from what the delta expects. The flip gate is `gate.pass`, and `changes.planSha256` names the plan you reviewed. The gate fails when, after the simulated apply:
    - any Rails-granted user is still under-granted, including unresolved identities;
-   - any user is over-granted from Rails rows. An over-grant is accepted only when every owned row behind it is one a hold keeps (a stale legacy subscription, an orphan) or reaches the user through a seat ruled `keep`. A second, unruled seat for the same user still fails;
+   - any user is over-granted from Rails rows. An over-grant is accepted only when every owned row behind it is one a hold keeps (a held stale legacy subscription, a held bare or stale-only holder) or reaches the user through a seat ruled `keep`. A second, unruled seat for the same user still fails;
    - the plan does not converge;
    - there are identity conflicts (`identityConflicts`): Rails emails the column collation treats as one, emails owned by another Rails user, or held email updates. If the plan has `user_email_update` or `user_link` ops, run the identity pass (step 5) first;
    - there are held bare `pro` holders (`proCrossCheck.bareProHolders`): Rails holds `pro`, and nothing else grants the user (no special role, `basic`, member seat, membership purchase or live backing), and they did not sign in within `--bare-pro-active-days` (default 365) of the export. Recently active ones are granted instead (`bareProActive`). The receipt lists every held id, a `sample` of 20 spread across the list, and `bareProSignIn` buckets. Once a person has ruled the held ones get no paid access, pass `--accept-bare-pro <bareProHolders.sha256>`. The sha covers the exact set, so a changed list fails again even at the same size;
    - there are held stale legacy subscriptions (`heldLegacySubscriptions`): a pro holder's legacy subscription whose `currentPeriodEnd` is more than `--legacy-stale-days` (default 45) before the export, or missing, because Stripe stopped renewing it without a cancel. A holder whose only backing is such a subscription is bare `pro` with dead billing, so the same sign-in window decides: inside `--bare-pro-active-days` they get `rails_bare_pro_active` (counted in `grantedInWindow` and the first-backing count); outside it the subscription is held. A holder granted another way is on no list, and a stale-only holder is never also on the bare list. `holderSignIn` buckets every stale-only holder. Accept the held set with `--accept-stale-legacy <heldLegacySubscriptions.sha256>`;
-   - there are orphan grants (`orphanGrants`): grant lines for a Rails user with no user line. Accept with `--accept-orphan-grants <orphanGrants.sha256>`;
+   - any op revokes, expires or clears a seat for a held user (`revokesOnHeldUsers`; must read 0). The receipt joins every such op to the Rails ids it reaches, through the row's `railsUserId`, its linked user, or, for an organization row, every member whose seat flag grants. A non-zero count is a bug: do not apply;
    - a first run has a granted source type without a matching `--accept-first-backing`;
    - a held seat flag (`heldSeatFlags`) has no ruling. A seat flag on an organization with CourseBuilder-native grants (a Stripe team) is held because clearing it also cuts the native grant. Rule on each by membership id with `--held-seat-flag <membershipId>=clear` (revoke the seat; the member loses the native grant too) or `=keep` (leave it; that member's over-grant is accepted). A ruling for a membership that is not held fails the gate;
    - a gated source type more than doubled since `--previous-receipt` without `--allow-backing-growth`;
@@ -73,7 +75,9 @@ The export needs a Rails read connection, and the dry run needs a CourseBuilder 
 
    `proCrossCheck.exportHasRailsLacks` (the export grants all access, Rails has no `pro` and grants no role, `basic` or membership purchase) is reported but does not fail the gate: it is `account_member` seats whose role sync lags. `backingGrants.backedWithoutPro` counts backing for users Rails does not grant as pro; it grants nothing and never gates.
 
-   Held means kept: a held legacy subscription, a held bare holder or an orphan gets no new grant, and any existing owned row or seat for it stays. No hold ever writes, expires or revokes a `rails_legacy_pro_role` quarantine row.
+   Held means nothing revoked: a held legacy subscription, a held bare holder or a held stale-only holder gets no new grant and no user create, email sync or link, and every existing owned row and seat flag for that user stays. That covers a seat Rails no longer lists, the seat's row, and an organization row while the held user holds a granting seat in it (`policy.revokeHeldForHeldUser`, `policy.membershipRevokeHeldForHeldUser`). No hold ever writes, expires or revokes a `rails_legacy_pro_role` quarantine row.
+
+   Orphans (`orphanGrants`: grant lines for a Rails user with no user line, a user deleted in Rails) are revoked: Rails grants a deleted user nothing. The receipt counts them and the rows and seats revoked for them (`rowsRevoked`); they count toward the revoke alarm.
 
 5. **Identity pass, when step 4 reports identity conflicts.** A learner who moved from address X to Y in Rails, followed by a new Rails user signing up on X, conflicts until CourseBuilder's copy of the first learner moves to Y. Apply the identity ops (email updates and links) on their own, then plan everything again:
 
@@ -104,9 +108,9 @@ The export needs a Rails read connection, and the dry run needs a CourseBuilder 
 
    `--apply` writes exactly `$WORK/flip/plan.json`, in batches of `--batch-size` ops (default 100), one transaction each. The apply receipt records each batch's wall time (`apply.timing`). It refuses when:
    - `--expect-plan` is missing or names a different plan;
-   - the plan came from another export, or targets another database name or host (plans and receipts store a sha256 of the host, never the host);
+   - the plan came from another export, or targets another database name, host or database user (plans and receipts store sha256s of the host and user, never the values). A PlanetScale branch shares its production host, and each branch password has its own user, so a branch-reviewed plan refuses production;
    - the plan is an identity pass and `--identity-pass` is missing, or the reverse;
-   - any gate input differs from the reviewed dry run's (`plan.json` records them as `gateInputs`): `--allow-large-revoke`, `--accept-bare-pro`, `--accept-stale-legacy`, `--accept-orphan-grants`, `--accept-first-backing`, `--allow-backing-growth`, the sha256 of the `--previous-receipt` file, the `--held-seat-flag` rulings, `--max-identity-ops`, `--legacy-stale-days` and `--bare-pro-active-days`. The refusal names the fields;
+   - any gate input differs from the reviewed dry run's (`plan.json` records them as `gateInputs`): `--allow-large-revoke`, `--accept-bare-pro`, `--accept-stale-legacy`, `--accept-first-backing`, `--allow-backing-growth`, the sha256 of the `--previous-receipt` file, the `--held-seat-flag` rulings, `--max-identity-ops`, `--legacy-stale-days` and `--bare-pro-active-days`. The refusal names the fields;
    - the export is older than `--max-export-age` (default `2h`; accepts `90m`, `2h`, `1d`) or dated in the future;
    - a fresh read of CourseBuilder no longer produces the same plan;
    - the gate fails.
@@ -156,7 +160,7 @@ Expected rows reproduce the July projection's ids, keys and metadata exactly, pl
 - each enabled subscription: an organization-level `egghead_all_access_subscription`, plus one seat row per member holding the scoped `account_member` role. `expiresAt` stays null, and `currentPeriodEnd` is metadata only (lenient law). Members without the role get a membership row only. Several enabled subscriptions on one account share one membership;
 - purchases: `egghead_membership_access` for `Resource::Membership`, otherwise `egghead_playlist_access`, with the purchase's expiry (anything past MySQL's 2038 limit means no expiry). Bulk playlist pools and purchases without a sellable grant nothing;
 - backed `pro`: one `egghead_all_access_subscription` row per live backing of a user Rails grants as pro, with source type `rails_gift` (expires with the gift; an end past 2038 means no expiry), `rails_managed_subscription` or `rails_legacy_subscription` (no expiry; the period end is metadata, and `legacySubscriptionsPastPeriodEnd` counts granted ones already past it). A legacy subscription past `--legacy-stale-days` is held instead. When the backing lapses or the user loses `pro`, the row expires or is revoked like any owned row. The runtime enforces a gift's expiry because it exempts only `rails_account_subscription` rows from `expiresAt`;
-- bare `pro` (including a holder whose only backing is a stale legacy subscription) signed in within `--bare-pro-active-days`: one `egghead_all_access_subscription` row with source type `rails_bare_pro_active`, keyed on the Rails user id, no expiry, lenient law, with any stale subscription ids in `staleLegacySubscriptionIds`. The window decides only the first grant: a later run keeps the row while Rails keeps the user's `pro` role, and revokes it when the role goes.
+- bare `pro` (including a holder whose only backing is a stale legacy subscription) signed in within `--bare-pro-active-days`: one `egghead_all_access_subscription` row with source type `rails_bare_pro_active`, keyed on the Rails user id, no expiry, lenient law, with any stale subscription ids in `staleLegacySubscriptionIds`. The sign-in date stays in the plan and receipt, not the row: it would churn an update every run. The window decides only the first grant: a later run keeps the row while Rails keeps the user's `pro` role, and revokes it when the role goes.
 
 Change classes, applied in this order so a crash never removes access before granting it:
 
@@ -194,7 +198,7 @@ It holds no emails or names. It contains:
 - the gate inputs (`gateInputs`), as `plan.json` records them;
 - identity conflicts, identity-op counts and collisions, and the Rails pro-holder cross-check (every held bare `pro` id with the list's sha256 and a spread sample, the granted bare-active ids, sign-in buckets, and up to 20 ids the other way);
 - `staleLegacyReconciliation`: every user with a pro-eligible stale legacy subscription in exactly one bucket (`held`, `grantedInWindow`, `orphan`, `grantedAnotherWay` split by reason, `other`, which should be 0), and `grantedAnotherWayWithoutAllAccess`, which must be 0;
-- granted rows per gated source type, backing without `pro`, growth against `--previous-receipt`, held legacy subscriptions and orphans (each with its sha256), held seat flags with rulings, accepted over-grants by `keep` and by hold, and `afterIdentityPass` on an identity pass;
+- granted rows per gated source type, backing without `pro`, growth against `--previous-receipt`, held legacy subscriptions (with its sha256), orphans and the rows revoked for them, `revokesOnHeldUsers` (must read 0), held seat flags with rulings, accepted over-grants by `keep` and by hold, and `afterIdentityPass` on an identity pass;
 - policy counts: bulk, country-restricted, members without the role, purchases without a sellable, held revokes and held seat flags;
 - 20 sample ops spread across classes;
 - the shadow compare before and after the simulated apply, with under- and over-grant samples;
@@ -238,7 +242,10 @@ The pure suite covers:
 - bare `pro` granted inside the sign-in window, held outside it, dormant holders never touched, sign-in buckets, and an earlier row kept while `pro` stays and revoked when it goes;
 - `basic` holders and membership purchasers off the bare list;
 - quarantine rows untouched for bare, backed and stale holders;
-- an orphan Rails user held with their rows and seat kept;
+- an orphan Rails user revoked (rows and seat) and counted;
+- held means nothing revoked: a dormant bare holder keeps a June seat, its row and the organization row; a held member's seat-flag clear is held; a held stale-only holder's rows are kept with no user create; a held user's unlabelled row is found through the linked user; and the receipt join catches a plan that revokes them;
+- `rails_bare_pro_active` metadata without a sign-in date, and through MySQL: applied, re-read, a fresh plan of 0 ops, and the runtime granting it;
+- `--previous-receipt` format and export-date checks, `--now` refused with `--apply`, and a plan reviewed as another database user refused;
 - `keep` scoped to the kept seat;
 - the shadow list complete beyond any sample size, and the summary invariant;
 - gate inputs compared field by field;

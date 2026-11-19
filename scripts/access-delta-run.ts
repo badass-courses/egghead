@@ -24,6 +24,7 @@ import {
   type DeltaOp,
   type DeltaOpKind,
   type DeltaPlan,
+  membershipGrants,
   type RailsAccessExport,
   type RailsBackingGrant,
   type RailsProHolder,
@@ -417,6 +418,71 @@ export function staleLegacyReconciliation(
   };
 }
 
+/**
+ * Join every op that takes access away to the Rails ids it reaches: revokes
+ * and expiries of a row (its `railsUserId`, its user's link, or, for an
+ * organization row, every member whose seat flag grants), membership revokes,
+ * and seat-flag clears. Counted against held users (held bare `pro` and held
+ * stale-only holders); the gate fails unless both counts are 0. Written apart
+ * from the plan's own hold so a regression there shows here.
+ */
+export function revokesOnHeldUsers(
+  plan: Pick<DeltaPlan, "ops" | "barePro" | "heldLegacySubscriptions">,
+  snapshot: CbSnapshot,
+) {
+  const held = new Set([
+    ...plan.barePro.held.map((holder) => holder.railsUserId),
+    ...plan.heldLegacySubscriptions.map((entry) => entry.railsUserId),
+  ]);
+  const railsIdByUser = new Map(
+    snapshot.users.flatMap((user): [string, string][] =>
+      user.legacyRailsUserId === null ? [] : [[user.id, user.legacyRailsUserId]],
+    ),
+  );
+  const railsIdsOf = (cbUserId: string | null, railsUserId: unknown) =>
+    [
+      typeof railsUserId === "string" ? railsUserId : null,
+      cbUserId === null ? null : (railsIdByUser.get(cbUserId) ?? null),
+    ].filter((id): id is string => id !== null);
+  const membershipsById = new Map(snapshot.memberships.map((row) => [row.id, row]));
+  const entitlementsById = new Map(snapshot.entitlements.map((row) => [row.id, row]));
+  const seatHolders = (organizationId: string) =>
+    snapshot.memberships
+      .filter((row) => row.organizationId === organizationId && membershipGrants(row))
+      .flatMap((row) => railsIdsOf(row.userId, row.fields["legacyRailsUserId"]));
+  const reached = (op: DeltaOp): string[] => {
+    if (op.kind === "entitlement_revoke" || op.kind === "entitlement_expire") {
+      const row = entitlementsById.get(op.entitlementId);
+      if (!row) return [];
+      return [
+        ...railsIdsOf(row.userId, row.metadata["railsUserId"]),
+        ...(row.organizationId === null ? [] : seatHolders(row.organizationId)),
+      ];
+    }
+    if (op.kind === "membership_revoke" || op.kind === "membership_update") {
+      const id = op.kind === "membership_revoke" ? op.membershipId : op.membership.id;
+      const row = membershipsById.get(id);
+      if (!row) return [];
+      const clears =
+        op.kind === "membership_revoke" ||
+        (membershipGrants(row) && !membershipGrants(op.membership));
+      return clears ? railsIdsOf(row.userId, row.fields["legacyRailsUserId"]) : [];
+    }
+    return [];
+  };
+  const users = new Set<string>();
+  const byKind: Record<string, number> = {};
+  let ops = 0;
+  for (const op of plan.ops) {
+    const hits = reached(op).filter((id) => held.has(id));
+    if (hits.length === 0) continue;
+    ops++;
+    byKind[op.kind] = (byKind[op.kind] ?? 0) + 1;
+    for (const id of hits) users.add(id);
+  }
+  return { heldUsers: held.size, ops, users: users.size, byKind };
+}
+
 /** A held list with the sha256 a person accepts it by. */
 function heldList(ids: readonly string[]) {
   const sorted = [...ids].toSorted(byRailsId);
@@ -600,10 +666,12 @@ export interface ApplyPreconditions {
     readonly exportSha256: string;
     readonly database: string;
     readonly hostSha256: string;
+    readonly databaseUserSha256: string;
   };
   readonly exportSha256: string;
   readonly database: string;
   readonly hostSha256: string;
+  readonly databaseUserSha256: string;
   /** The manifest's `exportedAt`, and the wall clock at apply. */
   readonly exportedAtMs: number;
   readonly nowMs: number;
@@ -637,6 +705,12 @@ export function applyRefusals(input: ApplyPreconditions): string[] {
   }
   if (input.reviewedPlan.hostSha256 !== input.hostSha256) {
     refusals.push("the saved plan was computed against a different database host");
+  }
+  if (input.reviewedPlan.databaseUserSha256 !== input.databaseUserSha256) {
+    refusals.push(
+      "the saved plan was computed as a different database user (another branch's password?); " +
+        "dry-run against this database and review that plan",
+    );
   }
   const ageMs = input.nowMs - input.exportedAtMs;
   if (ageMs > input.maxExportAgeMs) {
@@ -765,6 +839,7 @@ export interface ReceiptContext {
   readonly target: {
     readonly runtime: string;
     readonly hostSha256: string;
+    readonly databaseUserSha256: string;
     readonly database: string;
   };
   /**
@@ -777,6 +852,30 @@ export interface ReceiptContext {
   readonly previousBackingCounts: Partial<Record<string, number>> | null;
 }
 
+/**
+ * Why a `--previous-receipt` file is not a plausible earlier run: another
+ * receipt format, or an export newer than this one. The same export is
+ * allowed (dry runs repeat on one export). Empty means usable.
+ */
+export function previousReceiptProblems(json: unknown, exportedAt: string): string[] {
+  const record = typeof json === "object" && json !== null ? json : {};
+  const problems: string[] = [];
+  const format = Reflect.get(record, "format");
+  if (format !== RECEIPT_FORMAT) {
+    problems.push(`format ${String(format)} is not ${RECEIPT_FORMAT}`);
+  }
+  const exported = Reflect.get(record, "export");
+  const previousAt =
+    typeof exported === "object" && exported !== null ? Reflect.get(exported, "exportedAt") : null;
+  const previousMs = typeof previousAt === "string" ? Date.parse(previousAt) : Number.NaN;
+  if (Number.isNaN(previousMs)) {
+    problems.push("it has no export.exportedAt");
+  } else if (previousMs > Date.parse(exportedAt)) {
+    problems.push(`its export (${String(previousAt)}) is newer than this one (${exportedAt})`);
+  }
+  return problems;
+}
+
 /** Gate inputs with nothing accepted: a first dry run. */
 export function defaultGateInputs(overrides: Partial<GateInputs> = {}): GateInputs {
   return Object.assign(
@@ -784,7 +883,6 @@ export function defaultGateInputs(overrides: Partial<GateInputs> = {}): GateInpu
       allowLargeRevoke: false,
       acceptBarePro: null,
       acceptStaleLegacy: null,
-      acceptOrphanGrants: null,
       acceptFirstBacking: {},
       previousReceiptSha256: null,
       allowBackingGrowth: false,
@@ -840,11 +938,13 @@ export function buildReceipt(
     ).length,
     rowsKept: plan.revokeHeldForStaleLegacy,
   };
+  // Orphans (grant lines, no user line: deleted in Rails) are revoked, not held.
   const orphans = {
-    ...heldList(railsExport.orphanRailsUserIds),
+    count: railsExport.orphanRailsUserIds.length,
     railsUserIds: railsExport.orphanRailsUserIds,
-    rowsKept: plan.revokeHeldForOrphan,
+    rowsRevoked: plan.orphanRowsRevoked,
   };
+  const heldRevokes = revokesOnHeldUsers(plan, analysis.snapshot);
   // An over-grant is accepted only when every owned row behind it is one a
   // hold keeps, or reaches the user through a seat a person ruled `keep`.
   const keptMemberships = new Set(
@@ -883,6 +983,12 @@ export function buildReceipt(
     if (under !== shadow.summary.underGrantUsers || over !== shadow.summary.overGrantUsers) {
       failures.push("the shadow summary disagrees with its user list; refusing to trust either");
     }
+  }
+  if (heldRevokes.ops > 0) {
+    failures.push(
+      `${heldRevokes.ops} ops revoke, expire or clear a seat for ${heldRevokes.users} held users ` +
+        "(revokesOnHeldUsers); held means nothing revoked. This is a bug: do not apply",
+    );
   }
   if (identityOps.tripped) {
     failures.push(
@@ -926,12 +1032,6 @@ export function buildReceipt(
         `${heldLegacy.count} legacy subscriptions held as stale (period end over ${gate.legacyStaleDays} days past, or none, ` +
           `and no sign-in within ${gate.bareProActiveDays} days; ` +
           "ids in heldLegacySubscriptions); rule on them, then pass --accept-stale-legacy with heldLegacySubscriptions.sha256",
-      );
-    }
-    if (orphans.count > 0 && orphans.sha256 !== gate.acceptOrphanGrants) {
-      failures.push(
-        `${orphans.count} Rails users have grant lines but no user line (ids in orphanGrants); ` +
-          "their grants are held; pass --accept-orphan-grants with orphanGrants.sha256",
       );
     }
     for (const [sourceType, current] of Object.entries(backing.bySourceType)) {
@@ -1013,6 +1113,7 @@ export function buildReceipt(
       gate.bareProActiveDays,
     ),
     orphanGrants: orphans,
+    revokesOnHeldUsers: heldRevokes,
     identityOps,
     heldSeatFlags: plan.heldSeatFlags,
     overGrantAcceptedBySeatFlagKeep: overGrantAccepted,
@@ -1023,6 +1124,8 @@ export function buildReceipt(
       revokeHeldForIdentity: plan.revokeHeldForIdentity,
       membershipRevokeHeldForIdentity: plan.membershipRevokeHeldForIdentity,
       membershipFlagHeldForNativeOrganization: plan.membershipFlagHeldForNativeOrganization,
+      revokeHeldForHeldUser: plan.revokeHeldForHeldUser,
+      membershipRevokeHeldForHeldUser: plan.membershipRevokeHeldForHeldUser,
     },
     samples: sampleOps(plan.ops),
     shadow: {
