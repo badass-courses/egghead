@@ -51,7 +51,27 @@ export type RailsProgressSource = {
     railsUserId: number | null;
     email: string | null;
   }): Promise<RailsUserProgress | null>;
+  /**
+   * Normalized email → the lowest Rails user id carrying it, across the whole
+   * source. Rails emails are unique, but trimming and lower-casing can make two
+   * accounts collide; only the lowest id may then match a CB user by email, so
+   * the outcome does not depend on batch boundaries.
+   */
+  emailOwners(): Promise<ReadonlyMap<string, number>>;
 };
+
+async function lowestIdPerEmail(
+  users: AsyncIterable<RailsUserProgress> | Iterable<RailsUserProgress>,
+) {
+  const owners = new Map<string, number>();
+  for await (const user of users) {
+    const email = normalizeEmail(user.email);
+    if (email === null) continue;
+    const owner = owners.get(email);
+    if (owner === undefined || user.railsUserId < owner) owners.set(email, user.railsUserId);
+  }
+  return owners;
+}
 
 export function parseRailsProgressLine(line: string, lineNumber: number): RailsUserProgress {
   let json: unknown;
@@ -139,6 +159,9 @@ export function jsonlRailsProgressSource(path: string): RailsProgressSource {
     findUser(input) {
       return findUserIdFirst(readJsonlUsers(path), input);
     },
+    emailOwners() {
+      return lowestIdPerEmail(readJsonlUsers(path));
+    },
   };
 }
 
@@ -157,6 +180,9 @@ export function memoryRailsProgressSource(
     },
     findUser(input) {
       return findUserIdFirst(sorted, input);
+    },
+    emailOwners() {
+      return lowestIdPerEmail(sorted);
     },
   };
 }

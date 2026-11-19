@@ -2,7 +2,12 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { Connection } from "mysql2/promise";
 import { randomUUID } from "node:crypto";
 
-import { canonicalLessonOrderSql } from "../content/canonical-order";
+import {
+  type CbContentCatalog,
+  loadCbContentCatalog,
+  normalizeSlug,
+  positiveInteger,
+} from "./import-catalog";
 import { normalizeEmail, type RailsProgressSource, type RailsUserProgress } from "./import-source";
 
 /**
@@ -17,175 +22,74 @@ import { normalizeEmail, type RailsProgressSource, type RailsUserProgress } from
  * - CB row already completed: keep it. CB wins, so re-runs are no-ops.
  * - CB row explicitly un-completed by the learner (see
  *   `EXPLICIT_UNCOMPLETE_SOURCES`) at or after the Rails completion: keep it.
+ * - CB row whose `fields` is not a JSON object: leave it, counted on its own.
  * - any other CB row with a null `completedAt`: mark it completed with the
  *   Rails time, keeping its `source` and recording the prior state.
  *
- * Updates are guarded by the exact `updatedAt` planning read, so a row that
- * changed between planning and writing is never overwritten. Every written row
- * carries `fields.railsImport`, which `import-rollback.ts` uses to undo a run.
+ * Every written row gets `updatedAt = at` and `fields.railsImport`:
+ * `{runId, at, action, railsUserId, rails, completedAt}`, plus
+ * `prior: {fields, updatedAt}` on updates, copied server-side so the prior JSON
+ * is never round-tripped through JavaScript. `import-rollback.ts` undoes a run
+ * from those stamps.
+ *
+ * The real table (`@coursebuilder/adapter-drizzle` `ResourceProgress`) uses
+ * `DATETIME(3)` with no `ON UPDATE`, so every timestamp here travels as a UTC
+ * string and the session must be UTC: `assertUtcSession` refuses anything else.
  */
 
 export const PROGRESS_IMPORT_SOURCE = "rails_progress_import";
 export const DEFAULT_PROGRESS_IMPORT_BATCH_SIZE = 500;
+/** Upper bound on rows written in one transaction, to keep locks and PlanetScale transactions short. */
+export const MAX_ROWS_PER_TRANSACTION = 5000;
 const WRITE_CHUNK_SIZE = 500;
 const SAMPLE_LIMIT = 10;
 const UNMAPPED_LESSON_SAMPLE_LIMIT = 25;
 
-type Db = Pick<Connection, "execute" | "beginTransaction" | "commit" | "rollback">;
-
-// ---------------------------------------------------------------------------
-// CB content catalog: Rails lesson and playlist ids → CB resource ids.
-
-export type CbContentCatalog = {
-  lessonByRailsId: ReadonlyMap<number, string>;
-  /** Only lesson rows without any legacy Rails id, so a slug never steals another lesson's row. */
-  lessonBySlug: ReadonlyMap<string, string>;
-  courseByRailsPlaylistId: ReadonlyMap<number, string>;
-  /** Only course rows without a Rails playlist id, mirroring `lessonBySlug`. */
-  courseBySlug: ReadonlyMap<string, string>;
-  stats: {
-    lessonRows: number;
-    lessonRowsWithRailsId: number;
-    duplicateLessonRowsForRailsId: number;
-    courseRows: number;
-    courseRowsWithRailsPlaylistId: number;
-  };
-};
-
-type CatalogLessonRow = RowDataPacket & {
-  id: string;
-  legacySourceId: string | null;
-  eggheadLessonId: string | null;
-  legacyRailsLessonId: string | null;
-  slug: string | null;
-};
-
-type CatalogCourseRow = RowDataPacket & {
-  id: string;
-  legacyRailsPlaylistId: string | null;
-  slug: string | null;
-};
-
-function jsonString(alias: string, key: string) {
-  return `JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.${key}'))`;
-}
-
-function positiveInteger(value: string | number | null | undefined) {
-  if (value === null || value === undefined) return null;
-  const number = Number(value);
-  return Number.isInteger(number) && number > 0 ? number : null;
-}
+export type ProgressImportDb = Pick<
+  Connection,
+  "execute" | "query" | "beginTransaction" | "commit" | "rollback"
+>;
 
 /**
- * Same precedence as the content migration (`tools/me.ts`,
- * `rowLegacyIdOrSourceId(row, "legacySourceId", "eggheadLessonId", "legacyRailsLessonId")`).
+ * Sources `uncompleteResourceForUser` stamps when a learner un-completes a
+ * lesson (`setLessonCompletion`). They are the only writers that leave a lesson
+ * row with a null `completedAt`. `syncCourseProgressForUser` also nulls course
+ * rows, as `course_lessons_incomplete`, but that is an automatic recount, not a
+ * learner decision, so it does not outrank a Rails completion.
  */
-function railsLessonIdForRow(row: CatalogLessonRow) {
-  return (
-    positiveInteger(row.legacySourceId) ??
-    positiveInteger(row.eggheadLessonId) ??
-    positiveInteger(row.legacyRailsLessonId)
+export const EXPLICIT_UNCOMPLETE_SOURCES: readonly string[] = [
+  "lesson_progress_control",
+  "lesson_player_ended",
+];
+
+export function newProgressImportRunId(now = new Date()) {
+  return `rails-import-${now.toISOString()}-${randomUUID().slice(0, 8)}`;
+}
+
+/** `YYYY-MM-DD HH:MM:SS.mmm` in UTC, the form MySQL compares exactly on a UTC session. */
+export function mysqlUtcDateTime(date: Date) {
+  return date.toISOString().replace("T", " ").replace("Z", "");
+}
+
+type UtcProbeRow = RowDataPacket & { offsetSeconds: number | string; probe: Date | string };
+
+/**
+ * Both the server session and mysql2's Date handling must be UTC, or stamps and
+ * the exact `updatedAt` guards shift by the zone offset. `openUtcConnection`
+ * gives such a connection; the app's own pool does not.
+ */
+export async function assertUtcSession(db: Pick<Connection, "query">) {
+  const [rows] = await db.query<UtcProbeRow[]>(
+    "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS offsetSeconds, CAST('2000-01-01 00:00:00' AS DATETIME) AS probe",
   );
-}
-
-function normalizeSlug(slug: string | null | undefined) {
-  const normalized = slug?.trim().toLowerCase() ?? "";
-  return normalized.length > 0 && normalized !== "null" ? normalized : null;
-}
-
-/**
- * Loads every live lesson and course once. Duplicate CB rows for one Rails
- * lesson resolve to the row the lesson pages read (`canonicalLessonOrderSql`),
- * so imported completions show where learners look and are counted once.
- */
-export async function loadCbContentCatalog(db: Db): Promise<CbContentCatalog> {
-  const [lessonRows] = await db.execute<CatalogLessonRow[]>(`
-    SELECT
-      lesson.id,
-      ${jsonString("lesson", "legacySourceId")} AS legacySourceId,
-      ${jsonString("lesson", "eggheadLessonId")} AS eggheadLessonId,
-      ${jsonString("lesson", "legacyRailsLessonId")} AS legacyRailsLessonId,
-      ${jsonString("lesson", "slug")} AS slug
-    FROM egghead_ContentResource lesson
-    WHERE lesson.deletedAt IS NULL
-      AND (
-        lesson.type = 'lesson'
-        OR (lesson.type = 'post' AND ${jsonString("lesson", "postType")} = 'lesson')
-      )
-    ORDER BY ${canonicalLessonOrderSql("lesson")}
-  `);
-
-  const [courseRows] = await db.execute<CatalogCourseRow[]>(`
-    SELECT
-      course.id,
-      ${jsonString("course", "legacyRailsPlaylistId")} AS legacyRailsPlaylistId,
-      ${jsonString("course", "slug")} AS slug
-    FROM egghead_ContentResource course
-    WHERE course.deletedAt IS NULL
-      AND (
-        course.type = 'course'
-        OR (course.type = 'post' AND ${jsonString("course", "postType")} = 'course')
-      )
-    ORDER BY
-      CASE LOWER(COALESCE(${jsonString("course", "state")}, 'published'))
-        WHEN 'published' THEN 0
-        WHEN 'retired' THEN 1
-        ELSE 2
-      END ASC,
-      course.updatedAt DESC,
-      course.id ASC
-  `);
-
-  const lessonByRailsId = new Map<number, string>();
-  const lessonBySlug = new Map<string, string>();
-  let lessonRowsWithRailsId = 0;
-  let duplicateLessonRowsForRailsId = 0;
-
-  // Rows arrive best-first, so the first row per key wins.
-  for (const row of lessonRows) {
-    const railsLessonId = railsLessonIdForRow(row);
-    if (railsLessonId !== null) {
-      lessonRowsWithRailsId += 1;
-      if (lessonByRailsId.has(railsLessonId)) duplicateLessonRowsForRailsId += 1;
-      else lessonByRailsId.set(railsLessonId, row.id);
-      continue;
-    }
-
-    const slug = normalizeSlug(row.slug);
-    if (slug !== null && !lessonBySlug.has(slug)) lessonBySlug.set(slug, row.id);
+  const row = rows[0];
+  const serverUtc = Number(row?.offsetSeconds) === 0;
+  const clientUtc = row?.probe instanceof Date && row.probe.getTime() === Date.UTC(2000, 0, 1);
+  if (!serverUtc || !clientUtc) {
+    throw new Error(
+      `Progress import needs a UTC session (server offset ${String(row?.offsetSeconds)}s, client UTC ${String(clientUtc)}). Open it with openUtcConnection.`,
+    );
   }
-
-  const courseByRailsPlaylistId = new Map<number, string>();
-  const courseBySlug = new Map<string, string>();
-  let courseRowsWithRailsPlaylistId = 0;
-
-  for (const row of courseRows) {
-    const playlistId = positiveInteger(row.legacyRailsPlaylistId);
-    if (playlistId !== null) {
-      courseRowsWithRailsPlaylistId += 1;
-      if (!courseByRailsPlaylistId.has(playlistId)) courseByRailsPlaylistId.set(playlistId, row.id);
-      // A course that already carries a Rails playlist id is never a slug
-      // fallback, so another playlist cannot complete it by slug.
-      continue;
-    }
-
-    const slug = normalizeSlug(row.slug);
-    if (slug !== null && !courseBySlug.has(slug)) courseBySlug.set(slug, row.id);
-  }
-
-  return {
-    lessonByRailsId,
-    lessonBySlug,
-    courseByRailsPlaylistId,
-    courseBySlug,
-    stats: {
-      lessonRows: lessonRows.length,
-      lessonRowsWithRailsId,
-      duplicateLessonRowsForRailsId,
-      courseRows: courseRows.length,
-      courseRowsWithRailsPlaylistId,
-    },
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +97,7 @@ export async function loadCbContentCatalog(db: Db): Promise<CbContentCatalog> {
 
 export type UserMatch =
   | { status: "matched"; cbUserId: string; matchedBy: "legacy_rails_user_id" | "email" }
-  | { status: "unmatched"; reason: "no_cb_user" | "email_conflict" };
+  | { status: "unmatched"; reason: "no_cb_user" | "email_conflict" | "email_shared" };
 
 type CbUserRow = RowDataPacket & {
   id: string;
@@ -207,12 +111,15 @@ function placeholders(count: number) {
 
 /**
  * Matches by the stored `User.legacyRailsUserId` first. Falls back to the
- * normalized email, unless that CB user already belongs to a different Rails
- * user, which is reported as `email_conflict` and never written.
+ * normalized email, with two refusals that are never written:
+ * - `email_conflict`: that CB user already belongs to a different Rails id.
+ * - `email_shared`: a lower Rails id carries the same normalized email
+ *   (`emailOwners`), so only that one may claim the CB user by email.
  */
 export async function matchCbUsers(
-  db: Db,
+  db: Pick<Connection, "execute">,
   users: readonly RailsUserProgress[],
+  emailOwners?: ReadonlyMap<string, number>,
 ): Promise<Map<number, UserMatch>> {
   const matches = new Map<number, UserMatch>();
   if (users.length === 0) return matches;
@@ -237,8 +144,8 @@ export async function matchCbUsers(
   const byEmail = new Map<string, CbUserRow>();
 
   if (emails.length > 0) {
-    // `email` uses a case-insensitive collation, so this matches the
-    // lower-cased export and still uses the unique index.
+    // `email` uses the database's case-insensitive default collation, so this
+    // matches the lower-cased export and still uses the unique index.
     const [byEmailRows] = await db.execute<CbUserRow[]>(
       `
         SELECT id, email, legacyRailsUserId
@@ -266,7 +173,7 @@ export async function matchCbUsers(
 
     const email = normalizeEmail(user.email);
     const emailMatch = email === null ? undefined : byEmail.get(email);
-    if (!emailMatch) {
+    if (!emailMatch || email === null) {
       matches.set(user.railsUserId, { status: "unmatched", reason: "no_cb_user" });
       continue;
     }
@@ -274,6 +181,12 @@ export async function matchCbUsers(
     const claimedRailsId = positiveInteger(emailMatch.legacyRailsUserId);
     if (claimedRailsId !== null && claimedRailsId !== user.railsUserId) {
       matches.set(user.railsUserId, { status: "unmatched", reason: "email_conflict" });
+      continue;
+    }
+
+    const owner = emailOwners?.get(email);
+    if (owner !== undefined && owner !== user.railsUserId) {
+      matches.set(user.railsUserId, { status: "unmatched", reason: "email_shared" });
       continue;
     }
 
@@ -298,8 +211,12 @@ export type ProgressImportReceipt = {
   startedAt: string;
   finishedAt: string | null;
   afterRailsUserId: number;
+  maxUsers: number | null;
+  /** True when the run read the whole source: no `afterRailsUserId`, no `maxUsers`, finished. */
+  fullSource: boolean;
   lastRailsUserId: number | null;
   batches: number;
+  transactions: number;
   catalog: CbContentCatalog["stats"];
   users: {
     seen: number;
@@ -307,6 +224,8 @@ export type ProgressImportReceipt = {
     matchedByEmail: number;
     unmatchedNoCbUser: number;
     unmatchedEmailConflict: number;
+    /** A lower Rails id carries the same normalized email and owns the email match. */
+    unmatchedSharedEmail: number;
     /** Per-user path only: the Rails user resolves to a different CB user. */
     matchedOtherCbUser: number;
   };
@@ -331,7 +250,9 @@ export type ProgressImportReceipt = {
     keptCbCompleted: number;
     /** The learner explicitly un-completed the resource on CB after the Rails completion. */
     keptCbNewer: number;
-    /** Two Rails rows (same user, or users sharing an email) that land on one CB row. */
+    /** The CB row's `fields` is a JSON array or scalar; left alone. */
+    keptFieldsNotObject: number;
+    /** Two Rails rows for the same user that land on one CB row. */
     collapsedDuplicates: number;
     inserted: number;
     updated: number;
@@ -340,6 +261,7 @@ export type ProgressImportReceipt = {
   samples: {
     unmatchedRailsUserIds: number[];
     emailConflictRailsUserIds: number[];
+    sharedEmailRailsUserIds: number[];
     unmappedLessons: Array<{ railsLessonId: number; slug: string | null; users: number }>;
     unmappedSeries: Array<{
       railsPlaylistId: number | null;
@@ -370,42 +292,22 @@ type Candidate = {
 
 type PlannedWrite =
   | (Candidate & { action: "insert" })
-  | (Candidate & { action: "update"; prior: { fields: unknown; updatedAt: Date } });
+  | (Candidate & { action: "update"; priorUpdatedAt: Date | null });
 
 type ExistingProgressRow = RowDataPacket & {
   userId: string;
   resourceId: string;
   completedAt: Date | null;
-  updatedAt: Date;
+  updatedAt: Date | null;
   fields: unknown;
 };
-
-/**
- * Sources `uncompleteResourceForUser` stamps when a learner un-completes a
- * lesson (`setLessonCompletion`). They are the only writers that leave a lesson
- * row with a null `completedAt`. `syncCourseProgressForUser` also nulls course
- * rows, as `course_lessons_incomplete`, but that is an automatic recount, not a
- * learner decision, so it does not outrank a Rails completion.
- */
-export const EXPLICIT_UNCOMPLETE_SOURCES: readonly string[] = [
-  "lesson_progress_control",
-  "lesson_player_ended",
-];
-
-export function newProgressImportRunId(now = new Date()) {
-  return `rails-import-${now.toISOString()}-${randomUUID().slice(0, 8)}`;
-}
-
-/** `YYYY-MM-DD HH:MM:SS.mmm` in UTC, the form MySQL compares exactly on a UTC session. */
-export function mysqlUtcDateTime(date: Date) {
-  return date.toISOString().replace("T", " ").replace("Z", "");
-}
 
 export function emptyProgressImportReceipt(input: {
   mode: "dry_run" | "apply";
   runId: string;
   source: string;
   afterRailsUserId: number;
+  maxUsers?: number;
   catalog: CbContentCatalog;
   startedAt: Date;
 }): ProgressImportReceipt {
@@ -416,8 +318,11 @@ export function emptyProgressImportReceipt(input: {
     startedAt: input.startedAt.toISOString(),
     finishedAt: null,
     afterRailsUserId: input.afterRailsUserId,
+    maxUsers: input.maxUsers ?? null,
+    fullSource: false,
     lastRailsUserId: null,
     batches: 0,
+    transactions: 0,
     catalog: input.catalog.stats,
     users: {
       seen: 0,
@@ -425,6 +330,7 @@ export function emptyProgressImportReceipt(input: {
       matchedByEmail: 0,
       unmatchedNoCbUser: 0,
       unmatchedEmailConflict: 0,
+      unmatchedSharedEmail: 0,
       matchedOtherCbUser: 0,
     },
     lessons: {
@@ -447,6 +353,7 @@ export function emptyProgressImportReceipt(input: {
       toUpdate: 0,
       keptCbCompleted: 0,
       keptCbNewer: 0,
+      keptFieldsNotObject: 0,
       collapsedDuplicates: 0,
       inserted: 0,
       updated: 0,
@@ -455,6 +362,7 @@ export function emptyProgressImportReceipt(input: {
     samples: {
       unmatchedRailsUserIds: [],
       emailConflictRailsUserIds: [],
+      sharedEmailRailsUserIds: [],
       unmappedLessons: [],
       unmappedSeries: [],
       writes: [],
@@ -503,9 +411,6 @@ function candidatesForUser(input: {
   const candidates: Candidate[] = [];
   const completedAtFor = (completedAt: Date | null) =>
     completedAt ?? user.lastActiveAt ?? input.fallbackCompletedAt;
-  const add = (candidate: Candidate) => {
-    candidates.push(candidate);
-  };
 
   for (const lesson of user.lessons) {
     receipt.lessons.seen += 1;
@@ -524,7 +429,7 @@ function candidatesForUser(input: {
       continue;
     }
 
-    add({
+    candidates.push({
       railsUserId: user.railsUserId,
       cbUserId,
       resourceId,
@@ -558,7 +463,7 @@ function candidatesForUser(input: {
       continue;
     }
 
-    add({
+    candidates.push({
       railsUserId: user.railsUserId,
       cbUserId,
       resourceId,
@@ -573,8 +478,7 @@ function candidatesForUser(input: {
 
 /**
  * One candidate per (CB user, resource), keeping the latest Rails completion.
- * Collisions come from two Rails lessons mapping to one CB row, or from two
- * Rails users whose emails normalize to the same CB user.
+ * Collisions come from two Rails lessons (or playlists) mapping to one CB row.
  */
 function collapseCandidates(candidates: readonly Candidate[], receipt: ProgressImportReceipt) {
   const byKey = new Map<string, Candidate>();
@@ -591,7 +495,7 @@ function collapseCandidates(candidates: readonly Candidate[], receipt: ProgressI
   return [...byKey.values()];
 }
 
-async function readExistingProgress(db: Db, cbUserIds: readonly string[]) {
+async function readExistingProgress(db: Pick<Connection, "execute">, cbUserIds: readonly string[]) {
   const existing = new Map<string, ExistingProgressRow>();
   if (cbUserIds.length === 0) return existing;
 
@@ -608,46 +512,51 @@ async function readExistingProgress(db: Db, cbUserIds: readonly string[]) {
   return existing;
 }
 
+function isPlainObject(value: unknown) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function existingSource(fields: unknown) {
-  if (typeof fields !== "object" || fields === null || Array.isArray(fields)) return null;
+  if (!isPlainObject(fields) || typeof fields !== "object" || fields === null) return null;
   const source: unknown = Reflect.get(fields, "source");
   return typeof source === "string" ? source : null;
 }
 
 export function classifyProgressCandidate(
   candidate: { completedAt: Date },
-  existing: { completedAt: Date | null; updatedAt: Date; fields: unknown } | undefined,
+  existing: { completedAt: Date | null; updatedAt: Date | null; fields: unknown } | undefined,
 ) {
   if (!existing) return "insert" as const;
   if (existing.completedAt !== null) return "kept_cb_completed" as const;
+  if (
+    existing.fields !== null &&
+    existing.fields !== undefined &&
+    !isPlainObject(existing.fields)
+  ) {
+    return "kept_fields_not_object" as const;
+  }
   const explicitUncomplete = EXPLICIT_UNCOMPLETE_SOURCES.includes(
     existingSource(existing.fields) ?? "",
   );
-  if (explicitUncomplete && existing.updatedAt.getTime() >= candidate.completedAt.getTime()) {
+  if (
+    explicitUncomplete &&
+    existing.updatedAt !== null &&
+    existing.updatedAt.getTime() >= candidate.completedAt.getTime()
+  ) {
     return "kept_cb_newer" as const;
   }
   return "update" as const;
 }
 
-function railsImportStamp(
-  write: PlannedWrite,
-  input: { runId: string; at: string },
-): Record<string, unknown> {
-  return {
+function railsImportStamp(write: PlannedWrite, input: { runId: string; at: string }) {
+  return JSON.stringify({
     runId: input.runId,
     at: input.at,
     action: write.action,
     railsUserId: write.railsUserId,
     rails: write.railsRef,
-    ...(write.action === "update"
-      ? {
-          prior: {
-            fields: write.prior.fields ?? null,
-            updatedAt: mysqlUtcDateTime(write.prior.updatedAt),
-          },
-        }
-      : {}),
-  };
+    completedAt: mysqlUtcDateTime(write.completedAt),
+  });
 }
 
 function chunks<T>(items: readonly T[], size: number) {
@@ -666,25 +575,12 @@ async function runInOrder<T>(items: readonly T[], run: (item: T) => Promise<void
   );
 }
 
-/**
- * Every written row gets `updatedAt = at` and `fields.railsImport = {runId, at,
- * action, ...}`. Inserts also get `source = rails_progress_import`. Updates keep
- * the row's own `source` and record `prior: {fields, updatedAt}` so a rollback
- * can restore the row exactly. A row whose `updatedAt` no longer equals
- * `railsImport.at` was touched by CB after the import, and rollback leaves it.
- *
- * `db` must be a UTC session (`openUtcConnection`): the timestamps travel as
- * UTC strings and are compared exactly.
- */
-async function writePlannedRows(
-  db: Db,
-  writes: readonly PlannedWrite[],
+async function writeInserts(
+  db: ProgressImportDb,
+  inserts: readonly PlannedWrite[],
   stamp: { runId: string; at: string },
 ) {
-  const totals = { inserted: 0, updated: 0, raceSkipped: 0 };
-  const inserts = writes.filter((write) => write.action === "insert");
-  const updates = writes.filter((write) => write.action === "update");
-
+  const totals = { inserted: 0, raceSkipped: 0 };
   await runInOrder(chunks(inserts, WRITE_CHUNK_SIZE), async (chunk) => {
     const values = chunk
       .map(
@@ -705,25 +601,31 @@ async function writePlannedRows(
         write.cbUserId,
         write.resourceId,
         mysqlUtcDateTime(write.completedAt),
-        JSON.stringify({
-          source: PROGRESS_IMPORT_SOURCE,
-          railsImport: railsImportStamp(write, stamp),
-        }),
+        `{"source":${JSON.stringify(PROGRESS_IMPORT_SOURCE)},"railsImport":${railsImportStamp(write, stamp)}}`,
         stamp.at,
       ]),
     );
     totals.inserted += result.affectedRows;
     totals.raceSkipped += chunk.length - result.affectedRows;
   });
+  return totals;
+}
 
+async function writeUpdates(
+  db: ProgressImportDb,
+  updates: readonly PlannedWrite[],
+  stamp: { runId: string; at: string },
+) {
+  const totals = { updated: 0, raceSkipped: 0 };
   await runInOrder(chunks(updates, WRITE_CHUNK_SIZE), async (chunk) => {
     const incoming = chunk
       .map(
         () =>
-          "SELECT ? AS userId, ? AS resourceId, CAST(? AS DATETIME(3)) AS completedAt, CAST(? AS DATETIME(3)) AS priorUpdatedAt, ? AS railsImport",
+          "SELECT ? AS userId, ? AS resourceId, CAST(? AS DATETIME(3)) AS completedAt, ? AS priorUpdatedAt, ? AS stamp",
       )
       .join(" UNION ALL ");
     // Optimistic guard: the row must still be exactly what planning read.
+    // `prior.fields` is copied from the row itself, server-side.
     const [result] = await db.execute<ResultSetHeader>(
       `
         UPDATE egghead_ResourceProgress progress
@@ -733,12 +635,16 @@ async function writePlannedRows(
         SET progress.fields = JSON_SET(
               COALESCE(progress.fields, JSON_OBJECT()),
               '$.railsImport',
-              CAST(incoming.railsImport AS JSON)
+              JSON_SET(
+                CAST(incoming.stamp AS JSON),
+                '$.prior',
+                JSON_OBJECT('fields', progress.fields, 'updatedAt', incoming.priorUpdatedAt)
+              )
             ),
             progress.completedAt = incoming.completedAt,
             progress.updatedAt = CAST(? AS DATETIME(3))
         WHERE progress.completedAt IS NULL
-          AND progress.updatedAt = incoming.priorUpdatedAt
+          AND progress.updatedAt <=> CAST(incoming.priorUpdatedAt AS DATETIME(3))
           AND JSON_TYPE(COALESCE(progress.fields, JSON_OBJECT())) = 'OBJECT'
       `,
       [
@@ -746,8 +652,10 @@ async function writePlannedRows(
           write.cbUserId,
           write.resourceId,
           mysqlUtcDateTime(write.completedAt),
-          write.action === "update" ? mysqlUtcDateTime(write.prior.updatedAt) : null,
-          JSON.stringify(railsImportStamp(write, stamp)),
+          write.action === "update" && write.priorUpdatedAt
+            ? mysqlUtcDateTime(write.priorUpdatedAt)
+            : null,
+          railsImportStamp(write, stamp),
         ]),
         stamp.at,
       ],
@@ -755,26 +663,66 @@ async function writePlannedRows(
     totals.updated += result.affectedRows;
     totals.raceSkipped += chunk.length - result.affectedRows;
   });
-
   return totals;
 }
 
 /**
- * Plans one batch and, when `apply` is set, writes it in one transaction.
- * `restrictToCbUserId` makes the per-user path refuse to write anyone else.
+ * Writes a batch in transactions of at most `MAX_ROWS_PER_TRANSACTION` rows.
+ * A crash between transactions leaves earlier ones committed; the resume
+ * cursor only moves after the whole batch, so a resume replays the batch and
+ * the already-written rows classify as `kept_cb_completed`.
+ */
+async function writePlannedRows(
+  db: ProgressImportDb,
+  writes: readonly PlannedWrite[],
+  receipt: ProgressImportReceipt,
+) {
+  await runInOrder(chunks(writes, MAX_ROWS_PER_TRANSACTION), async (group) => {
+    const stamp = { runId: receipt.runId, at: mysqlUtcDateTime(new Date()) };
+    await db.beginTransaction();
+    try {
+      const inserted = await writeInserts(
+        db,
+        group.filter((write) => write.action === "insert"),
+        stamp,
+      );
+      const updated = await writeUpdates(
+        db,
+        group.filter((write) => write.action === "update"),
+        stamp,
+      );
+      await db.commit();
+      receipt.transactions += 1;
+      receipt.rows.inserted += inserted.inserted;
+      receipt.rows.updated += updated.updated;
+      receipt.rows.raceSkipped += inserted.raceSkipped + updated.raceSkipped;
+    } catch (error) {
+      await db.rollback().catch(() => undefined);
+      throw error;
+    }
+  });
+}
+
+/**
+ * Plans one batch and, when `apply` is set, writes it. `restrictToCbUserId`
+ * makes the per-user path refuse to write anyone else. `onBeforeWrite` gets
+ * the CB user ids about to be written, before any transaction starts, so the
+ * caller can record a rollback manifest.
  */
 export async function importProgressBatch(input: {
-  db: Db;
+  db: ProgressImportDb;
   users: readonly RailsUserProgress[];
   catalog: CbContentCatalog;
   receipt: ProgressImportReceipt;
   unmappedLessons: UnmappedLessonTally;
   apply: boolean;
   now: Date;
+  emailOwners?: ReadonlyMap<string, number>;
   restrictToCbUserId?: string;
+  onBeforeWrite?: (input: { cbUserIds: string[]; runId: string }) => Promise<void> | void;
 }) {
   const { db, users, catalog, receipt } = input;
-  const matches = await matchCbUsers(db, users);
+  const matches = await matchCbUsers(db, users, input.emailOwners);
   const candidates: Candidate[] = [];
 
   for (const user of users) {
@@ -790,6 +738,9 @@ export async function importProgressBatch(input: {
       } else if (match?.status === "unmatched" && match.reason === "email_conflict") {
         receipt.users.unmatchedEmailConflict += 1;
         pushSample(receipt.samples.emailConflictRailsUserIds, user.railsUserId);
+      } else if (match?.status === "unmatched" && match.reason === "email_shared") {
+        receipt.users.unmatchedSharedEmail += 1;
+        pushSample(receipt.samples.sharedEmailRailsUserIds, user.railsUserId);
       } else {
         receipt.users.unmatchedNoCbUser += 1;
         pushSample(receipt.samples.unmatchedRailsUserIds, user.railsUserId);
@@ -831,17 +782,17 @@ export async function importProgressBatch(input: {
       receipt.rows.keptCbNewer += 1;
       continue;
     }
+    if (decision === "kept_fields_not_object") {
+      receipt.rows.keptFieldsNotObject += 1;
+      continue;
+    }
 
     if (decision === "insert") receipt.rows.toInsert += 1;
     else receipt.rows.toUpdate += 1;
 
     const write: PlannedWrite =
-      decision === "update" && existingRow
-        ? {
-            ...candidate,
-            action: "update",
-            prior: { fields: existingRow.fields, updatedAt: existingRow.updatedAt },
-          }
+      decision === "update"
+        ? { ...candidate, action: "update", priorUpdatedAt: existingRow?.updatedAt ?? null }
         : { ...candidate, action: "insert" };
     writes.push(write);
     pushSample(receipt.samples.writes, {
@@ -860,29 +811,21 @@ export async function importProgressBatch(input: {
 
   if (!input.apply || writes.length === 0) return;
 
-  await db.beginTransaction();
-  try {
-    const result = await writePlannedRows(db, writes, {
-      runId: receipt.runId,
-      at: mysqlUtcDateTime(new Date()),
-    });
-    await db.commit();
-    receipt.rows.inserted += result.inserted;
-    receipt.rows.updated += result.updated;
-    receipt.rows.raceSkipped += result.raceSkipped;
-  } catch (error) {
-    await db.rollback().catch(() => undefined);
-    throw error;
-  }
+  await input.onBeforeWrite?.({
+    cbUserIds: [...new Set(writes.map((write) => write.cbUserId))],
+    runId: receipt.runId,
+  });
+  await writePlannedRows(db, writes, receipt);
 }
 
 /**
  * Bulk import. Walks the source in Rails user id order, in batches, starting
  * after `afterRailsUserId`. In apply mode `onBatchCommitted` runs after each
- * batch commits, so callers can persist the resume cursor.
+ * batch commits, so callers can persist the resume cursor. Pass the same
+ * `runId` when resuming so one logical import has one runId.
  */
 export async function runProgressImport(input: {
-  db: Db;
+  db: ProgressImportDb;
   source: RailsProgressSource;
   apply: boolean;
   afterRailsUserId?: number;
@@ -891,26 +834,31 @@ export async function runProgressImport(input: {
   catalog?: CbContentCatalog;
   now?: Date;
   runId?: string;
+  onBeforeWrite?: (input: { cbUserIds: string[]; runId: string }) => Promise<void> | void;
   onBatchCommitted?: (cursor: {
     lastRailsUserId: number;
     receipt: ProgressImportReceipt;
   }) => Promise<void> | void;
 }): Promise<ProgressImportReceipt> {
+  await assertUtcSession(input.db);
   const now = input.now ?? new Date();
   const afterRailsUserId = input.afterRailsUserId ?? 0;
   const batchSize = Math.max(1, input.batchSize ?? DEFAULT_PROGRESS_IMPORT_BATCH_SIZE);
   const catalog = input.catalog ?? (await loadCbContentCatalog(input.db));
+  const emailOwners = await input.source.emailOwners();
   const receipt = emptyProgressImportReceipt({
     mode: input.apply ? "apply" : "dry_run",
     runId: input.runId ?? newProgressImportRunId(now),
     source: input.source.description,
     afterRailsUserId,
+    ...(input.maxUsers === undefined ? {} : { maxUsers: input.maxUsers }),
     catalog,
     startedAt: now,
   });
   const unmappedLessons = new UnmappedLessonTally();
   let batch: RailsUserProgress[] = [];
   let usersRead = 0;
+  let stoppedEarly = false;
 
   const flush = async () => {
     if (batch.length === 0) return;
@@ -922,6 +870,8 @@ export async function runProgressImport(input: {
       unmappedLessons,
       apply: input.apply,
       now,
+      emailOwners,
+      ...(input.onBeforeWrite ? { onBeforeWrite: input.onBeforeWrite } : {}),
     });
     const lastRailsUserId = receipt.lastRailsUserId;
     batch = [];
@@ -931,7 +881,10 @@ export async function runProgressImport(input: {
   };
 
   for await (const user of input.source.users({ afterRailsUserId })) {
-    if (input.maxUsers !== undefined && usersRead >= input.maxUsers) break;
+    if (input.maxUsers !== undefined && usersRead >= input.maxUsers) {
+      stoppedEarly = true;
+      break;
+    }
     usersRead += 1;
     batch.push(user);
     if (batch.length >= batchSize) await flush();
@@ -939,6 +892,7 @@ export async function runProgressImport(input: {
   await flush();
 
   unmappedLessons.applyTo(receipt);
+  receipt.fullSource = afterRailsUserId === 0 && !stoppedEarly && input.maxUsers === undefined;
   receipt.finishedAt = new Date().toISOString();
   return receipt;
 }
@@ -955,7 +909,8 @@ export type UserProgressImportResult =
 /**
  * Imports one CB user's Rails progress from `source`, using the same matching
  * and write rules as the bulk import. It looks the learner up by the CB user's
- * stored Rails id, then by email, and writes only to that CB user.
+ * stored Rails id, then by email, and writes only to that CB user. The session
+ * must be UTC (`openUtcConnection`); the app's pool is refused.
  *
  * Wiring this into sign-in needs an indexed source; `jsonlRailsProgressSource`
  * scans a file and is a stub for that path.
@@ -963,7 +918,7 @@ export type UserProgressImportResult =
 export async function importProgressForUser(
   userId: string,
   options: {
-    db: Db;
+    db: ProgressImportDb;
     source: RailsProgressSource;
     apply: boolean;
     catalog?: CbContentCatalog;
@@ -971,6 +926,7 @@ export async function importProgressForUser(
     runId?: string;
   },
 ): Promise<UserProgressImportResult> {
+  await assertUtcSession(options.db);
   const [userRows] = await options.db.execute<CbUserRow[]>(
     `
       SELECT id, email, legacyRailsUserId
@@ -1009,6 +965,7 @@ export async function importProgressForUser(
     unmappedLessons,
     apply: options.apply,
     now,
+    emailOwners: await options.source.emailOwners(),
     restrictToCbUserId: user.id,
   });
 

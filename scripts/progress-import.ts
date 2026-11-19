@@ -1,21 +1,20 @@
 /**
  * Rails → CourseBuilder progress import.
  *
- * Dry run (default): reads the export and the target CB database, writes nothing,
- * prints a receipt with counts and samples.
+ * 1. Dry run over the whole file (writes nothing, prints a receipt):
  *
- *   pnpm progress:import --source /path/rails-progress.jsonl
+ *      pnpm progress:import --source rails-progress.jsonl --receipt dry-run.json
  *
- * Apply: writes CB-native completion rows in batches and saves a resume cursor
- * after every committed batch. Re-running with the same cursor file resumes.
- * The receipt's `runId` is what `pnpm progress:import:rollback` undoes.
+ * 2. Apply. Needs that full-file dry-run receipt for the same file and a cursor
+ *    file. The runId is printed to stderr at start and saved in the cursor; a
+ *    resume with the same cursor reuses it, so one import has one runId. Before
+ *    each write the CB user ids go to the manifest (`<cursor>.manifest.jsonl`),
+ *    which `pnpm progress:import:rollback` uses to undo the run.
  *
- *   pnpm progress:import --source /path/rails-progress.jsonl --apply \
- *     --cursor /path/progress-import.cursor.json --receipt /path/receipt.json
+ *      pnpm progress:import --source rails-progress.jsonl --apply \
+ *        --expect-dry-run dry-run.json --cursor import.cursor.json --receipt apply.json
  *
- * One user (the on-demand path):
- *
- *   pnpm progress:import --source /path/rails-progress.jsonl --user <cbUserId>
+ * 3. One user (the on-demand path): add `--user <cbUserId>`.
  *
  * The target database comes from DATABASE_URL and the app's runtime guard
  * (`EGGHEAD_RUNTIME`). Local runs need a local `_test` or `_local` MySQL. Beta
@@ -23,24 +22,22 @@
  * EGGHEAD_PROGRESS_IMPORT_APPLY_APPROVED=true. Production is refused.
  */
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, createReadStream, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { z } from "zod";
 
 import {
   DEFAULT_PROGRESS_IMPORT_BATCH_SIZE,
   importProgressForUser,
+  newProgressImportRunId,
   runProgressImport,
 } from "../apps/web/src/progress/import";
+import {
+  assertDryRunReceiptMatches,
+  type ImportCursor,
+  parseImportCursor,
+} from "../apps/web/src/progress/import-cli";
 import { openProgressImportDatabase } from "../apps/web/src/progress/import-db";
 import { jsonlRailsProgressSource } from "../apps/web/src/progress/import-source";
-
-const cursorSchema = z.object({
-  lastRailsUserId: z.number().int().nonnegative(),
-  source: z.string(),
-  sourceSha256: z.string(),
-  updatedAt: z.string(),
-});
 
 function nonNegativeIntegerOption(name: string, value: string | undefined) {
   if (value === undefined) return undefined;
@@ -58,21 +55,6 @@ async function sha256File(path: string) {
   return hash.digest("hex");
 }
 
-function readCursor(path: string) {
-  if (!existsSync(path)) return null;
-  let json: unknown;
-  try {
-    json = JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    throw new Error(`Cursor file ${path} is not valid JSON. Fix or move it; nothing was written.`);
-  }
-  const parsed = cursorSchema.safeParse(json);
-  if (!parsed.success) {
-    throw new Error(`Cursor file ${path} is not a progress import cursor. Nothing was written.`);
-  }
-  return parsed.data;
-}
-
 function writeJson(path: string, value: unknown) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
@@ -82,7 +64,9 @@ async function main() {
     options: {
       source: { type: "string" },
       apply: { type: "boolean", default: false },
+      "expect-dry-run": { type: "string" },
       cursor: { type: "string" },
+      manifest: { type: "string" },
       after: { type: "string" },
       "batch-size": { type: "string" },
       "max-users": { type: "string" },
@@ -101,53 +85,95 @@ async function main() {
   }
 
   const source = jsonlRailsProgressSource(values.source);
+  const sourceSha256 = await sha256File(values.source);
+
+  if (values.apply) {
+    if (!values["expect-dry-run"]) {
+      throw new Error(
+        "--apply needs --expect-dry-run <receipt> from a finished dry run over this whole file.",
+      );
+    }
+    assertDryRunReceiptMatches(readFileSync(values["expect-dry-run"], "utf8"), sourceSha256);
+    if (!values.user && !values.cursor) {
+      throw new Error(
+        "--apply needs --cursor <file> so the runId and resume point survive a crash.",
+      );
+    }
+  }
+
   const { db, target } = await openProgressImportDatabase({ apply: values.apply });
 
   try {
     if (values.user) {
+      const runId = newProgressImportRunId();
+      console.error(`progress import runId ${runId}`);
       const result = await importProgressForUser(values.user, {
         db,
         source,
         apply: values.apply,
+        runId,
       });
-      const output = { target, ...result };
+      const output = { target, sourceSha256, ...result };
       if (values.receipt) writeJson(values.receipt, output);
       console.log(JSON.stringify(output, null, 2));
       return;
     }
 
-    const sourceSha256 = await sha256File(values.source);
-    const cursor = values.cursor ? readCursor(values.cursor) : null;
+    const cursor =
+      values.cursor && existsSync(values.cursor)
+        ? parseImportCursor(readFileSync(values.cursor, "utf8"), `Cursor file ${values.cursor}`)
+        : null;
     if (cursor && cursor.sourceSha256 !== sourceSha256) {
       throw new Error(
         `Cursor ${values.cursor} belongs to a different export (sha256 ${cursor.sourceSha256.slice(0, 12)}…, this file ${sourceSha256.slice(0, 12)}…). Use a new cursor file per export.`,
       );
     }
+
+    const runId = cursor?.runId ?? newProgressImportRunId();
     const afterRailsUserId =
       nonNegativeIntegerOption("after", values.after) ?? cursor?.lastRailsUserId ?? 0;
     const maxUsers = nonNegativeIntegerOption("max-users", values["max-users"]);
-    if (cursor) console.error(`resuming after railsUserId ${cursor.lastRailsUserId}`);
+    const manifestPath =
+      values.manifest ?? (values.cursor ? `${values.cursor}.manifest.jsonl` : undefined);
+    console.error(
+      cursor
+        ? `progress import runId ${runId} (resuming after railsUserId ${afterRailsUserId})`
+        : `progress import runId ${runId}`,
+    );
+
+    const saveCursor = (lastRailsUserId: number) => {
+      if (!values.cursor) return;
+      const next: ImportCursor = {
+        runId,
+        lastRailsUserId,
+        source: source.description,
+        sourceSha256,
+        updatedAt: new Date().toISOString(),
+      };
+      writeJson(values.cursor, next);
+    };
+    // Persist the runId before anything is written.
+    if (values.apply) saveCursor(afterRailsUserId);
 
     const receipt = await runProgressImport({
       db,
       source,
       apply: values.apply,
+      runId,
       afterRailsUserId,
       batchSize:
         nonNegativeIntegerOption("batch-size", values["batch-size"]) ??
         DEFAULT_PROGRESS_IMPORT_BATCH_SIZE,
       ...(maxUsers === undefined ? {} : { maxUsers }),
-      onBatchCommitted: ({ lastRailsUserId, receipt: progress }) => {
-        if (values.cursor) {
-          writeJson(values.cursor, {
-            lastRailsUserId,
-            source: source.description,
-            sourceSha256,
-            updatedAt: new Date().toISOString(),
-          });
+      onBeforeWrite: ({ cbUserIds }) => {
+        if (manifestPath) {
+          appendFileSync(manifestPath, `${JSON.stringify({ runId, cbUserIds })}\n`, "utf8");
         }
+      },
+      onBatchCommitted: ({ lastRailsUserId, receipt: progress }) => {
+        saveCursor(lastRailsUserId);
         console.error(
-          `batch ${progress.batches}: through railsUserId ${lastRailsUserId}, inserted ${progress.rows.inserted}, updated ${progress.rows.updated}`,
+          `runId ${runId} batch ${progress.batches}: through railsUserId ${lastRailsUserId}, inserted ${progress.rows.inserted}, updated ${progress.rows.updated}`,
         );
       },
     });
