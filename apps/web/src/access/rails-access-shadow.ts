@@ -34,8 +34,17 @@ function addGrant(map: GrantMap, key: string, why: string) {
   else map.set(key, [why]);
 }
 
+/** An all-access grant the plan adds outside the export's own lines (bare-active `pro`). */
+export interface ExtraRailsGrant {
+  readonly railsUserId: string;
+  readonly why: string;
+}
+
 /** Rails grant keys per Rails user id. */
-export function railsGrantsByUser(railsExport: RailsAccessExport): Map<string, GrantMap> {
+export function railsGrantsByUser(
+  railsExport: RailsAccessExport,
+  extra: readonly ExtraRailsGrant[] = [],
+): Map<string, GrantMap> {
   const result = new Map<string, GrantMap>();
   const grants = (railsUserId: string) => {
     let map = result.get(railsUserId);
@@ -70,6 +79,7 @@ export function railsGrantsByUser(railsExport: RailsAccessExport): Map<string, G
       `backed pro: ${grant.source.replace("_", " ")} ${grant.railsSourceId}`,
     );
   }
+  for (const grant of extra) addGrant(grants(grant.railsUserId), ALL_ACCESS, grant.why);
   for (const purchase of railsExport.purchases) {
     if (!purchase.sellableType || !purchase.sellableId) continue;
     if (purchase.sellableType === "Resource::Membership") {
@@ -145,33 +155,52 @@ function cbGrantKey(row: CbEntitlement): string | null {
   return `sellable:${sellableType}:${sellableId}`;
 }
 
+/** One owned row behind a grant key: held directly (`membershipId` null) or through a seat. */
+export interface OwnedGrantPath {
+  readonly key: string;
+  readonly entitlementId: string;
+  readonly membershipId: string | null;
+}
+
 interface CbGrant {
   readonly why: string[];
   railsOwned: boolean;
+  readonly ownedPaths: OwnedGrantPath[];
 }
 
 function cbGrantsForUser(index: SnapshotIndex, userId: string): Map<string, CbGrant> {
-  const rows = new Map<string, CbEntitlement>();
-  for (const row of index.byUser.get(userId) ?? []) rows.set(row.id, row);
+  const reached: { row: CbEntitlement; membershipId: string | null }[] = [];
+  const seen = new Set<string>();
+  const reach = (row: CbEntitlement, membershipId: string | null) => {
+    const id = `${row.id}|${membershipId ?? ""}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    reached.push({ row, membershipId });
+  };
+  for (const row of index.byUser.get(userId) ?? []) reach(row, null);
   for (const membership of index.grantingMemberships.get(userId) ?? []) {
     if (!membership.organizationId) continue;
     for (const row of index.byOrganization.get(membership.organizationId) ?? [])
-      rows.set(row.id, row);
+      reach(row, membership.id);
   }
 
   const grants = new Map<string, CbGrant>();
-  for (const row of rows.values()) {
+  const whyAdded = new Set<string>();
+  for (const { row, membershipId } of reached) {
     const key = cbGrantKey(row);
     if (!key) continue;
     const owned = DELTA_OWNED_SOURCE_TYPES.has(row.sourceType);
-    const why = `${row.entitlementType} via ${row.sourceType} ${row.sourceId}`;
-    const grant = grants.get(key);
-    if (grant) {
-      grant.why.push(why);
-      grant.railsOwned ||= owned;
-    } else {
-      grants.set(key, { why: [why], railsOwned: owned });
+    let grant = grants.get(key);
+    if (!grant) {
+      grant = { why: [], railsOwned: false, ownedPaths: [] };
+      grants.set(key, grant);
     }
+    if (!whyAdded.has(`${key}|${row.id}`)) {
+      whyAdded.add(`${key}|${row.id}`);
+      grant.why.push(`${row.entitlementType} via ${row.sourceType} ${row.sourceId}`);
+    }
+    grant.railsOwned ||= owned;
+    if (owned) grant.ownedPaths.push({ key, entitlementId: row.id, membershipId });
   }
   return grants;
 }
@@ -184,6 +213,8 @@ export interface UserShadow {
   readonly cbSays: Record<string, readonly string[]>;
   readonly underGrant: readonly string[];
   readonly overGrant: readonly string[];
+  /** Every owned row (and the seat it came through) behind each over-grant key. */
+  readonly overGrantPaths: readonly OwnedGrantPath[];
   readonly cbNativeOnly: readonly string[];
 }
 
@@ -217,15 +248,19 @@ export function compareShadow(
   snapshot: CbSnapshot,
   identities: ReadonlyMap<string, IdentityOutcome>,
   nowMs: number,
+  extra: readonly ExtraRailsGrant[] = [],
 ): ShadowResult {
-  const railsGrants = railsGrantsByUser(railsExport);
+  const railsGrants = railsGrantsByUser(railsExport, extra);
   const index = indexSnapshot(snapshot, nowMs);
   const railsByCbUser = new Map<string, string[]>();
   const users: UserShadow[] = [];
   const missingIdentityByReason: Record<string, number> = {};
 
+  const orphans = new Set(railsExport.orphanRailsUserIds);
   for (const [railsUserId, grants] of railsGrants) {
     if (grants.size === 0) continue;
+    // No Rails user line: nobody to grant. Held and reported by the plan.
+    if (orphans.has(railsUserId)) continue;
     const outcome = identities.get(railsUserId);
     if (!outcome || outcome.kind === "unresolved") {
       const reason = outcome?.kind === "unresolved" ? outcome.reason : "no_user_line";
@@ -238,6 +273,7 @@ export function compareShadow(
         cbSays: {},
         underGrant: [...grants.keys()].toSorted(),
         overGrant: [],
+        overGrantPaths: [],
         cbNativeOnly: [],
       });
       continue;
@@ -288,6 +324,7 @@ export function compareShadow(
       cbSays: toRecord(new Map([...actual].map(([key, grant]) => [key, grant.why]))),
       underGrant,
       overGrant,
+      overGrantPaths: overGrant.flatMap((key) => actual.get(key)?.ownedPaths ?? []),
       cbNativeOnly,
     });
   }

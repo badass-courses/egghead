@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import type { DeltaOp } from "./rails-access-delta";
 
-export const PLAN_FORMAT = "egghead-access-delta-plan/v3";
+export const PLAN_FORMAT = "egghead-access-delta-plan/v4";
 export const CURSOR_FORMAT = "egghead-access-delta-cursor/v1";
 
 const jsonRecord = z.record(z.string(), z.unknown());
@@ -94,6 +94,49 @@ const deltaOp = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("entitlement_expire"), key: z.string(), entitlementId: z.string() }),
 ]);
 
+/**
+ * Every flag that changes the gate's verdict or the plan. The dry run records
+ * them; `--apply` and `--resume` refuse unless they pass the same values.
+ */
+const gateInputsSchema = z.object({
+  allowLargeRevoke: z.boolean(),
+  /** sha256 of the accepted bare-`pro` Rails id list. */
+  acceptBarePro: z.string().nullable(),
+  /** sha256 of the accepted held legacy-subscription id list. */
+  acceptStaleLegacy: z.string().nullable(),
+  /** sha256 of the accepted orphan Rails user id list. */
+  acceptOrphanGrants: z.string().nullable(),
+  /** First-run backing counts a person accepted, per source type. */
+  acceptFirstBacking: z.record(z.string(), z.number().int().nonnegative()),
+  /** sha256 of the `--previous-receipt` file's bytes. */
+  previousReceiptSha256: z.string().nullable(),
+  allowBackingGrowth: z.boolean(),
+  /** `--held-seat-flag` rulings by membership id. */
+  seatFlagRulings: z.record(z.string(), z.enum(["clear", "keep"])),
+  maxIdentityOps: z.number().int().nonnegative(),
+  legacyStaleDays: z.number().int().positive(),
+  bareProActiveDays: z.number().int().nonnegative(),
+});
+
+export type GateInputs = z.infer<typeof gateInputsSchema>;
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const entries = Object.entries(value).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Names of the gate inputs that differ (key order inside records ignored). */
+export function gateInputsDiff(reviewed: GateInputs, now: GateInputs): string[] {
+  const fields = Object.keys(gateInputsSchema.shape).filter(
+    (field): field is keyof GateInputs => field in reviewed,
+  );
+  return fields.filter((field) => canonical(reviewed[field]) !== canonical(now[field]));
+}
+
 const planFile = z.object({
   format: z.literal(PLAN_FORMAT),
   exportSha256: z.string(),
@@ -102,8 +145,8 @@ const planFile = z.object({
   hostSha256: z.string(),
   /** `identity` plans hold only email updates and links (see --identity-pass). */
   pass: z.enum(["full", "identity"]),
-  /** `--held-seat-flag` rulings the plan was made with; apply must pass the same. */
-  seatFlagRulings: z.record(z.string(), z.enum(["clear", "keep"])),
+  /** The gate inputs the plan was reviewed with; apply and resume must pass the same. */
+  gateInputs: gateInputsSchema,
   generatedAt: z.string(),
   planSha256: z.string(),
   ops: z.array(deltaOp),
@@ -140,7 +183,7 @@ export function serializePlan(input: {
   database: string;
   hostSha256: string;
   pass: "full" | "identity";
-  seatFlagRulings: Record<string, "clear" | "keep">;
+  gateInputs: GateInputs;
   generatedAt: string;
   ops: readonly DeltaOp[];
 }): string {
@@ -150,7 +193,7 @@ export function serializePlan(input: {
     database: input.database,
     hostSha256: input.hostSha256,
     pass: input.pass,
-    seatFlagRulings: input.seatFlagRulings,
+    gateInputs: input.gateInputs,
     generatedAt: input.generatedAt,
     planSha256: planSha256(input.ops),
     ops: input.ops,

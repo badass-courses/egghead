@@ -303,7 +303,7 @@ function line(value: Record<string, unknown>) {
   return JSON.stringify(value);
 }
 
-function railsUser(rails: string, email = `u${rails}@example.test`) {
+export function railsUser(rails: string, email = `u${rails}@example.test`) {
   return {
     kind: "user",
     railsUserId: rails,
@@ -400,8 +400,12 @@ function purchase(
  *   101 expired purchase              6009 (July row) expired in September
  *   120 backed pro: active gift       gift 7701 until March 2027
  *   121 backed pro: managed sub       managed subscription 7702 is active
- *   122 backed pro: legacy sub        legacy subscription 7703, stale period end,
- *                                     and Rails already stripped its `pro` role
+ *   122 backed pro: legacy sub        legacy subscription 7703, period end 18 days
+ *                                     past (inside the 45-day window): granted
+ *   123 held: stale legacy sub        legacy subscription 7704, period end in
+ *                                     September: held, not granted
+ *   manifest backedWithoutPro         backing for users without `pro`: counted
+ *                                     in SQL, never exported
  */
 export function proHolder(railsUserId: string) {
   return { kind: "pro_holder", railsUserId };
@@ -441,6 +445,7 @@ export function novemberExportLines() {
     railsUser("120"),
     railsUser("121"),
     railsUser("122"),
+    railsUser("123"),
   ];
   const roleGrants = [{ kind: "role_grant", railsUserId: "108", roleName: "lifetime_subscriber" }];
   const basicGrants = [{ kind: "basic_grant", railsUserId: "114" }];
@@ -474,15 +479,27 @@ export function novemberExportLines() {
   ];
   // Rails' own decision: everyone ProStatusChecker would give `pro` (special
   // roles and account_member seats on enabled subscriptions).
-  // 122 is backed but already lost `pro` at a magic-link sign-in: still granted.
-  const proHolders = ["101", "103", "105", "106", "108", "110", "115", "120", "121"].map(
-    (railsUserId) => proHolder(railsUserId),
-  );
+  // Backing grants only pro holders (120-123 all hold `pro`).
+  const proHolders = [
+    "101",
+    "103",
+    "105",
+    "106",
+    "108",
+    "110",
+    "115",
+    "120",
+    "121",
+    "122",
+    "123",
+  ].map((railsUserId) => proHolder(railsUserId));
   const backingGrants = [
     backingGrant("gift", "7701", "120", { expiresAt: "2027-03-01 00:00:00" }),
     backingGrant("managed_subscription", "7702", "121"),
-    // Stripe stopped renewing it: the period end is past, the subscription is active.
-    backingGrant("legacy_subscription", "7703", "122", { currentPeriodEnd: "2026-10-01" }),
+    // Lenient: the period end is past, but inside the stale window.
+    backingGrant("legacy_subscription", "7703", "122", { currentPeriodEnd: "2026-11-01" }),
+    // Stripe stopped renewing it without a cancel: held.
+    backingGrant("legacy_subscription", "7704", "123", { currentPeriodEnd: "2026-09-01" }),
   ];
   const manifest = {
     kind: "manifest",
@@ -497,6 +514,7 @@ export function novemberExportLines() {
       pro_holder: proHolders.length,
       backing_grant: backingGrants.length,
     },
+    backedWithoutPro: { gift: 0, managed_subscription: 2, legacy_subscription: 1 },
   };
   return [
     ...users,

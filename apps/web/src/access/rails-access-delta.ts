@@ -18,13 +18,14 @@ export const ACCESS_DELTA_LAW = "adr-0006-lenient-status";
 
 const SUBSCRIPTION_SOURCE_TYPE = "rails_account_subscription";
 const SUBSCRIPTION_ACCESS_LAW = "lenient_status_v1";
+const GIFT_ACCESS_LAW = "gift_expires_at_v1";
 const ROLE_SOURCE_TYPE = "rails_user_role";
 const PURCHASE_SOURCE_TYPE = "rails_sellable_purchase";
 const BASIC_SOURCE_TYPE = "rails_legacy_basic_role";
 /**
- * Backed legacy `pro` (ADR-0006 lenient): live backing Rails' ProStatusChecker
- * ignores but Subscription#hard_cancel! honours. Projected on the backing, not
- * on the `pro` role, so users Rails already stripped get access back.
+ * Backed legacy `pro`: live backing Rails' ProStatusChecker ignores but
+ * Subscription#hard_cancel! honours. Grants follow Rails `is_pro?` today: the
+ * backing grants only users Rails grants as pro, and sets the row's expiry.
  */
 export const BACKING_SOURCE_TYPES = {
   gift: "rails_gift",
@@ -32,6 +33,11 @@ export const BACKING_SOURCE_TYPES = {
   legacy_subscription: "rails_legacy_subscription",
 } as const;
 export type BackingSourceType = (typeof BACKING_SOURCE_TYPES)[keyof typeof BACKING_SOURCE_TYPES];
+/** Bare `pro` holders who signed in recently: granted on the role alone. */
+export const BARE_PRO_ACTIVE_SOURCE_TYPE = "rails_bare_pro_active";
+/** Granted source types a first run must accept by count, and that alarm on growth. */
+export type GatedSourceType = BackingSourceType | typeof BARE_PRO_ACTIVE_SOURCE_TYPE;
+export const DEFAULT_BARE_PRO_ACTIVE_DAYS = 365;
 const BASIC_ENTITLEMENT_TYPE = "egghead_basic_legacy_access";
 const BASIC_ACCESS_LAW = "adr_0007_legacy_basic_role_access_projection";
 const ALL_ACCESS_TYPE = "egghead_all_access_subscription";
@@ -50,6 +56,7 @@ export const DELTA_OWNED_SOURCE_TYPES: ReadonlySet<string> = new Set([
   PURCHASE_SOURCE_TYPE,
   BASIC_SOURCE_TYPE,
   ...Object.values(BACKING_SOURCE_TYPES),
+  BARE_PRO_ACTIVE_SOURCE_TYPE,
 ]);
 
 const RAILS_MEMBERSHIP_SOURCES: ReadonlySet<string> = new Set([
@@ -134,6 +141,8 @@ const purchaseLine = z.object({
 const proHolderLine = z.object({
   kind: z.literal("pro_holder"),
   railsUserId: z.string().min(1),
+  /** `GREATEST(current_sign_in_at, last_sign_in_at)` as a UTC date; null if never. */
+  lastSignInOn: nullableText.default(null),
 });
 
 /**
@@ -167,6 +176,10 @@ const manifestLine = z.object({
   format: z.literal(RAILS_ACCESS_EXPORT_FORMAT),
   exportedAt: z.string(),
   counts: manifestCounts,
+  /** Live backing for users Rails does not grant as pro: counted in SQL, never exported. */
+  backedWithoutPro: z
+    .object({ gift: count, managed_subscription: count, legacy_subscription: count })
+    .optional(),
 });
 
 const exportLine = z.discriminatedUnion("kind", [
@@ -200,6 +213,12 @@ export interface RailsAccessExport {
   readonly purchases: readonly RailsPurchase[];
   readonly proHolders: readonly RailsProHolder[];
   readonly backingGrants: readonly RailsBackingGrant[];
+  /**
+   * Rails user ids that grant lines reference but no user line carries (for
+   * example a user row deleted under its gift). Held: granted nothing, and
+   * their existing CourseBuilder rows are kept.
+   */
+  readonly orphanRailsUserIds: readonly string[];
 }
 
 export class RailsExportError extends Error {
@@ -316,11 +335,9 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
     ...backingGrants.map((grant) => grant.railsUserId),
     ...subscriptions.flatMap((sub) => sub.members.map((member) => member.railsUserId)),
   ];
-  for (const railsUserId of referenced) {
-    if (!userIds.has(railsUserId)) {
-      throw new RailsExportError(`Rails user ${railsUserId} is referenced but has no user line`);
-    }
-  }
+  const orphanRailsUserIds = [...new Set(referenced.filter((id) => !userIds.has(id)))].toSorted(
+    (a, b) => Number(a) - Number(b) || a.localeCompare(b),
+  );
 
   return {
     sha256,
@@ -332,6 +349,7 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
     purchases,
     proHolders,
     backingGrants,
+    orphanRailsUserIds,
   };
 }
 
@@ -760,8 +778,8 @@ export interface PolicyCounts {
   subscriptionsWithoutAccount: number;
   purchasesWithoutSellable: number;
   unresolvedGrantRows: number;
-  /** Projected backed-`pro` rows per source type (each alarms on growth). */
-  backingGrants: Record<BackingSourceType, number>;
+  /** Projected backed-`pro` and bare-active rows per source type (each alarms on growth). */
+  backingGrants: Record<GatedSourceType, number>;
 }
 
 export interface ExpectedProjection {
@@ -820,9 +838,148 @@ function basicEntitlement(grant: RailsBasicGrant, userId: string): ExpectedEntit
   };
 }
 
+function backingKey(grant: RailsBackingGrant) {
+  return `${BACKING_SOURCE_TYPES[grant.source]}:${grant.railsSourceId}:${grant.railsUserId}`;
+}
+
+/** Days past its period end after which a legacy subscription is held, not granted. */
+export const DEFAULT_LEGACY_STALE_DAYS = 45;
+
+/** A legacy subscription held because Stripe stopped renewing it (or never dated it). */
+export interface HeldLegacySubscription {
+  readonly railsSourceId: string;
+  readonly railsUserId: string;
+  readonly currentPeriodEnd: string | null;
+  readonly reason: "period_end_stale" | "no_period_end";
+}
+
+/**
+ * Rails users whose lessons Rails unlocks as pro today: the global `pro` role,
+ * or a role `Ability#lesson_permissions` treats the same (`is_basic?`,
+ * `is_instructor?` and the other special roles the export carries).
+ */
+export function railsProEligible(
+  railsExport: Pick<RailsAccessExport, "proHolders" | "roleGrants" | "basicGrants">,
+): ReadonlySet<string> {
+  return new Set([
+    ...railsExport.proHolders.map((holder) => holder.railsUserId),
+    ...railsExport.roleGrants.map((grant) => grant.railsUserId),
+    ...railsExport.basicGrants.map((grant) => grant.railsUserId),
+  ]);
+}
+
+/**
+ * Split backing into what grants, what is held and what only counts. Backing
+ * grants only users Rails grants as pro today (`railsProEligible`): it explains
+ * the grant and sets its expiry, it never widens it. Backing for anyone else
+ * is `withoutPro` (counted, not granted). A pro-eligible legacy subscription
+ * whose `currentPeriodEnd` is more than `staleDays` before `nowMs` (or
+ * missing) is held: Rails' active scope only checks `cancelled_on` and
+ * `willCancelAfterPeriod`, so a subscription Stripe stopped renewing without a
+ * cancel still looks active.
+ */
+export function partitionBackingGrants(
+  grants: readonly RailsBackingGrant[],
+  proEligible: ReadonlySet<string>,
+  nowMs: number,
+  staleDays: number = DEFAULT_LEGACY_STALE_DAYS,
+) {
+  const cutoffMs = nowMs - staleDays * 86_400_000;
+  const live: RailsBackingGrant[] = [];
+  const held: HeldLegacySubscription[] = [];
+  const withoutPro: RailsBackingGrant[] = [];
+  for (const grant of grants) {
+    if (!proEligible.has(grant.railsUserId)) {
+      withoutPro.push(grant);
+      continue;
+    }
+    if (grant.source !== "legacy_subscription") {
+      live.push(grant);
+      continue;
+    }
+    const iso = railsTimestampToIso(grant.currentPeriodEnd);
+    const endMs = iso === null ? Number.NaN : Date.parse(iso);
+    if (Number.isNaN(endMs) || endMs < cutoffMs) {
+      held.push({
+        railsSourceId: grant.railsSourceId,
+        railsUserId: grant.railsUserId,
+        currentPeriodEnd: iso,
+        reason: Number.isNaN(endMs) ? "no_period_end" : "period_end_stale",
+      });
+    } else {
+      live.push(grant);
+    }
+  }
+  return { live, held, withoutPro };
+}
+
+/**
+ * Users the export grants all access without needing `pro`: special roles,
+ * `basic`, `account_member` seats, membership purchases and live backing.
+ */
+export function exportProEquivalent(
+  railsExport: Pick<
+    RailsAccessExport,
+    "roleGrants" | "basicGrants" | "subscriptions" | "purchases"
+  >,
+  liveBacking: readonly RailsBackingGrant[],
+): ReadonlySet<string> {
+  return new Set([
+    ...railsExport.roleGrants.map((grant) => grant.railsUserId),
+    ...railsExport.basicGrants.map((grant) => grant.railsUserId),
+    ...railsExport.subscriptions.flatMap((sub) =>
+      sub.members.filter((member) => member.hasMemberRole).map((member) => member.railsUserId),
+    ),
+    ...railsExport.purchases
+      .filter((purchase) => purchase.sellableType === "Resource::Membership")
+      .map((purchase) => purchase.railsUserId),
+    ...liveBacking.map((grant) => grant.railsUserId),
+  ]);
+}
+
+const byRailsUserId = (a: { railsUserId: string }, b: { railsUserId: string }) =>
+  Number(a.railsUserId) - Number(b.railsUserId) || a.railsUserId.localeCompare(b.railsUserId);
+
+/**
+ * Bare `pro`: Rails holds `pro`, and nothing else in the export grants the
+ * user (held stale legacy subscriptions and orphans have their own lists).
+ * Split by sign-in: holders who signed in within `activeDays` of `nowMs` are
+ * granted (`rails_bare_pro_active`); the rest are held for a person.
+ */
+export function splitBarePro(
+  railsExport: Pick<
+    RailsAccessExport,
+    "proHolders" | "roleGrants" | "basicGrants" | "subscriptions" | "purchases"
+  >,
+  liveBacking: readonly RailsBackingGrant[],
+  heldRailsUserIds: ReadonlySet<string>,
+  nowMs: number,
+  activeDays: number = DEFAULT_BARE_PRO_ACTIVE_DAYS,
+) {
+  const granted = exportProEquivalent(railsExport, liveBacking);
+  const seen = new Set<string>();
+  const bare = railsExport.proHolders
+    .filter((holder) => {
+      if (seen.has(holder.railsUserId)) return false;
+      seen.add(holder.railsUserId);
+      return !granted.has(holder.railsUserId) && !heldRailsUserIds.has(holder.railsUserId);
+    })
+    .toSorted(byRailsUserId);
+  const cutoffMs = nowMs - activeDays * 86_400_000;
+  const signedInMs = (holder: RailsProHolder) => {
+    const iso = railsTimestampToIso(holder.lastSignInOn);
+    return iso === null ? Number.NaN : Date.parse(iso);
+  };
+  return {
+    all: bare,
+    active: bare.filter((holder) => signedInMs(holder) >= cutoffMs),
+    held: bare.filter((holder) => !(signedInMs(holder) >= cutoffMs)),
+  };
+}
+
 function backingEntitlement(grant: RailsBackingGrant, userId: string): ExpectedEntitlement {
   const sourceType = BACKING_SOURCE_TYPES[grant.source];
-  const key = `${sourceType}:${grant.railsSourceId}:${grant.railsUserId}`;
+  const key = backingKey(grant);
   return {
     id: projectionIds.entitlement(key),
     entitlementType: ALL_ACCESS_TYPE,
@@ -837,8 +994,10 @@ function backingEntitlement(grant: RailsBackingGrant, userId: string): ExpectedE
       railsSourceId: grant.railsSourceId,
       railsUserId: grant.railsUserId,
       accessReason: "backed_legacy_pro",
-      accessLaw: SUBSCRIPTION_ACCESS_LAW,
-      // Legacy subscriptions follow the lenient law: the period end is metadata.
+      // A gift ends on expiresAt (the runtime exempts only rails_account_subscription
+      // rows from it); managed and legacy subscriptions follow the lenient law.
+      accessLaw: grant.source === "gift" ? GIFT_ACCESS_LAW : SUBSCRIPTION_ACCESS_LAW,
+      // Legacy subscriptions: the period end is metadata.
       currentPeriodEnd: railsTimestampToIso(grant.currentPeriodEnd) ?? undefined,
     }),
     // Gifts end on their own clock; managed and legacy subscriptions while live.
@@ -857,6 +1016,7 @@ function membershipRole(member: RailsSubscriptionMember) {
 export function buildExpectedProjection(
   railsExport: RailsAccessExport,
   identities: ReadonlyMap<string, IdentityOutcome>,
+  bareProActive: readonly RailsProHolder[] = [],
 ): ExpectedProjection {
   const entitlements = new Map<string, ExpectedEntitlement>();
   const memberships = new Map<string, ExpectedMembership>();
@@ -868,7 +1028,12 @@ export function buildExpectedProjection(
     subscriptionsWithoutAccount: 0,
     purchasesWithoutSellable: 0,
     unresolvedGrantRows: 0,
-    backingGrants: { rails_gift: 0, rails_managed_subscription: 0, rails_legacy_subscription: 0 },
+    backingGrants: {
+      rails_gift: 0,
+      rails_managed_subscription: 0,
+      rails_legacy_subscription: 0,
+      rails_bare_pro_active: 0,
+    },
   };
   const put = (row: ExpectedEntitlement) => entitlements.set(row.id, row);
 
@@ -1052,6 +1217,36 @@ export function buildExpectedProjection(
     put(row);
   }
 
+  for (const holder of bareProActive) {
+    const userId = resolvedUserId(identities, holder.railsUserId);
+    if (!userId) {
+      policy.unresolvedGrantRows++;
+      continue;
+    }
+    const key = `${BARE_PRO_ACTIVE_SOURCE_TYPE}:${holder.railsUserId}`;
+    const row: ExpectedEntitlement = {
+      id: projectionIds.entitlement(key),
+      entitlementType: ALL_ACCESS_TYPE,
+      userId,
+      organizationId: null,
+      organizationMembershipId: null,
+      sourceType: BARE_PRO_ACTIVE_SOURCE_TYPE,
+      sourceId: holder.railsUserId,
+      metadata: compact({
+        idempotencyKey: key,
+        source: "bare_pro_recently_active",
+        railsUserId: holder.railsUserId,
+        lastSignInOn: holder.lastSignInOn ?? undefined,
+        accessReason: "bare_pro_recently_active",
+        accessLaw: SUBSCRIPTION_ACCESS_LAW,
+      }),
+      expiresAt: null,
+      createdAt: null,
+    };
+    if (!entitlements.has(row.id)) policy.backingGrants[BARE_PRO_ACTIVE_SOURCE_TYPE]++;
+    put(row);
+  }
+
   return { entitlements, memberships, organizations, policy };
 }
 
@@ -1172,6 +1367,31 @@ export interface DeltaPlan {
   readonly activeOwnedEntitlements: number;
   /** Rails-sourced memberships whose seat flag currently grants (alarm base). */
   readonly activeRailsSeatFlags: number;
+  /** Backing that grants: pro-eligible users, stale legacy subscriptions removed. */
+  readonly liveBackingGrants: readonly RailsBackingGrant[];
+  /** Backing for users Rails does not grant as pro today: counted, never granted. */
+  readonly backingWithoutPro: readonly RailsBackingGrant[];
+  /** Bare `pro` (sorted by Rails id): all, granted as recently active, and held. */
+  readonly barePro: {
+    readonly all: readonly RailsProHolder[];
+    readonly active: readonly RailsProHolder[];
+    readonly kept: readonly RailsProHolder[];
+    readonly held: readonly RailsProHolder[];
+  };
+  /**
+   * The export as this plan reads it: live backing only, and users referenced
+   * only by a `pro_holder` line kept only when bare-active. The shadow and
+   * identity checks use this, so dormant bare holders are never touched.
+   */
+  readonly projectedExport: RailsAccessExport;
+  /** Legacy subscriptions held as stale: granted nothing, existing rows kept. */
+  readonly heldLegacySubscriptions: readonly HeldLegacySubscription[];
+  /** Existing rows kept for a stale legacy subscription or an orphan Rails user. */
+  readonly revokeHeldForStaleLegacy: number;
+  readonly revokeHeldForOrphan: number;
+  /** Entitlement and membership ids kept by a hold; their over-grants are the hold's. */
+  readonly heldEntitlementIds: ReadonlySet<string>;
+  readonly heldMembershipIds: ReadonlySet<string>;
 }
 
 /**
@@ -1194,8 +1414,81 @@ export interface HeldSeatFlag {
  */
 export type SeatFlagRuling = "clear" | "keep";
 
+/**
+ * What the delta acts on: backing split into live, held and pro-less; bare
+ * `pro` split by sign-in; and the export with users referenced only by
+ * `pro_holder` lines dropped unless they are bare-active.
+ */
+export function deltaScope(
+  railsExport: RailsAccessExport,
+  nowMs: number,
+  options: Pick<DeltaPlanOptions, "legacyStaleDays" | "bareProActiveDays"> = {},
+  /**
+   * Rails ids with a live `rails_bare_pro_active` row. The sign-in window
+   * decides only the first grant: while Rails keeps their `pro` role, the row
+   * stays (dormancy after the flip is the new app's business).
+   */
+  existingBareProActive: ReadonlySet<string> = new Set(),
+) {
+  const backing = partitionBackingGrants(
+    railsExport.backingGrants,
+    railsProEligible(railsExport),
+    nowMs,
+    options.legacyStaleDays ?? DEFAULT_LEGACY_STALE_DAYS,
+  );
+  const split = splitBarePro(
+    railsExport,
+    backing.live,
+    new Set([...backing.held.map((held) => held.railsUserId), ...railsExport.orphanRailsUserIds]),
+    nowMs,
+    options.bareProActiveDays ?? DEFAULT_BARE_PRO_ACTIVE_DAYS,
+  );
+  const activeIds = new Set(split.active.map((holder) => holder.railsUserId));
+  const seenKept = new Set<string>();
+  const kept = railsExport.proHolders
+    .filter((holder) => {
+      const id = holder.railsUserId;
+      if (!existingBareProActive.has(id) || activeIds.has(id) || seenKept.has(id)) return false;
+      seenKept.add(id);
+      return true;
+    })
+    .toSorted(byRailsUserId);
+  const keptIds = new Set(kept.map((holder) => holder.railsUserId));
+  const barePro = {
+    all: split.all,
+    /** Granted: inside the window now, or keeping a row from an earlier run. */
+    active: [...split.active, ...kept].toSorted(byRailsUserId),
+    /** Outside the window but kept because their row exists and `pro` remains. */
+    kept,
+    held: split.held.filter((holder) => !keptIds.has(holder.railsUserId)),
+  };
+  const grantReferenced = new Set([
+    ...railsExport.roleGrants.map((grant) => grant.railsUserId),
+    ...railsExport.basicGrants.map((grant) => grant.railsUserId),
+    ...railsExport.purchases.map((purchase) => purchase.railsUserId),
+    ...railsExport.backingGrants.map((grant) => grant.railsUserId),
+    ...railsExport.subscriptions.flatMap((sub) => sub.members.map((member) => member.railsUserId)),
+    ...barePro.active.map((holder) => holder.railsUserId),
+  ]);
+  const proOnly = new Set(
+    railsExport.proHolders
+      .map((holder) => holder.railsUserId)
+      .filter((railsUserId) => !grantReferenced.has(railsUserId)),
+  );
+  const projectedExport: RailsAccessExport = {
+    ...railsExport,
+    users: railsExport.users.filter((user) => !proOnly.has(user.railsUserId)),
+    backingGrants: backing.live,
+  };
+  return { backing, barePro, projectedExport };
+}
+
 export interface DeltaPlanOptions {
   readonly seatFlagRulings?: ReadonlyMap<string, SeatFlagRuling>;
+  /** Default 45 (`DEFAULT_LEGACY_STALE_DAYS`). */
+  readonly legacyStaleDays?: number;
+  /** Default 365 (`DEFAULT_BARE_PRO_ACTIVE_DAYS`). */
+  readonly bareProActiveDays?: number;
 }
 
 export function computeDeltaPlan(
@@ -1204,12 +1497,36 @@ export function computeDeltaPlan(
   nowMs: number,
   options: DeltaPlanOptions = {},
 ): DeltaPlan {
-  const identities = resolveIdentities(railsExport, snapshot);
-  const expected = buildExpectedProjection(railsExport, identities);
+  const existingBareProActive = new Set(
+    snapshot.entitlements.flatMap((row) => {
+      const railsUserId = row.metadata["railsUserId"];
+      return row.sourceType === BARE_PRO_ACTIVE_SOURCE_TYPE &&
+        row.deletedAt === null &&
+        typeof railsUserId === "string"
+        ? [railsUserId]
+        : [];
+    }),
+  );
+  const scope = deltaScope(railsExport, nowMs, options, existingBareProActive);
+  const { backing, barePro, projectedExport } = scope;
+  const identities = resolveIdentities(projectedExport, snapshot);
+  const expected = buildExpectedProjection(projectedExport, identities, barePro.active);
   const ops: DeltaOp[] = [];
   const unresolvedRailsUserIds = new Set(
     [...identities].filter(([, outcome]) => outcome.kind === "unresolved").map(([id]) => id),
   );
+  const orphanRailsUserIds = new Set(railsExport.orphanRailsUserIds);
+  const heldLegacyRowIds = new Set(
+    backing.held.map((held) =>
+      projectionIds.entitlement(
+        `${BACKING_SOURCE_TYPES.legacy_subscription}:${held.railsSourceId}:${held.railsUserId}`,
+      ),
+    ),
+  );
+  const heldEntitlementIds = new Set<string>();
+  const heldMembershipIds = new Set<string>();
+  let revokeHeldForStaleLegacy = 0;
+  let revokeHeldForOrphan = 0;
   // Organizations that also carry live grants this delta does not own (for
   // example a CourseBuilder Stripe team subscription). Their seat flags gate
   // those grants too, so the delta never clears them.
@@ -1322,6 +1639,10 @@ export function computeDeltaPlan(
     // An expected row is handled above as create/update (no double count).
     if (expected.memberships.has(membership.id)) continue;
     const railsUserId = membership.fields["legacyRailsUserId"];
+    if (typeof railsUserId === "string" && orphanRailsUserIds.has(railsUserId)) {
+      heldMembershipIds.add(membership.id);
+      continue;
+    }
     if (typeof railsUserId === "string" && unresolvedRailsUserIds.has(railsUserId)) {
       membershipRevokeHeldForIdentity++;
       continue;
@@ -1359,7 +1680,18 @@ export function computeDeltaPlan(
     if (row.deletedAt !== null || !DELTA_OWNED_SOURCE_TYPES.has(row.sourceType)) continue;
     activeOwnedEntitlements++;
     if (expected.entitlements.has(row.id)) continue;
+    if (heldLegacyRowIds.has(row.id)) {
+      // Held, not revoked: a person rules on stale legacy subscriptions.
+      revokeHeldForStaleLegacy++;
+      heldEntitlementIds.add(row.id);
+      continue;
+    }
     const railsUserId = row.metadata["railsUserId"];
+    if (typeof railsUserId === "string" && orphanRailsUserIds.has(railsUserId)) {
+      revokeHeldForOrphan++;
+      heldEntitlementIds.add(row.id);
+      continue;
+    }
     if (typeof railsUserId === "string" && unresolvedRailsUserIds.has(railsUserId)) {
       // Rails still grants this user; we just could not resolve them. Keep the row.
       revokeHeldForIdentity++;
@@ -1387,6 +1719,15 @@ export function computeDeltaPlan(
     ),
     activeOwnedEntitlements,
     activeRailsSeatFlags,
+    liveBackingGrants: backing.live,
+    backingWithoutPro: backing.withoutPro,
+    barePro,
+    projectedExport,
+    heldLegacySubscriptions: backing.held,
+    revokeHeldForStaleLegacy,
+    revokeHeldForOrphan,
+    heldEntitlementIds,
+    heldMembershipIds,
   };
 }
 
