@@ -1,12 +1,24 @@
 import type { NextConfig } from "next";
 
+import {
+  legacyRedirectsForNextConfig,
+  retiredRouteRewritesForNextConfig,
+} from "./src/routing/legacy-redirects";
+
 const nextConfig: NextConfig = {
   cacheComponents: true,
+  // Legacy egghead.io URL table: src/routing/legacy-redirects.ts.
+  // Inventory and contract test: src/routing/route-inventory.ts,
+  // test/routing/route-parity.test.ts.
   async redirects() {
-    return [
-      { source: "/live-events", destination: "/workshops", permanent: true },
-      { source: "/workshop/:path*", destination: "/workshops/:path*", permanent: true },
-    ];
+    return legacyRedirectsForNextConfig();
+  },
+  async rewrites() {
+    return {
+      beforeFiles: retiredRouteRewritesForNextConfig(),
+      afterFiles: [],
+      fallback: [],
+    };
   },
   images: {
     remotePatterns: [
