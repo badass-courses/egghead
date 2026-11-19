@@ -13,21 +13,16 @@
 // match, or a rule exists that no inventory row explains.
 
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { readdir } from "node:fs/promises";
-import path from "node:path";
 import { describe, test } from "node:test";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
-import { PHASE_PRODUCTION_BUILD } from "next/constants";
-import { getPathMatch } from "next/dist/shared/lib/router/utils/path-match";
-import { prepareDestination } from "next/dist/shared/lib/router/utils/prepare-destination";
-import { getRouteRegex } from "next/dist/shared/lib/router/utils/route-regex";
-import { getSortedRoutes } from "next/dist/shared/lib/router/utils/sorted-routes";
-import { z } from "zod";
-
-import { GET as retiredGet } from "../../src/app/api/retired/[rule]/route";
+import {
+  DELETE as retiredDelete,
+  GET as retiredGet,
+  PATCH as retiredPatch,
+  PUT as retiredPut,
+} from "../../src/app/api/retired/[rule]/route";
+import { instructorMatchKey } from "../../src/content/encoding";
+import { instructorFromSearchParams, searchTermFromRoute } from "../../src/content/search-route";
 import {
   LEGACY_REDIRECTS,
   RETIRED_ROUTE_HANDLER_PREFIX,
@@ -40,110 +35,14 @@ import {
   type RouteInventoryRow,
 } from "../../src/routing/route-inventory";
 import { headingAnchor } from "../../src/static-pages/heading-anchor";
-
-const webRoot = fileURLToPath(new URL("../..", import.meta.url));
-const appDir = path.join(webRoot, "src", "app");
-
-type Rule = { source: string; destination: string };
-type RuleHit = { rule: Rule; destination: string };
-
-const ROUTE_FILE = /^(page\.tsx|route\.ts)$/;
-const METADATA_ROUTES: Record<string, string> = {
-  "robots.ts": "/robots.txt",
-  "sitemap.ts": "/sitemap.xml",
-};
-
-async function appRoutePaths(dir: string, segments: string[] = []): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const nested = await Promise.all(
-    entries.map(async (entry) => {
-      if (entry.isDirectory()) {
-        const isGroup = entry.name.startsWith("(") && entry.name.endsWith(")");
-        return appRoutePaths(
-          path.join(dir, entry.name),
-          isGroup ? segments : [...segments, entry.name],
-        );
-      }
-      if (ROUTE_FILE.test(entry.name)) return [`/${segments.join("/")}`];
-      const metadataRoute = segments.length === 0 ? METADATA_ROUTES[entry.name] : undefined;
-      return metadataRoute ? [metadataRoute] : [];
-    }),
-  );
-  return nested.flat();
-}
-
-// Next loads next.config.ts the way `next build` does, in a plain Node child.
-// Under the tsx loader Next's own require hook cannot resolve the config's
-// TypeScript imports, so loading it in-process would test the wrong thing.
-const LOAD_ROUTES_SCRIPT = `
-const { default: loadConfig } = require("next/dist/server/config");
-const { default: loadCustomRoutes } = require("next/dist/lib/load-custom-routes");
-loadConfig(${JSON.stringify(PHASE_PRODUCTION_BUILD)}, process.cwd())
-  .then(loadCustomRoutes)
-  .then((routes) => process.stdout.write(JSON.stringify(routes)));
-`;
-
-const customRoutesSchema = z.object({
-  redirects: z.array(
-    z.object({ source: z.string(), destination: z.string(), internal: z.boolean().optional() }),
-  ),
-  rewrites: z.object({
-    beforeFiles: z.array(z.object({ source: z.string(), destination: z.string() })),
-  }),
-});
-
-async function loadNextCustomRoutes() {
-  // An empty NODE_OPTIONS keeps any inherited loader flags out of the child.
-  const env = { ...process.env, NODE_OPTIONS: "" };
-  const { stdout } = await promisify(execFile)(process.execPath, ["-e", LOAD_ROUTES_SCRIPT], {
-    cwd: webRoot,
-    env,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  return customRoutesSchema.parse(JSON.parse(stdout));
-}
-
-const customRoutes = await loadNextCustomRoutes();
-const redirects: Rule[] = customRoutes.redirects.filter((route) => route.internal !== true);
-const beforeFilesRewrites: Rule[] = customRoutes.rewrites.beforeFiles;
-const routeTable = getSortedRoutes(await appRoutePaths(appDir)).map((route) => ({
-  route,
-  re: getRouteRegex(route).re,
-}));
-
-function pathnameOf(url: string) {
-  return new URL(url, "https://egghead.io").pathname;
-}
-
-function resolveAppRoute(url: string) {
-  const pathname = pathnameOf(url);
-  return routeTable.find(({ re }) => re.test(pathname))?.route;
-}
-
-function firstMatch(rules: readonly Rule[], url: string): RuleHit | undefined {
-  const pathname = pathnameOf(url);
-  for (const rule of rules) {
-    const params = getPathMatch(rule.source, { removeUnnamedParams: true, strict: true })(pathname);
-    if (params === false) continue;
-    const { parsedDestination } = prepareDestination({
-      appendParamsToQuery: false,
-      destination: rule.destination,
-      params,
-      query: {},
-    });
-    const search = new URLSearchParams();
-    for (const [key, value] of Object.entries(parsedDestination.query)) {
-      for (const item of [value ?? []].flat()) search.append(key, item);
-    }
-    const query = search.size > 0 ? `?${search}` : "";
-    return { rule, destination: `${parsedDestination.pathname}${query}` };
-  }
-  return undefined;
-}
-
-function redirectIdFor(rule: Rule) {
-  return LEGACY_REDIRECTS.find((candidate) => candidate.source === rule.source)?.id;
-}
+import {
+  beforeFilesRewrites,
+  firstMatch,
+  redirectIdFor,
+  redirects,
+  resolveAppRoute,
+  routeTable,
+} from "./route-table";
 
 function label(row: RouteInventoryRow) {
   return `${row.legacy} (${row.origin}, sample ${row.sample})`;
@@ -207,7 +106,37 @@ void describe("redirect rows hit their rule and land on an app route", () => {
   }
 });
 
-void describe("retire rows answer 410 with a reason", () => {
+void describe("search redirects carry params CourseBuilder search reads", () => {
+  for (const row of ROUTE_INVENTORY) {
+    const { disposition } = row;
+    if (disposition.class !== "redirect" || !disposition.destination.startsWith("/q")) continue;
+    void test(`${label(row)} -> ${disposition.destination}`, () => {
+      const url = new URL(disposition.destination, "https://egghead.io");
+      const all = url.pathname.split("/").slice(2).filter(Boolean);
+      // Shaped like Next's searchParams prop: only keys present in the URL.
+      const searchParams = Object.fromEntries(
+        ["q", "instructor"].flatMap((key) => {
+          const value = url.searchParams.get(key);
+          return value === null ? [] : [[key, value]];
+        }),
+      );
+      const term = searchTermFromRoute({ params: { all }, searchParams });
+      const instructor = instructorFromSearchParams(searchParams);
+      // Every search redirect must reach the search page with a term, an
+      // instructor filter, or neither on purpose (the bare /q index).
+      if (url.searchParams.has("q") || all.length > 0) assert.ok(term, "search term is dropped");
+      if (url.searchParams.has("instructor")) assert.ok(instructor, "instructor filter is dropped");
+    });
+  }
+
+  // Search matches instructors by instructorMatchKey, so the slug from a
+  // legacy URL finds the display name.
+  void test("an instructor slug matches the display name key", () => {
+    assert.equal(instructorMatchKey("kent-c-dodds"), instructorMatchKey("Kent C. Dodds"));
+  });
+});
+
+void describe("retire rows answer 410 for every method, without the reason", () => {
   for (const row of ROUTE_INVENTORY) {
     const { disposition } = row;
     if (disposition.class !== "retire") continue;
@@ -222,6 +151,20 @@ void describe("retire rows answer 410 with a reason", () => {
       });
       assert.equal(response.status, 410);
       assert.equal(response.headers.get("x-egghead-retired-route"), disposition.rule);
+      const body = await response.text();
+      const reason = RETIRED_ROUTES.find(({ id }) => id === disposition.rule)?.reason ?? "";
+      assert.ok(reason && !body.includes(reason), "the internal reason leaks into the body");
+      const others = await Promise.all(
+        [retiredPut, retiredPatch, retiredDelete].map((handler) =>
+          handler(new Request(`https://egghead.io${row.sample}`), {
+            params: Promise.resolve({ rule: disposition.rule }),
+          }),
+        ),
+      );
+      assert.deepEqual(
+        others.map((other) => other.status),
+        [410, 410, 410],
+      );
     });
   }
 });
@@ -261,9 +204,7 @@ void describe("rule table", () => {
     );
     assert.deepEqual(
       LEGACY_REDIRECTS.filter(({ id }) => !used.has(id)).map(({ id }) => id),
-      // Both predate this lane: CourseBuilder's own /live-events alias and the
-      // /workshop/:id/thanks half of its original /workshop/:path* rule.
-      ["live-events", "workshop-thanks"],
+      [],
     );
   });
 

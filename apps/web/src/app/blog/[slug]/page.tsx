@@ -1,6 +1,7 @@
-import { permanentRedirect } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 
 import { getPublicContentStaticParams } from "../../../content/public-resource";
+import { articleCanonicalPathForLegacySlug } from "../../../routing/article-alias";
 
 type BlogPostRedirectPageProps = {
   params: Promise<{
@@ -8,18 +9,17 @@ type BlogPostRedirectPageProps = {
   }>;
 };
 
-const BLOG_REDIRECT_TARGETS: Record<string, string> = {
-  "manage-reactive-state-with-solid-js-signals": "manage-reactive-state-with-solidjs-signals",
-};
-
 export function generateStaticParams() {
   return getPublicContentStaticParams(["article"]);
 }
 
+// /blog/<slug> goes straight to the article's canonical URL, including a
+// unique "~suffix" match for legacy unsuffixed slugs. A slug with no article
+// is a real 404, never a redirect into a dead end.
 export default async function BlogPostRedirectPage({ params }: BlogPostRedirectPageProps) {
   const { slug } = await params;
-  const decodedSlug = decodeURIComponent(slug);
-  const targetSlug = BLOG_REDIRECT_TARGETS[decodedSlug] ?? decodedSlug;
+  const canonicalPath = await articleCanonicalPathForLegacySlug(decodeURIComponent(slug));
+  if (!canonicalPath) notFound();
 
-  permanentRedirect(`/${targetSlug}`);
+  permanentRedirect(canonicalPath);
 }

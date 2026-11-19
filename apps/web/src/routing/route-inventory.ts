@@ -7,7 +7,7 @@
 //
 // - served:   a CourseBuilder route answers the same path.
 // - redirect: a rule in legacy-redirects.ts moves it to a CourseBuilder URL.
-// - retire:   a rule in legacy-redirects.ts answers 410 with the reason.
+// - retire:   a rule in legacy-redirects.ts answers 410; the reason stays in the table.
 // - build:    nothing answers yet; a follow-up lane owns it.
 //
 // test/routing/route-parity.test.ts walks every row against the real Next
@@ -21,7 +21,7 @@ export const ROUTE_INVENTORY_SOURCE = {
   committedAt: "2026-11-01",
 } as const;
 
-export type RouteOrigin = "page" | "app" | "api" | "next-redirect" | "middleware";
+export type RouteOrigin = "page" | "app" | "api" | "next-redirect" | "middleware" | "coursebuilder";
 
 export type FollowUpLane =
   | "feeds"
@@ -119,6 +119,30 @@ const POWER_USER_REFERENCE =
   "Workshop companion reference sold with the workshop; bespoke egghead-next content.";
 
 export const ROUTE_INVENTORY: readonly RouteInventoryRow[] = [
+  // Redirects CourseBuilder already shipped before this table.
+  {
+    legacy: "/live-events",
+    origin: "coursebuilder",
+    sourceFile: "apps/web/next.config.ts (pre-parity)",
+    sample: "/live-events",
+    disposition: redirect("live-events", "/workshops"),
+  },
+  {
+    legacy: "/workshop",
+    origin: "coursebuilder",
+    sourceFile: "apps/web/next.config.ts (pre-parity /workshop/:path*)",
+    sample: "/workshop",
+    disposition: redirect("workshop-index", "/workshops"),
+  },
+  {
+    legacy: "/workshop/:id/thanks",
+    origin: "coursebuilder",
+    sourceFile: "apps/web/next.config.ts (pre-parity /workshop/:path*)",
+    sample: "/workshop/claude-code/thanks",
+    disposition: redirect("workshop-thanks", "/workshops/claude-code/thanks"),
+    note: "Destination resolves to app route /workshops/[id]/thanks.",
+  },
+
   // egghead-next middleware search canonicalization (src/server/search-query-canonicalization.ts).
   {
     legacy: "/q/resources-by-:instructor",
@@ -323,9 +347,9 @@ export const ROUTE_INVENTORY: readonly RouteInventoryRow[] = [
     "/projects/build-a-developer-blog-with-gatsby",
     "projects/build-a-developer-blog-with-gatsby/index.tsx",
     "/projects/build-a-developer-blog-with-gatsby",
-    redirect("project-gatsby-blog", "/courses/build-a-developer-blog-with-gatsby-bd96"),
+    redirect("project-gatsby-blog", "/q/gatsby"),
     {
-      note: "Course slug taken from the egghead-next page; it is not in the beta sitemap.",
+      note: "The page's course (build-a-developer-blog-with-gatsby-bd96) and its lessons 404 on egghead.io and are not in the beta sitemap, so search takes it.",
     },
   ),
   page(
@@ -1169,6 +1193,7 @@ export function routeInventoryCounts(rows: readonly RouteInventoryRow[] = ROUTE_
     api: 0,
     "next-redirect": 0,
     middleware: 0,
+    coursebuilder: 0,
   };
   for (const row of rows) {
     byClass[row.disposition.class] += 1;

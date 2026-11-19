@@ -1,5 +1,5 @@
 // Copied verbatim from egghead-next src/pages/privacy.mdx at 992ec9a1.
-// The MDX layout wrapper is dropped. FAQ <h3 id> anchors become "### Question {#id}".
+// Only the MDX layout wrapper is dropped; the copy is otherwise unchanged.
 // Change the copy only with the content owner's approval.
 
 export const termsTitle = "Terms & Conditions";

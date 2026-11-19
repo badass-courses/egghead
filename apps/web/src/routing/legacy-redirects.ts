@@ -3,7 +3,8 @@
 // One table, two outcomes:
 // - LEGACY_REDIRECTS: the old URL moves to a CourseBuilder URL (308).
 // - RETIRED_ROUTES: the old URL is deliberately gone. A beforeFiles rewrite
-//   sends it to /api/retired/<id>, which answers 410 with the reason.
+//   sends it to /api/retired/<id>, which answers 410 for every method.
+//   The reason lives here for reviewers and is never sent to callers.
 //
 // Order matters. Next checks every redirect before any rewrite, top to
 // bottom, and the first match wins. Specific rules sit above the catch-alls
@@ -31,6 +32,7 @@ export const RETIRED_ROUTE_HANDLER_PREFIX = "/api/retired";
 export const LEGACY_REDIRECTS = [
   // Workshops: egghead-next served /workshop/<id>; CourseBuilder serves /workshops/<id>.
   { id: "live-events", source: "/live-events", destination: "/workshops" },
+  { id: "workshop-index", source: "/workshop", destination: "/workshops" },
   { id: "workshop-email", source: "/workshop/email", destination: "/workshops" },
   {
     id: "workshop-subpage",
@@ -173,8 +175,10 @@ export const LEGACY_REDIRECTS = [
   // Old project landing pages became courses.
   {
     id: "project-gatsby-blog",
+    // Its course (build-a-developer-blog-with-gatsby-bd96) and lessons 404 on
+    // egghead.io and are not in CourseBuilder.
     source: "/projects/build-a-developer-blog-with-gatsby",
-    destination: "/courses/build-a-developer-blog-with-gatsby-bd96",
+    destination: "/q/gatsby",
   },
   {
     id: "project-css-grid",

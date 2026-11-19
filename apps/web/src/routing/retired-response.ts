@@ -2,8 +2,8 @@ import type { RetiredRoute } from "./legacy-redirects";
 
 const RETIRED_CACHE_CONTROL = "public, max-age=3600, s-maxage=86400";
 
-// Customers see this page; the internal reason stays in the route table and
-// the x-egghead-retired-route header.
+// Neither body carries the internal reason. It stays in the route table; the
+// response names only the rule id (JSON body and x-egghead-retired-route).
 const RETIRED_PAGE_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -30,7 +30,10 @@ export function retiredRouteResponse(route: RetiredRoute | undefined) {
   const headers = { "cache-control": RETIRED_CACHE_CONTROL, "x-egghead-retired-route": route.id };
 
   if (route.kind === "api") {
-    return Response.json({ error: "gone", reason: route.reason }, { status: 410, headers });
+    return Response.json(
+      { error: "gone", rule: route.id, message: "This endpoint was retired." },
+      { status: 410, headers },
+    );
   }
 
   return new Response(RETIRED_PAGE_HTML, {
