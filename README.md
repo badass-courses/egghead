@@ -20,7 +20,7 @@ Runtime boundaries:
 - no `workspace:*` CourseBuilder runtime reach-through
 - local web development writes to local Docker MySQL
 - beta web runtime reads an explicitly approved PlanetScale database but blocks commerce writes
-- production web runtime requires a PlanetScale `DATABASE_URL` and owns subscription checkout, webhook fulfillment, and team-seat writes
+- production web database configuration requires PlanetScale; the subscription lifecycle capability remains local Docker and Stripe test mode only
 - builder production runtime and production imports remain blocked
 
 Run:
@@ -48,11 +48,10 @@ INNGEST_EVENT_KEY=
 INNGEST_SIGNING_KEY=
 ```
 
-For production web checkout, set `EGGHEAD_RUNTIME=production`, a PlanetScale `DATABASE_URL`,
-`AUTH_SECRET`, an HTTPS `NEXT_PUBLIC_APP_URL`, live Stripe credentials, and both Inngest keys.
-Register the Stripe webhook endpoint and Inngest functions before offering checkout. The pricing
-page requires the Stripe webhook secret and Inngest keys before it offers production checkout.
-The builder's production database guard is separate and remains blocked.
+Subscription checkout, webhook reconciliation, and team-seat mutations in this branch require
+`EGGHEAD_RUNTIME=local`, a local Docker database, and a Stripe test key. The existing production
+configuration checks remain, but they do not authorize these lifecycle writes. Production rollout
+requires a separate review of writer ownership and native database evidence.
 
 The pricing page discovers active CourseBuilder products whose type is `membership`. Each offered
 recurring price must be connected through active `MerchantProduct` and `MerchantPrice` rows. The
@@ -69,7 +68,7 @@ pnpm dlx inngest-cli@latest dev --no-discovery -u http://localhost:3008/api/inng
 Forward Stripe test-mode webhooks to the CourseBuilder endpoint:
 
 ```bash
-stripe listen --events checkout.session.completed,customer.subscription.updated \
+stripe listen --events checkout.session.completed,customer.subscription.updated,customer.subscription.deleted,customer.deleted,invoice.payment_failed,charge.refunded,charge.dispute.created,charge.dispute.updated,charge.dispute.closed,charge.dispute.funds_withdrawn,charge.dispute.funds_reinstated \
   --forward-to http://localhost:3008/api/coursebuilder/webhook/stripe
 ```
 
@@ -79,9 +78,33 @@ click **Subscribe for {quantity} seats** to send that quantity to Stripe Checkou
 success page waits for the durable webhook handler to create the
 subscription, then links to `/team`, where the owner can claim, invite, remove, and add seats.
 
-Team subscription renewal and cancellation events fan out to every assigned seat entitlement.
-Adding seats updates Stripe first and relies on the same webhook to converge the local seat count;
-the local row is also updated immediately for responsive local development.
+Ownership follows the Stripe customer's marker (`docs/adr/0001-subscription-ownership-handover.md`).
+Checkout creates new Stripe customers as CourseBuilder-born (`cb@0`), so their events route to
+this app. It refuses a reused customer that CourseBuilder does not own now and after every
+scheduled flip, including any customer created before checkout stamped the marker, and the
+pricing page says billing is managed elsewhere. To test locally with such an older test-mode
+customer, use a fresh account or a new Stripe test customer.
+
+Subscriptions keep a validated billing snapshot and a separate seat roster in
+`Subscription.fields.membershipState`. Access entitlements are a derived projection,
+updated atomically under the subscription row lock. Renewals and final cancellations
+use the same reconciliation operation. Payment suspension retains the roster; recovery
+restores only members who are still assigned. A team remains a team when its capacity
+changes, including a reduction to one seat.
+
+Before reducing seats, the owner selects the retained members and target capacity on
+`/team`, then changes billing through `/profile`. The selection takes effect only when
+Stripe reports that capacity. An unplanned reduction below the assigned roster pauses
+team access until the owner selects retained members. Increasing capacity never restores
+members removed by a prior reduction.
+
+Checkout and webhook writes require local Docker and a Stripe test key. Published
+CourseBuilder handles normal webhooks; the app intercepts verified final cancellation
+events because the installed package only logs them. Refunds, disputes, dunning and customer
+deletions always reach CourseBuilder (it marks refunded and disputed purchases); the subscription
+seam handles them in addition. This does not activate production
+commerce. `pnpm subscription:behaviors` runs lifecycle histories, signed-webhook checks,
+blocked-checkout checks, and the Drizzle transaction/batching receipt tests offline.
 
 Then from `migrate-egghead`:
 

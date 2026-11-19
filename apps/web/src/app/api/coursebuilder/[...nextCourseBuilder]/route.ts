@@ -1,3 +1,4 @@
+import { handleSubscriptionDeletion } from "../../../../subscriptions/webhook";
 import { handlers } from "../../../../coursebuilder/config";
 import { NextRequest } from "next/server";
 import { isWorkshopProduct } from "../../../../workshops/catalog";
@@ -58,5 +59,8 @@ export async function POST(request: NextRequest) {
       }
     }
   }
-  return handlers.POST(request);
+  return (
+    (await handleSubscriptionDeletion(request, () => handlers.POST(request))) ??
+    handlers.POST(request)
+  );
 }

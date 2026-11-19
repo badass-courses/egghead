@@ -9,6 +9,7 @@ import {
   organizationMemberships,
   roles,
 } from "../db/schema";
+import { FixedMessageError } from "./alerts";
 
 type PersonalOrganizationUser = {
   id: string;
@@ -83,7 +84,7 @@ export async function ensurePersonalOrganization(user: PersonalOrganizationUser)
       where: and(eq(roles.organizationId, organizationId), eq(roles.name, "owner")),
     });
     if (!ownerRole) {
-      throw new Error("Unable to ensure the personal organization owner role.");
+      throw new FixedMessageError("Unable to ensure the personal organization owner role.");
     }
 
     await transaction
@@ -106,7 +107,7 @@ export async function ensurePersonalOrganization(user: PersonalOrganizationUser)
       with: { organization: true },
     });
     if (!membership?.organization) {
-      throw new Error("Unable to ensure a personal organization for checkout.");
+      throw new FixedMessageError("Unable to ensure a personal organization for checkout.");
     }
 
     return {

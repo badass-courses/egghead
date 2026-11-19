@@ -1,4 +1,5 @@
 import type { EggheadRuntime } from "../db/local-docker";
+import { FixedMessageError } from "./alerts";
 
 type MembershipEnvironment = Record<string, string | undefined>;
 
@@ -27,9 +28,9 @@ export function membershipConfiguration(env: MembershipEnvironment) {
   }
   const live = token.startsWith("sk_live_") || token.startsWith("rk_live_");
   const test = token.startsWith("sk_test_") || token.startsWith("rk_test_");
-  if (!live && !test) throw new Error("A Stripe secret or restricted key is required");
+  if (!live && !test) throw new FixedMessageError("A Stripe secret or restricted key is required");
   if (localPreview && !token.startsWith("sk_test_"))
-    throw new Error("Local membership preview requires a Stripe test secret key");
+    throw new FixedMessageError("Local membership preview requires a Stripe test secret key");
   return {
     productId,
     token,
@@ -49,9 +50,10 @@ export function membershipCheckoutOrigin(
     (requestOrigin === "http://localhost:3008" || requestOrigin === "http://127.0.0.1:3008")
   )
     return requestOrigin;
-  if (!configuredUrl) throw new Error("NEXT_PUBLIC_APP_URL is required for membership checkout");
+  if (!configuredUrl)
+    throw new FixedMessageError("NEXT_PUBLIC_APP_URL is required for membership checkout");
   const url = new URL(configuredUrl);
   if (url.protocol !== "https:" || url.origin !== requestOrigin)
-    throw new Error("Invalid checkout origin");
+    throw new FixedMessageError("Invalid checkout origin");
   return url.origin;
 }

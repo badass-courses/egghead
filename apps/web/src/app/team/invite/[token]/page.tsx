@@ -6,7 +6,7 @@ import { Button } from "@egghead/ui/button";
 import { Container } from "@egghead/ui/container";
 
 import { getCurrentUser } from "../../../../coursebuilder/current-user";
-import { commerceWritesAreAllowed } from "../../../../db/local-docker";
+import { membershipWritesAllowed } from "../../../../subscriptions/write-policy";
 import { getTeamInviteDetails, getTeamMembershipForUser } from "../../../../subscriptions/team";
 import {
   teamInviteMatchesEmail,
@@ -124,7 +124,18 @@ async function TeamInviteContent({
   const error = firstParam(resolvedSearchParams.error);
   const alreadyClaimed = currentMembership?.subscriptionId === payload.subscriptionId;
 
-  if (status === "claimed" || inviteDetails?.availableSeats === 0 || alreadyClaimed) {
+  if (status === "paused" || (inviteDetails?.inviteState === "paused" && !alreadyClaimed)) {
+    return (
+      <InviteMessage
+        description="This team's seats are paused until the team owner sorts out billing or chooses who keeps a seat. Your invitation will work once the team is active again."
+        ownerEmail={inviteDetails?.ownerEmail ?? null}
+        ownerName={inviteDetails?.ownerName ?? null}
+        title="This team is paused"
+      />
+    );
+  }
+
+  if (status === "claimed" || inviteDetails?.inviteState === "full" || alreadyClaimed) {
     return (
       <InviteMessage
         description="This team seat has already been claimed. Reach out to the team owner for a new invitation."
@@ -135,7 +146,7 @@ async function TeamInviteContent({
     );
   }
 
-  if (!inviteDetails || error === "unavailable") {
+  if (!inviteDetails || inviteDetails.inviteState === "closed" || error === "unavailable") {
     return (
       <InviteMessage
         description="Reach out to the team owner for a new invitation."
@@ -146,7 +157,8 @@ async function TeamInviteContent({
 
   const emailMatches = !currentUser?.id || teamInviteMatchesEmail(payload, currentUser.email ?? "");
   const callbackParams = new URLSearchParams({ callbackUrl: invitePath(token) });
-  const writesAllowed = commerceWritesAreAllowed();
+  // The same gate the accept action enforces.
+  const writesAllowed = membershipWritesAllowed();
 
   return (
     <Container
