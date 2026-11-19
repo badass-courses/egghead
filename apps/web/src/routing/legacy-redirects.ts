@@ -31,7 +31,18 @@ export type RetiredRoute = {
   readonly reason: string;
 };
 
+import { FEED_RSS_SUFFIX_REWRITES } from "../feeds/rewrites";
+
 export const RETIRED_ROUTE_HANDLER_PREFIX = "/api/retired";
+
+// beforeFiles rewrites that serve content from another route (no 410). The
+// owning lane keeps its list; this table composes them so one place decides
+// the order and the parity test can check they never collide with a rule.
+export type ContentRewrite = { readonly source: string; readonly destination: string };
+export const CONTENT_REWRITES: readonly ContentRewrite[] = [
+  // Rails feed routes took a .rss format suffix (src/feeds/rewrites.ts).
+  ...FEED_RSS_SUFFIX_REWRITES,
+];
 
 export const LEGACY_REDIRECTS = [
   // Workshops: egghead-next served /workshop/<id>; CourseBuilder serves /workshops/<id>.
@@ -472,6 +483,16 @@ export function legacyRedirectsForNextConfig() {
     ...rules.map((rule) => nextRule(`${rule.source}/`, rule.destination, rule.temporary)),
     nextRule(TRAILING_SLASH_REDIRECT.source, TRAILING_SLASH_REDIRECT.destination),
     ...rules.map((rule) => nextRule(rule.source, rule.destination, rule.temporary)),
+  ];
+}
+
+// Everything next.config.ts puts in beforeFiles: retire rules, then content
+// rewrites. route-parity.test.ts checks no content rewrite source is caught
+// by a redirect or a retire rule.
+export function beforeFilesRewritesForNextConfig() {
+  return [
+    ...retiredRouteRewritesForNextConfig(),
+    ...CONTENT_REWRITES.map(({ source, destination }) => ({ source, destination })),
   ];
 }
 

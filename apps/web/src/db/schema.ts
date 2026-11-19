@@ -86,5 +86,7 @@ export const {
   subscriptionRelations,
 } = eggheadCourseBuilderSchema;
 
+export { legacyFeedTokens } from "./legacy-feed-tokens";
+
 export const users = eggheadCourseBuilderSchema.users;
 export const usersRelations = eggheadCourseBuilderSchema.usersRelations;

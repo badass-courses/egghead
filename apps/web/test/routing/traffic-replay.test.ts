@@ -17,6 +17,7 @@ import { ROUTE_INVENTORY } from "../../src/routing/route-inventory";
 import {
   beforeFilesRewrites,
   buildRowSource,
+  endsInDynamicSegment,
   firstMatch,
   isFileLikePath,
   matchesPattern,
@@ -60,7 +61,9 @@ function classify(pathname: string): Outcome {
   const route = resolveAppRoute(pathname);
   // A file path that only a dynamic page matches is not served: the page
   // never answers with the file.
-  if (route && isFileLikePath(pathname) && route.includes("[")) return { kind: "unrouted" };
+  if (route && isFileLikePath(pathname) && endsInDynamicSegment(route)) {
+    return { kind: "unrouted" };
+  }
   return route ? { kind: "served", route } : { kind: "unrouted" };
 }
 

@@ -154,20 +154,89 @@ export function mysqlConnectionOptionsFromUrl(rawUrl: string) {
   };
 }
 
+/**
+ * Opt-in read-only mode for audit scripts (scripts/feeds-parity.ts) that run
+ * app readers against a shared database. `EGGHEAD_DB_READ_ONLY=session` makes
+ * every connection `SET SESSION TRANSACTION READ ONLY` and refuses anything
+ * but SELECT/SHOW/WITH/EXPLAIN before it is sent; `guard` keeps only the
+ * statement check (for servers that reject the SET). Unset: no change.
+ */
+export type DatabaseReadOnlyMode = "session" | "guard";
+
+export function getDatabaseReadOnlyMode(): DatabaseReadOnlyMode | null {
+  const raw = getEnv("EGGHEAD_DB_READ_ONLY")?.trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === "session" || raw === "guard") return raw;
+  throw new Error(`Unsupported EGGHEAD_DB_READ_ONLY: ${raw}`);
+}
+
+const READ_ONLY_STATEMENT = /^\s*(?:SELECT|SHOW|WITH|EXPLAIN)\b/i;
+
+export function assertReadOnlyStatement(statement: unknown) {
+  const text =
+    typeof statement === "string"
+      ? statement
+      : typeof statement === "object" &&
+          statement !== null &&
+          "sql" in statement &&
+          typeof statement.sql === "string"
+        ? statement.sql
+        : "";
+  if (!READ_ONLY_STATEMENT.test(text)) {
+    throw new Error(
+      `Refusing a non-read statement in read-only mode: ${text.trim().split(/\s+/)[0] ?? ""}`,
+    );
+  }
+}
+
+function guardReadOnly(connection: mysql.Connection): mysql.Connection {
+  return new Proxy(connection, {
+    get(target, property, receiver) {
+      if (property === "query") {
+        return (...args: Parameters<typeof target.query>) => {
+          assertReadOnlyStatement(args[0]);
+          return target.query(...args);
+        };
+      }
+      if (property === "execute") {
+        return (...args: Parameters<typeof target.execute>) => {
+          assertReadOnlyStatement(args[0]);
+          return target.execute(...args);
+        };
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
 export function getEggheadMysqlPool() {
   if (pool) return pool;
 
   const rawUrl = getDatabaseUrl();
   assertDatabaseUrlForRuntime(rawUrl);
+  if (getDatabaseReadOnlyMode()) {
+    throw new Error("The shared pool is not available in EGGHEAD_DB_READ_ONLY mode.");
+  }
   pool = mysql.createPool(mysqlConnectionOptionsFromUrl(rawUrl));
 
   return pool;
 }
 
-export function createEggheadMysqlConnection() {
+export async function createEggheadMysqlConnection() {
   const rawUrl = getDatabaseUrl();
   assertDatabaseUrlForRuntime(rawUrl);
-  return mysql.createConnection(mysqlConnectionOptionsFromUrl(rawUrl));
+  const connection = await mysql.createConnection(mysqlConnectionOptionsFromUrl(rawUrl));
+  const readOnly = getDatabaseReadOnlyMode();
+  if (!readOnly) return connection;
+  if (readOnly === "session") {
+    try {
+      await connection.query("SET SESSION TRANSACTION READ ONLY");
+    } catch (error) {
+      await connection.end();
+      throw error;
+    }
+  }
+  return guardReadOnly(connection);
 }
 
 export function createLocalMysqlConnection() {

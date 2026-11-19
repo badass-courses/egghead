@@ -33,6 +33,8 @@ import {
   uniqueSlug,
 } from "../../src/routing/article-alias";
 import {
+  beforeFilesRewritesForNextConfig,
+  CONTENT_REWRITES,
   LEGACY_REDIRECTS,
   legacyRedirectsForNextConfig,
   RETIRED_ROUTE_HANDLER_PREFIX,
@@ -47,8 +49,10 @@ import {
 import { decodeSlugParam } from "../../src/routing/slug-param";
 import { headingAnchor } from "../../src/static-pages/heading-anchor";
 import {
+  allBeforeFilesRewrites,
   beforeFilesRewrites,
   buildRowSource,
+  contentRewrites,
   firstMatch,
   internalRedirects,
   matchesPattern,
@@ -228,8 +232,16 @@ void describe("rule table", () => {
       legacyRedirectsForNextConfig(),
     );
     assert.deepEqual(
+      allBeforeFilesRewrites.map(({ source, destination }) => ({ source, destination })),
+      beforeFilesRewritesForNextConfig(),
+    );
+    assert.deepEqual(
       beforeFilesRewrites.map(({ source }) => source),
       RETIRED_ROUTES.map(({ source }) => source),
+    );
+    assert.deepEqual(
+      contentRewrites.map(({ source }) => source),
+      CONTENT_REWRITES.map(({ source }) => source),
     );
   });
 
@@ -260,6 +272,21 @@ void describe("rule table", () => {
       const expected = !(id && temporary.includes(id));
       assert.equal(rule.permanent, expected, `${rule.source} permanent`);
     }
+  });
+
+  void test("no redirect or retire rule shadows a content rewrite", () => {
+    const shadowed = CONTENT_REWRITES.flatMap(({ source, destination }) => {
+      const sample = source.replaceAll(/:(\w+)(\([^)]*\))?[*+?]?/g, "sample-$1");
+      const problems = [
+        firstMatch(redirects, sample) ? "a redirect" : "",
+        firstMatch(redirects, `${sample}/`)?.destination === sample ? "" : "trailing slash",
+        firstMatch(beforeFilesRewrites, sample) ? "a retire rule" : "",
+        firstMatch(contentRewrites, sample)?.rule.source === source ? "" : "an earlier rewrite",
+        resolveAppRoute(sample) ? "" : `no route for ${destination}`,
+      ].filter(Boolean);
+      return problems.length > 0 ? [`${sample}: ${problems.join(", ")}`] : [];
+    });
+    assert.deepEqual(shadowed, []);
   });
 
   void test("every redirect is explained by an inventory row", () => {
@@ -332,7 +359,8 @@ const EDGE_CASES: readonly (readonly [string, string])[] = [
   ["/workshop/invoice/abc123", "free"],
   ["/workshop/codex/power-user-reference", "free"],
   ["/workshop/codex/power-user-reference/some-topic", "free"],
-  // Feed variants stay free for the feeds lane.
+  // Feed variants stay free of redirects and retire rules; .rss suffixes
+  // are content rewrites to the feed routes.
   ["/playlists/some-course/playlist_feed", "free"],
   ["/playlists/some-course/playlist_feed.rss", "free"],
   ["/playlists/some-course/playlist_feed.xml", "free"],
