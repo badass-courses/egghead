@@ -1,4 +1,4 @@
--- Rails paid-access export for scripts/access-delta.ts (format egghead-rails-access-export/v1).
+-- Rails paid-access export for scripts/access-delta.ts (format egghead-rails-access-export/v2).
 --
 -- Read-only. Run against the Rails Postgres database (a read replica is fine):
 --
@@ -11,6 +11,9 @@
 --   basic_grant   the global legacy `basic` role (ADR-0007 default grant)
 --   subscription  an account subscription in an enabled status, with its members
 --   purchase      a viewable sellable purchase
+--   pro_holder    a user holding the global `pro` role: Rails' own access decision
+--                 (Ability#lesson_permissions checks is_pro?), with flags for the
+--                 legacy paths outside this export that keep `pro` alive
 --   manifest      always the LAST line: row counts computed in the same snapshot
 --
 -- The delta script refuses any file whose manifest is missing, is not the last
@@ -29,8 +32,16 @@
 --   * Purchases grant while expires_at is NULL or in the future and the
 --     purchase_state is not access_revoked. Bulk and country flags are exported;
 --     the delta script applies the bulk/country rules.
---   * Bare legacy `pro` is not exported: it never grants (quarantine rows stay
---     as the July projection wrote them).
+--   * Bare legacy `pro` never grants (quarantine rows stay as the July
+--     projection wrote them). The pro_holder lines exist only so the delta can
+--     cross-check the export against Rails' decision; they grant nothing.
+--   * pro_holder flags (app/models/gift.rb, managed_subscription.rb,
+--     subscription.rb; Subscription#hard_cancel! keeps `pro` for these):
+--       activeGift                 gifts.user_id, claimed_at within
+--                                  COALESCE(duration_months, 12) months (Gift.active)
+--       activeManagedSubscription  users.managed_subscription_id -> is_active
+--       activeLegacySubscription   subscriptions.user_id, cancelled_on IS NULL and
+--                                  "willCancelAfterPeriod" = false (Subscription.active)
 --
 -- It never selects passwords, tokens, IP addresses, Stripe ids or billing info.
 
@@ -39,6 +50,9 @@
 \pset format unaligned
 \pset tuples_only on
 \pset footer off
+
+-- NOW() compares with zoneless UTC timestamps (expires_at); pin the session zone.
+SET TIME ZONE 'UTC';
 
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 
@@ -125,6 +139,12 @@ viewable_purchases AS (
   WHERE (sp.expires_at IS NULL OR sp.expires_at > NOW())
     AND (sp.purchase_state IS NULL OR sp.purchase_state <> 'access_revoked')
 ),
+pro_holders AS (
+  SELECT DISTINCT ur.user_id
+  FROM users_roles ur
+  JOIN roles r ON r.id = ur.role_id
+  WHERE r.resource_type IS NULL AND r.name = 'pro'
+),
 referenced_users AS (
   SELECT user_id FROM special_roles
   UNION SELECT user_id FROM basic_roles
@@ -210,17 +230,41 @@ purchase_lines AS (
   FROM viewable_purchases p
   WHERE p.user_id IS NOT NULL
 ),
+pro_holder_lines AS (
+  SELECT 6 AS ord, ph.user_id AS sort_id, json_build_object(
+    'kind', 'pro_holder',
+    'railsUserId', ph.user_id::text,
+    'activeGift', EXISTS (
+      SELECT 1 FROM gifts g
+      WHERE g.user_id = ph.user_id
+        AND g.claimed_at >= NOW() - (COALESCE(g.duration_months, 12) || ' months')::interval
+    ),
+    'activeManagedSubscription', EXISTS (
+      SELECT 1 FROM users u
+      JOIN managed_subscriptions ms ON ms.id = u.managed_subscription_id
+      WHERE u.id = ph.user_id AND ms.is_active
+    ),
+    'activeLegacySubscription', EXISTS (
+      SELECT 1 FROM subscriptions ls
+      WHERE ls.user_id = ph.user_id
+        AND ls.cancelled_on IS NULL
+        AND ls."willCancelAfterPeriod" = FALSE
+    )
+  )::text AS line
+  FROM pro_holders ph
+),
 manifest_line AS (
   SELECT 9 AS ord, 0::bigint AS sort_id, json_build_object(
     'kind', 'manifest',
-    'format', 'egghead-rails-access-export/v1',
+    'format', 'egghead-rails-access-export/v2',
     'exportedAt', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
     'counts', json_build_object(
       'user', (SELECT COUNT(*) FROM user_lines),
       'role_grant', (SELECT COUNT(*) FROM role_lines),
       'basic_grant', (SELECT COUNT(*) FROM basic_lines),
       'subscription', (SELECT COUNT(*) FROM subscription_lines),
-      'purchase', (SELECT COUNT(*) FROM purchase_lines)
+      'purchase', (SELECT COUNT(*) FROM purchase_lines),
+      'pro_holder', (SELECT COUNT(*) FROM pro_holder_lines)
     )
   )::text AS line
 )
@@ -230,6 +274,7 @@ SELECT line FROM (
   UNION ALL SELECT ord, sort_id, line FROM basic_lines
   UNION ALL SELECT ord, sort_id, line FROM subscription_lines
   UNION ALL SELECT ord, sort_id, line FROM purchase_lines
+  UNION ALL SELECT ord, sort_id, line FROM pro_holder_lines
   UNION ALL SELECT ord, sort_id, line FROM manifest_line
 ) export_lines
 ORDER BY ord, sort_id, line;

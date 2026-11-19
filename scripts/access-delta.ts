@@ -13,6 +13,11 @@
 //
 // The analysis clock defaults to the export's `exportedAt`, the moment Rails
 // decided what had expired. `--now` overrides it (and the write timestamps).
+// `--apply` also refuses an export older than `--max-export-age` (default 2h).
+//
+// The CourseBuilder read runs in one read-only transaction only on the local
+// runtime. PlanetScale caps transaction time, so beta and production read
+// query by query (`--snapshot-transaction` forces the transaction).
 //
 // Database guards come from `apps/web/src/db/local-docker.ts`: dry runs need a
 // URL the runtime accepts (local, approved beta, production); writes need
@@ -36,6 +41,7 @@ import {
   newCursor,
   parseCursor,
   parsePlan,
+  hostSha256,
   planSha256,
   serializePlan,
   type ApplyCursor,
@@ -61,6 +67,8 @@ import {
   applyAndVerify,
   applyRefusals,
   buildReceipt,
+  DEFAULT_MAX_EXPORT_AGE_MS,
+  parseDurationMs,
   type DeltaAnalysis,
 } from "./access-delta-run";
 
@@ -69,7 +77,8 @@ function usage(message?: string): never {
   console.error(
     "usage: access-delta --export <file.jsonl> [--out <dir>] [--user <railsUserId|cbUserId|email>]... " +
       "[--apply --expect-plan <sha256>|--resume] [--confirm-database <db>] [--batch-size N] [--max-batches N] " +
-      "[--allow-large-revoke] [--now <iso>] [--no-snapshot-transaction] [--json]",
+      "[--allow-large-revoke] [--accept-pro-gap N] [--max-export-age 2h] [--now <iso>] " +
+      "[--snapshot-transaction|--no-snapshot-transaction] [--json]",
   );
   process.exit(64);
 }
@@ -150,7 +159,10 @@ async function main() {
       "max-batches": { type: "string" },
       "allow-large-revoke": { type: "boolean", default: false },
       "expect-plan": { type: "string" },
+      "snapshot-transaction": { type: "boolean", default: false },
       "no-snapshot-transaction": { type: "boolean", default: false },
+      "accept-pro-gap": { type: "string" },
+      "max-export-age": { type: "string" },
       now: { type: "string" },
       json: { type: "boolean", default: false },
     },
@@ -170,12 +182,31 @@ async function main() {
   const nowOverride = values.now === undefined ? null : Date.parse(values.now);
   if (nowOverride !== null && Number.isNaN(nowOverride)) usage("--now must be an ISO timestamp");
   const now = () => (nowOverride === null ? new Date() : new Date(nowOverride));
-  const readOptions = {
-    ...DEFAULT_READ_OPTIONS,
-    consistent: !values["no-snapshot-transaction"],
-  };
+  if (values["snapshot-transaction"] && values["no-snapshot-transaction"]) {
+    usage("--snapshot-transaction and --no-snapshot-transaction are exclusive");
+  }
+  const maxExportAgeMs =
+    values["max-export-age"] === undefined
+      ? DEFAULT_MAX_EXPORT_AGE_MS
+      : parseDurationMs(values["max-export-age"]);
+  if (maxExportAgeMs === null) usage("--max-export-age must look like 90m, 2h or 1d");
+  const acceptProGap =
+    values["accept-pro-gap"] === undefined
+      ? null
+      : Number.isInteger(Number(values["accept-pro-gap"])) && Number(values["accept-pro-gap"]) >= 0
+        ? Number(values["accept-pro-gap"])
+        : usage("--accept-pro-gap must be a whole number");
 
   const safety = writing ? assertCommerceWritesAllowed() : assertDatabaseUrlForRuntime();
+  const readOptions = {
+    ...DEFAULT_READ_OPTIONS,
+    consistent: values["snapshot-transaction"]
+      ? true
+      : values["no-snapshot-transaction"]
+        ? false
+        : safety.runtime === "local",
+  };
+  const targetHost = hostSha256(safety.host);
   if (writing && values["confirm-database"] !== safety.database) {
     usage(`writes need --confirm-database ${safety.database} (the target database name)`);
   }
@@ -208,10 +239,12 @@ async function main() {
       generatedAt,
       target,
       allowLargeRevoke: values["allow-large-revoke"],
+      acceptProGap,
     });
     const receipt: Record<string, unknown> = {
       ...built,
       analysisClock: new Date(analysisNowMs).toISOString(),
+      snapshotTransaction: readOptions.consistent,
     };
 
     const userQueries = values.user ?? [];
@@ -244,6 +277,7 @@ async function main() {
         serializePlan({
           exportSha256: railsExport.sha256,
           database: safety.database,
+          hostSha256: targetHost,
           generatedAt,
           ops: analysis.plan.ops,
         }),
@@ -258,6 +292,7 @@ async function main() {
         for (const [name, expected, actual] of [
           ["export sha256", railsExport.sha256, plan.exportSha256],
           ["database", safety.database, plan.database],
+          ["database host", targetHost, plan.hostSha256],
           ["cursor plan", plan.planSha256, cursor.planSha256],
           ["--expect-plan", values["expect-plan"] ?? plan.planSha256, plan.planSha256],
         ] as const) {
@@ -270,6 +305,10 @@ async function main() {
           reviewedPlan: plan,
           exportSha256: railsExport.sha256,
           database: safety.database,
+          hostSha256: targetHost,
+          exportedAtMs: analysisClockMs(railsExport, null),
+          nowMs: Date.now(),
+          maxExportAgeMs,
           freshPlanSha256: planSha256(analysis.plan.ops),
           gate: built.gate,
         });

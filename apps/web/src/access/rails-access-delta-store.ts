@@ -3,7 +3,7 @@
 // guarded update keyed by the projection's deterministic ids, so re-running a
 // batch after a crash is safe.
 
-import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, getTableName, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
 import type { getEggheadDatabase } from "../db/adapter";
 import { entitlements, organization, organizationMemberships, users } from "../db/schema";
@@ -36,7 +36,10 @@ export interface SnapshotReadOptions {
   readonly concurrency: number;
   /**
    * Read everything in one `REPEATABLE READ, READ ONLY` transaction, so live
-   * writes cannot mix states. Queries then share one connection.
+   * writes cannot mix states. Queries then share one connection, and the whole
+   * read must finish inside the host's transaction time limit. Off, each query
+   * reads committed state; the apply-time fresh-plan check and post-apply
+   * verification catch anything that moved.
    */
   readonly consistent: boolean;
 }
@@ -50,6 +53,11 @@ export const DEFAULT_READ_OPTIONS: SnapshotReadOptions = {
 
 export class UserCreateCollisionError extends Error {
   override readonly name = "UserCreateCollisionError";
+}
+
+/** A link or email update found the user changed since the plan; the batch rolls back. */
+export class UserWriteConflictError extends Error {
+  override readonly name = "UserWriteConflictError";
 }
 
 function chunks<T>(values: readonly T[], size: number): T[][] {
@@ -159,6 +167,54 @@ async function usersByEmail(reader: Reader, emails: readonly string[]): Promise<
   });
 }
 
+const SQL_NAME = /^[A-Za-z0-9_]+$/;
+
+/** Charset and collation of `egghead_User.email`, as the unique key compares it. */
+async function emailColumnCollation(reader: Reader) {
+  const [rows] = await reader.execute(sql`
+    SELECT CHARACTER_SET_NAME AS charset, COLLATION_NAME AS collation
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${getTableName(users)} AND COLUMN_NAME = 'email'
+  `);
+  const list: unknown[] = Array.isArray(rows) ? rows : [];
+  const record = asRecord(list[0]);
+  const charset = textOrNull(record["charset"]);
+  const collation = textOrNull(record["collation"]);
+  if (!charset || !collation || !SQL_NAME.test(charset) || !SQL_NAME.test(collation)) {
+    throw new Error("could not read the egghead_User.email collation from information_schema");
+  }
+  return { charset, collation };
+}
+
+/**
+ * Each email's weight under the email column's collation (`WEIGHT_STRING`).
+ * Equal weights mean the unique key treats the emails as one, so the delta can
+ * pair Rails users with each other the way MySQL will (`ß` and `ss`, for one).
+ */
+async function emailWeights(
+  reader: Reader,
+  emails: readonly string[],
+  column: { charset: string; collation: string },
+) {
+  const probe = sql.join(
+    emails.map((email) => sql`SELECT ${email} AS email`),
+    sql` UNION ALL `,
+  );
+  const weight = sql.raw(
+    `HEX(WEIGHT_STRING(CONVERT(probe.email USING ${column.charset}) COLLATE ${column.collation}))`,
+  );
+  const [rows] = await reader.execute(
+    sql`SELECT probe.email AS email, ${weight} AS weight FROM (${probe}) AS probe`,
+  );
+  const list: unknown[] = Array.isArray(rows) ? rows : [];
+  return list.flatMap((row) => {
+    const record = asRecord(row);
+    const email = textOrNull(record["email"]);
+    const value = textOrNull(record["weight"]);
+    return email !== null && value !== null ? [{ email, weight: value }] : [];
+  });
+}
+
 async function readAll(
   reader: Reader,
   railsExport: RailsAccessExport,
@@ -190,6 +246,8 @@ async function readAll(
     (ids) => reader.select(userColumns).from(users).where(inArray(users.legacyRailsUserId, ids)),
   );
   const byEmail = await lookup(emails, (batch) => usersByEmail(reader, batch));
+  const column = await emailColumnCollation(reader);
+  const weights = await lookup(emails, (batch) => emailWeights(reader, batch, column));
   const entitlementRows = await readPages(options.pageSize, (afterId) =>
     reader
       .select({
@@ -264,6 +322,11 @@ async function readAll(
         }),
       )
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+    exportEmailKeys: Object.fromEntries(
+      weights
+        .map((row): [string, string] => [row.email, row.weight])
+        .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    ),
     entitlements: entitlementRows.map(
       (row): CbEntitlement => ({
         id: row.id,
@@ -357,18 +420,74 @@ async function createUser(
   }
 }
 
+async function readUser(writer: Writer, userId: string) {
+  const [row] = await writer
+    .select({ id: users.id, email: users.email, legacyRailsUserId: users.legacyRailsUserId })
+    .from(users)
+    .where(eq(users.id, userId));
+  return row;
+}
+
+async function linkUser(writer: Writer, op: Extract<DeltaOp, { kind: "user_link" }>) {
+  await writer
+    .update(users)
+    .set({
+      fields: sql`JSON_SET(COALESCE(${users.fields}, JSON_OBJECT()), '$.legacyRailsUserId', ${op.railsUserId}, '$.legacyRailsUserLinkedBy', 'rails_access_delta')`,
+    })
+    .where(and(eq(users.id, op.userId), isNull(users.legacyRailsUserId)));
+  // The guard makes a raced link a silent no-op; the grants after it would land
+  // on the wrong person. Re-read and fail the batch instead.
+  const row = await readUser(writer, op.userId);
+  if (row?.legacyRailsUserId !== op.railsUserId) {
+    throw new UserWriteConflictError(
+      `Rails user ${op.railsUserId}: user ${op.userId} ${row ? `is linked to Rails user ${row.legacyRailsUserId ?? "(none)"}` : "no longer exists"}. ` +
+        "Nothing in this batch was written; rerun the dry run.",
+    );
+  }
+}
+
+async function updateUserEmail(
+  writer: Writer,
+  op: Extract<DeltaOp, { kind: "user_email_update" }>,
+) {
+  const holders = await writer
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, op.email));
+  const other = holders.find((holder) => holder.id !== op.userId);
+  if (other) {
+    throw new UserWriteConflictError(
+      `Rails user ${op.railsUserId}: CourseBuilder user ${other.id} already holds the Rails email. ` +
+        "Nothing in this batch was written; rerun the dry run.",
+    );
+  }
+  await writer
+    .update(users)
+    .set({ email: op.email })
+    .where(
+      and(
+        eq(users.id, op.userId),
+        eq(users.email, op.previousEmail),
+        eq(users.legacyRailsUserId, op.railsUserId),
+      ),
+    );
+  const row = await readUser(writer, op.userId);
+  if (row?.email !== op.email || row.legacyRailsUserId !== op.railsUserId) {
+    throw new UserWriteConflictError(
+      `Rails user ${op.railsUserId}: user ${op.userId} changed since the plan; its email was not updated. ` +
+        "Nothing in this batch was written; rerun the dry run.",
+    );
+  }
+}
+
 async function writeOp(writer: Writer, op: DeltaOp, now: Date) {
   switch (op.kind) {
     case "user_create":
       return createUser(writer, op, now);
     case "user_link":
-      await writer
-        .update(users)
-        .set({
-          fields: sql`JSON_SET(COALESCE(${users.fields}, JSON_OBJECT()), '$.legacyRailsUserId', ${op.railsUserId}, '$.legacyRailsUserLinkedBy', 'rails_access_delta')`,
-        })
-        .where(and(eq(users.id, op.userId), isNull(users.legacyRailsUserId)));
-      return;
+      return linkUser(writer, op);
+    case "user_email_update":
+      return updateUserEmail(writer, op);
     case "organization_create":
       await writer
         .insert(organization)

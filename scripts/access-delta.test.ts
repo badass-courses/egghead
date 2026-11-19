@@ -7,7 +7,11 @@
 //   ACCESS_DELTA_MYSQL_URL=mysql://user:pass@127.0.0.1:PORT/name_test pnpm access:delta:test
 
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import {
@@ -21,6 +25,7 @@ import {
   type DeltaOp,
 } from "../apps/web/src/access/rails-access-delta";
 import {
+  hostSha256,
   newCursor,
   parsePlan,
   planSha256,
@@ -38,6 +43,7 @@ import {
   novemberExportLines,
   novemberExportText,
   NOW_ISO,
+  proHolder,
   QUARANTINE_ENTITLEMENT,
   STRIPE_NATIVE_ENTITLEMENT,
 } from "./access-delta.fixtures";
@@ -46,6 +52,7 @@ import {
   analyze,
   applyRefusals,
   buildReceipt,
+  parseDurationMs,
   type DeltaAnalysis,
 } from "./access-delta-run";
 
@@ -73,6 +80,7 @@ function julySnapshot(): CbSnapshot {
           (user.legacyRailsUserId !== null && railsIds.has(user.legacyRailsUserId)) ||
           emails.has(emailUniquenessKey(user.email)),
       ),
+    exportEmailKeys: {},
     entitlements: july.entitlements,
     memberships: july.memberships,
     organizationIds: july.organizations
@@ -107,15 +115,15 @@ const EXPECTED_CLASSES = {
 };
 const EXPECTED_TOTAL = 32;
 
-/** Append lines to the November export and rewrite its manifest counts. */
-function exportWith(extra: readonly string[]) {
-  const lines = [...novemberExportLines().slice(0, -1), ...extra];
+/** Export text for these data lines, with a manifest counted from them. */
+function exportText(lines: readonly string[], exportedAt = "2026-11-19T11:00:00.000Z") {
   const counts: Record<string, number> = {
     user: 0,
     role_grant: 0,
     basic_grant: 0,
     subscription: 0,
     purchase: 0,
+    pro_holder: 0,
   };
   for (const value of lines) {
     const kind = /"kind":"([a-z_]+)"/.exec(value)?.[1];
@@ -123,21 +131,46 @@ function exportWith(extra: readonly string[]) {
   }
   const manifest = JSON.stringify({
     kind: "manifest",
-    format: "egghead-rails-access-export/v1",
-    exportedAt: "2026-11-19T11:00:00.000Z",
+    format: "egghead-rails-access-export/v2",
+    exportedAt,
     counts,
   });
-  return parseRailsAccessExport([...lines, manifest].join("\n"));
+  return `${[...lines, manifest].join("\n")}\n`;
+}
+
+/** November data lines without the manifest. */
+function novemberData() {
+  return novemberExportLines().slice(0, -1);
+}
+
+/** Append lines to the November export and rewrite its manifest counts. */
+function exportWith(extra: readonly string[]) {
+  return parseRailsAccessExport(exportText([...novemberData(), ...extra]));
+}
+
+/** November export with one user's email changed (Rails-side edit after July). */
+function exportWithEmail(railsUserId: string, email: string) {
+  const lines = novemberData().map((value) =>
+    value.includes(`"railsUserId":"${railsUserId}","email"`)
+      ? value.replace(`"u${railsUserId}@example.test"`, JSON.stringify(email))
+      : value,
+  );
+  return parseRailsAccessExport(exportText(lines));
 }
 
 function straßeLines() {
+  return learnerLines("130", "straße@example.test", "600");
+}
+
+/** A Rails user line plus one playlist purchase (granting, not bulk). */
+function learnerLines(railsUserId: string, email: string, sellableId: string) {
   return [
     JSON.stringify({
       kind: "user",
-      railsUserId: "130",
-      email: "straße@example.test",
+      railsUserId,
+      email,
       firstName: "Learner",
-      lastName: "130",
+      lastName: railsUserId,
       avatarUrl: null,
       confirmedAt: null,
       createdAt: "2025-01-01 00:00:00",
@@ -147,10 +180,10 @@ function straßeLines() {
     }),
     JSON.stringify({
       kind: "purchase",
-      railsSellablePurchaseId: "6030",
-      railsUserId: "130",
+      railsSellablePurchaseId: `60${railsUserId}`,
+      railsUserId,
       sellableType: "Playlist",
-      sellableId: "600",
+      sellableId,
       purchaseState: "paid",
       bulk: false,
       restrictedToCountry: null,
@@ -158,6 +191,11 @@ function straßeLines() {
       createdAt: "2026-10-01 00:00:00",
     }),
   ];
+}
+
+/** The plan sha a dry run saved in `out`. */
+async function planShaIn(out: string) {
+  return parsePlan(await readFile(path.join(out, "plan.json"), "utf8")).planSha256;
 }
 
 function opFor(ops: readonly DeltaOp[], kind: DeltaOp["kind"], id: string) {
@@ -182,7 +220,7 @@ void describe("export parsing", () => {
     const withoutAPurchase = [...lines.slice(0, -2), lines.at(-1) ?? ""].join("\n");
     assert.throws(
       () => parseRailsAccessExport(withoutAPurchase),
-      /manifest says 4 purchase lines but the file has 3/,
+      /manifest says 7 pro_holder lines but the file has 6/,
     );
   });
 
@@ -330,6 +368,7 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
       mode: "dry-run",
       generatedAt: NOW_ISO,
       target: { runtime: "local", host: "127.0.0.1", database: "fixture_test" },
+      acceptProGap: null,
       allowLargeRevoke: false,
     });
     assert.equal(receipt.changes.total, EXPECTED_TOTAL);
@@ -382,6 +421,7 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
       mode: "dry-run",
       generatedAt: NOW_ISO,
       target: { runtime: "local", host: "127.0.0.1", database: "fixture_test" },
+      acceptProGap: null,
       allowLargeRevoke: false,
     });
     assert.equal(receipt.gate.pass, false);
@@ -444,7 +484,8 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     const op = opFor(ops, "entitlement_expire", ids.purchaseEntitlement("6009"));
     assert.ok(op);
     assert.equal(opFor(ops, "entitlement_revoke", ids.purchaseEntitlement("6009")), undefined);
-    assert.equal(analysis.largeRevoke.revokes, 3);
+    assert.equal(analysis.largeRevoke.entitlementRevokes, 3);
+    assert.equal(analysis.largeRevoke.revokes, 5, "plus the two seat-flag clears");
   });
 
   void test("#11: many expired purchases do not trip the revoke alarm", () => {
@@ -497,6 +538,7 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
       mode: "dry-run",
       generatedAt: NOW_ISO,
       target: { runtime: "local", host: "127.0.0.1", database: "fixture_test" },
+      acceptProGap: null,
       allowLargeRevoke: false,
     });
     assert.equal(receipt.policy.membershipFlagHeldForNativeOrganization, 1);
@@ -550,11 +592,21 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
 
   void test("#8: --apply refuses without the reviewed plan sha, on drift, or on a failing gate", () => {
     const sha = planSha256(analysis.plan.ops);
+    const exportedAtMs = Date.parse(railsExport.manifest.exportedAt);
     const base = {
       expectPlan: sha,
-      reviewedPlan: { planSha256: sha, exportSha256: railsExport.sha256, database: "db_test" },
+      reviewedPlan: {
+        planSha256: sha,
+        exportSha256: railsExport.sha256,
+        database: "db_test",
+        hostSha256: hostSha256("db.example.test"),
+      },
       exportSha256: railsExport.sha256,
       database: "db_test",
+      hostSha256: hostSha256("db.example.test"),
+      exportedAtMs,
+      nowMs: exportedAtMs + 30 * 60_000,
+      maxExportAgeMs: 2 * 3_600_000,
       freshPlanSha256: sha,
       gate: { pass: true, failures: [] },
     };
@@ -567,6 +619,218 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
       /gate: 1 users under-granted/,
     );
     assert.match(applyRefusals({ ...base, database: "other_test" }).join(), /targets db_test/);
+  });
+
+  void test("#14: --apply refuses a plan made against another host with the same database name", () => {
+    const sha = planSha256(analysis.plan.ops);
+    const host = hostSha256("beta.example.test");
+    const refusals = applyRefusals({
+      expectPlan: sha,
+      reviewedPlan: {
+        planSha256: sha,
+        exportSha256: railsExport.sha256,
+        database: "db",
+        hostSha256: host,
+      },
+      exportSha256: railsExport.sha256,
+      database: "db",
+      hostSha256: hostSha256("production.example.test"),
+      exportedAtMs: NOW_MS,
+      nowMs: NOW_MS,
+      maxExportAgeMs: 3_600_000,
+      freshPlanSha256: sha,
+      gate: { pass: true, failures: [] },
+    });
+    assert.deepEqual(refusals, ["the saved plan was computed against a different database host"]);
+    assert.notEqual(host, "beta.example.test", "the plan stores a hash, not the host");
+  });
+
+  void test("#16: --apply refuses an export older than --max-export-age, or from the future", () => {
+    const sha = planSha256(analysis.plan.ops);
+    const base = {
+      expectPlan: sha,
+      reviewedPlan: {
+        planSha256: sha,
+        exportSha256: railsExport.sha256,
+        database: "db",
+        hostSha256: "h",
+      },
+      exportSha256: railsExport.sha256,
+      database: "db",
+      hostSha256: "h",
+      exportedAtMs: NOW_MS,
+      maxExportAgeMs: 2 * 3_600_000,
+      freshPlanSha256: sha,
+      gate: { pass: true, failures: [] },
+    };
+    assert.deepEqual(applyRefusals({ ...base, nowMs: NOW_MS + 119 * 60_000 }), []);
+    assert.match(
+      applyRefusals({ ...base, nowMs: NOW_MS + 121 * 60_000 }).join(),
+      /121 minutes old, over --max-export-age 120 minutes/,
+    );
+    assert.match(applyRefusals({ ...base, nowMs: NOW_MS - 3_600_000 }).join(), /in the future/);
+    assert.equal(parseDurationMs("2h"), 7_200_000);
+    assert.equal(parseDurationMs("90m"), 5_400_000);
+    assert.equal(parseDurationMs("soon"), null);
+  });
+
+  void test("#8: two Rails users the email collation treats as one are a conflict, not two creates", () => {
+    const twins = exportWith([
+      ...learnerLines("130", "straße@example.test", "600"),
+      ...learnerLines("131", "strasse@example.test", "601"),
+    ]);
+    // Without the column's weights the JS key misses ß = ss: both would be creates,
+    // and the second would collide on apply forever.
+    const naive = analyze(twins, julySnapshot(), NOW_MS);
+    assert.ok(opFor(naive.plan.ops, "user_create", ids.user("130")));
+    assert.ok(opFor(naive.plan.ops, "user_create", ids.user("131")));
+
+    const weighted: CbSnapshot = {
+      ...julySnapshot(),
+      exportEmailKeys: { "straße@example.test": "AB12", "strasse@example.test": "AB12" },
+    };
+    const result = analyze(twins, weighted, NOW_MS);
+    assert.ok(
+      opFor(result.plan.ops, "user_create", ids.user("130")),
+      "lower Rails id keeps the email",
+    );
+    assert.equal(opFor(result.plan.ops, "user_create", ids.user("131")), undefined);
+    assert.deepEqual(result.plan.identities.get("131"), {
+      kind: "unresolved",
+      reason: "duplicate_rails_email",
+    });
+    const receipt = buildReceipt(twins, result, {
+      mode: "dry-run",
+      generatedAt: NOW_ISO,
+      target: { runtime: "local", host: "127.0.0.1", database: "fixture_test" },
+      allowLargeRevoke: false,
+      acceptProGap: null,
+    });
+    assert.equal(receipt.identityConflicts.duplicateEmail, 1);
+    assert.equal(receipt.gate.pass, false);
+    assert.match(receipt.gate.failures.join(), /1 identity conflicts/);
+  });
+
+  void test("#9: a Rails email change after July becomes user_email_update (Rails wins until the flip)", () => {
+    const renamed = exportWithEmail("101", "renamed101@example.test");
+    const result = analyze(renamed, julySnapshot(), NOW_MS);
+    const op = opFor(result.plan.ops, "user_email_update", ids.user("101"));
+    assert.ok(op && op.kind === "user_email_update");
+    assert.equal(op.email, "renamed101@example.test");
+    assert.equal(op.previousEmail, "u101@example.test");
+    assert.equal(result.remainingAfterSimulation, 0);
+    const receipt = buildReceipt(renamed, result, {
+      mode: "dry-run",
+      generatedAt: NOW_ISO,
+      target: { runtime: "local", host: "127.0.0.1", database: "fixture_test" },
+      allowLargeRevoke: false,
+      acceptProGap: null,
+    });
+    assert.equal(receipt.changes.byClass["user_email_update"], 1);
+    assert.equal(receipt.identity["matched:email_update"], 1);
+    assert.equal(receipt.gate.pass, true);
+    assert.doesNotMatch(JSON.stringify(receipt.samples), /renamed101/, "no emails in the receipt");
+
+    // A case-only change is the same email under the collation: no update.
+    const recased = analyze(exportWithEmail("101", "U101@Example.test"), julySnapshot(), NOW_MS);
+    assert.equal(opFor(recased.plan.ops, "user_email_update", ids.user("101")), undefined);
+  });
+
+  void test("#9: an email update onto an address another user holds is held and fails the gate", () => {
+    const renamed = exportWithEmail("101", "taken@example.test");
+    const snapshot = julySnapshot();
+    const taken: CbSnapshot = {
+      ...snapshot,
+      users: [
+        ...snapshot.users,
+        {
+          id: "cb-taken",
+          email: "taken@example.test",
+          legacyRailsUserId: null,
+          matchedExportEmails: ["taken@example.test"],
+        },
+      ],
+    };
+    const result = analyze(renamed, taken, NOW_MS);
+    assert.equal(opFor(result.plan.ops, "user_email_update", ids.user("101")), undefined);
+    assert.equal(opFor(result.plan.ops, "user_link", "cb-taken"), undefined);
+    const receipt = buildReceipt(renamed, result, {
+      mode: "dry-run",
+      generatedAt: NOW_ISO,
+      target: { runtime: "local", host: "127.0.0.1", database: "fixture_test" },
+      allowLargeRevoke: false,
+      acceptProGap: null,
+    });
+    assert.equal(receipt.identityConflicts.emailUpdateHeld, 1);
+    assert.equal(receipt.identity["matched:email_update_held"], 1);
+    assert.equal(receipt.gate.pass, false);
+    assert.equal(result.after.summary.underGrantUsers, 0, "101 keeps access by legacy id");
+  });
+
+  void test("#2/#10: the export is cross-checked against Rails' own pro holders", () => {
+    const context = {
+      mode: "dry-run" as const,
+      generatedAt: NOW_ISO,
+      target: { runtime: "local", host: "127.0.0.1", database: "fixture_test" },
+      allowLargeRevoke: false,
+    };
+    const clean = buildReceipt(railsExport, analysis, { ...context, acceptProGap: null });
+    assert.equal(clean.proCrossCheck.railsHasExportLacks, 0);
+    assert.equal(clean.proCrossCheck.exportHasRailsLacks, 0);
+    assert.equal(clean.proCrossCheck.railsProHolders, 7);
+
+    // Two pro holders the export grants nothing: one an active gift, one bare pro.
+    const gap = exportWith([
+      JSON.stringify(proHolder("120", { gift: true })),
+      JSON.stringify(proHolder("121")),
+    ]);
+    const gapAnalysis = analyze(gap, julySnapshot(), NOW_MS);
+    const failing = buildReceipt(gap, gapAnalysis, { ...context, acceptProGap: null });
+    assert.equal(failing.proCrossCheck.railsHasExportLacks, 2);
+    assert.deepEqual(failing.proCrossCheck.railsHasExportLacksBy, {
+      activeGift: 1,
+      activeManagedSubscription: 0,
+      activeLegacySubscription: 0,
+      unexplained: 1,
+    });
+    assert.deepEqual(failing.proCrossCheck.railsHasExportLacksSample, ["120", "121"]);
+    assert.equal(failing.gate.pass, false);
+    assert.match(failing.gate.failures.join(), /2 Rails pro holders/);
+    assert.equal(buildReceipt(gap, gapAnalysis, { ...context, acceptProGap: 2 }).gate.pass, true);
+    assert.equal(buildReceipt(gap, gapAnalysis, { ...context, acceptProGap: 1 }).gate.pass, false);
+
+    // The export grants 101, Rails has not given 101 pro yet: reported, not fatal.
+    const lag = parseRailsAccessExport(
+      exportText(novemberData().filter((value) => value !== JSON.stringify(proHolder("101")))),
+    );
+    const lagReceipt = buildReceipt(lag, analyze(lag, julySnapshot(), NOW_MS), {
+      ...context,
+      acceptProGap: null,
+    });
+    assert.equal(lagReceipt.proCrossCheck.exportHasRailsLacks, 1);
+    assert.deepEqual(lagReceipt.proCrossCheck.exportHasRailsLacksSample, ["101"]);
+    assert.equal(lagReceipt.gate.pass, true);
+  });
+
+  void test("#17: seat-flag clears count toward the revoke alarm", () => {
+    const snapshot = julySnapshot();
+    const template = snapshot.memberships.find((row) => row.id === ids.membership("8002"));
+    assert.ok(template);
+    const extra = Array.from({ length: 60 }, (_, index) => ({
+      ...template,
+      id: `eh_orgmem_stale_${index}`,
+      userId: `eh_user_stale_${index}`,
+      fields: { ...template.fields, legacyRailsUserId: `9${index}` },
+    }));
+    const result = analyze(
+      railsExport,
+      { ...snapshot, memberships: [...snapshot.memberships, ...extra] },
+      NOW_MS,
+    );
+    assert.equal(result.largeRevoke.membershipRevokes, 62);
+    assert.equal(result.largeRevoke.entitlementRevokes, 3);
+    assert.equal(result.largeRevoke.revokes, 65);
+    assert.equal(result.largeRevoke.tripped, true);
   });
 
   void test("a large revoke trips the alarm and blocks the gate until allowed", () => {
@@ -593,6 +857,7 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
       mode: "dry-run" as const,
       generatedAt: NOW_ISO,
       target: { runtime: "local", host: "127.0.0.1", database: "fixture_test" },
+      acceptProGap: null,
     };
     assert.equal(
       buildReceipt(railsExport, stale, { ...context, allowLargeRevoke: false }).gate.pass,
@@ -627,6 +892,7 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     const text = serializePlan({
       exportSha256: railsExport.sha256,
       database: "fixture_test",
+      hostSha256: hostSha256("127.0.0.1"),
       generatedAt: NOW_ISO,
       ops,
     });
@@ -788,6 +1054,10 @@ void describe(
       const countBefore = await query(
         "SELECT COUNT(*) AS n, MAX(updatedAt) AS u FROM egghead_Entitlement",
       );
+      // #26: every table the delta writes, not just entitlements.
+      const checksum = () => query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
+      const checksumBefore = await checksum();
+      assert.equal(checksumBefore.length, FIXTURE_TABLES.length);
       const analysis = await run.analyzeDatabase(db, railsExport, NOW_MS, SMALL);
       assert.deepEqual(classCounts(analysis.plan.ops), EXPECTED_CLASSES);
       assert.equal(analysis.before.summary.underGrantUsers, 7);
@@ -796,6 +1066,7 @@ void describe(
         "SELECT COUNT(*) AS n, MAX(updatedAt) AS u FROM egghead_Entitlement",
       );
       assert.deepEqual(countAfter, countBefore);
+      assert.deepEqual(await checksum(), checksumBefore);
       assert.equal((await query("SELECT COUNT(*) AS n FROM egghead_User"))[0]?.["n"], 10);
     });
 
@@ -1006,6 +1277,177 @@ void describe(
       assert.equal(link.railsUserId, "103");
       await applyAll(again.plan.ops, cursorFor(again.plan.ops), { batchSize: 50 });
       assert.equal((await runtimeAccess("cb-signup-103")).granted, true);
+    });
+
+    void test("#8: the store weighs Rails emails by the column collation, so ß/ss twins never collide on apply", async () => {
+      await resetToJuly();
+      const twins = exportWith([
+        ...learnerLines("130", "straße@example.test", "600"),
+        ...learnerLines("131", "strasse@example.test", "601"),
+      ]);
+      const analysis = await run.analyzeDatabase(db, twins, NOW_MS, SMALL);
+      const keys = analysis.snapshot.exportEmailKeys;
+      assert.ok(keys["straße@example.test"]);
+      assert.equal(keys["straße@example.test"], keys["strasse@example.test"]);
+      assert.notEqual(keys["u101@example.test"], keys["u103@example.test"]);
+      assert.equal(keys["linked@example.test"], undefined, "keys are per export email as written");
+      assert.ok(keys["Linked@Example.test"]);
+      assert.deepEqual(analysis.plan.identities.get("131"), {
+        kind: "unresolved",
+        reason: "duplicate_rails_email",
+      });
+      // The plan applies cleanly: no second create hits the unique key.
+      const result = await applyAll(
+        analysis.plan.ops,
+        cursorFor(analysis.plan.ops),
+        { batchSize: 50 },
+        twins,
+      );
+      assert.equal(result.cursor.complete, true);
+      assert.equal(result.verify.remainingOps, 0);
+    });
+
+    void test("#9: an email drift applies through SQL, and a raced address fails the batch", async () => {
+      await resetToJuly();
+      const renamed = exportWithEmail("101", "renamed101@example.test");
+      const analysis = await run.analyzeDatabase(db, renamed, NOW_MS, SMALL);
+      const op = opFor(analysis.plan.ops, "user_email_update", ids.user("101"));
+      assert.ok(op);
+
+      await query(
+        "INSERT INTO egghead_User (id, email, name, role, fields) VALUES (?, ?, ?, 'user', '{}')",
+        ["cb-racer", "Renamed101@example.test", "Racer"],
+      );
+      const untouched = await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
+      await assert.rejects(
+        applyAll(analysis.plan.ops, cursorFor(analysis.plan.ops), { batchSize: 100 }, renamed),
+        (error: unknown) => error instanceof store.UserWriteConflictError,
+      );
+      assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), untouched);
+      await query("DELETE FROM egghead_User WHERE id = 'cb-racer'");
+
+      const result = await applyAll(
+        analysis.plan.ops,
+        cursorFor(analysis.plan.ops),
+        { batchSize: 100 },
+        renamed,
+      );
+      assert.equal(result.verify.remainingOps, 0);
+      const row = await query("SELECT email FROM egghead_User WHERE id = ?", [ids.user("101")]);
+      assert.equal(row[0]?.["email"], "renamed101@example.test");
+      assert.equal((await runtimeAccess(ids.user("101"))).granted, true);
+    });
+
+    void test("#18: a user_link raced by another link fails the batch loudly", async () => {
+      await resetToJuly();
+      const analysis = await run.analyzeDatabase(db, railsExport, NOW_MS, SMALL);
+      assert.ok(opFor(analysis.plan.ops, "user_link", CB_NATIVE_LINK_USER));
+      await query(
+        "UPDATE egghead_User SET fields = JSON_SET(fields, '$.legacyRailsUserId', '999') WHERE id = ?",
+        [CB_NATIVE_LINK_USER],
+      );
+      await assert.rejects(
+        applyAll(analysis.plan.ops, cursorFor(analysis.plan.ops), { batchSize: 100 }),
+        (error: unknown) =>
+          error instanceof store.UserWriteConflictError &&
+          /linked to Rails user 999/.test(error.message),
+      );
+      const grants = await query("SELECT COUNT(*) AS n FROM egghead_Entitlement WHERE userId = ?", [
+        CB_NATIVE_LINK_USER,
+      ]);
+      assert.equal(grants[0]?.["n"], 0, "no grant landed on the wrong person");
+    });
+
+    void test("#4: the CLI refuses --apply without the plan sha, on a stale export, a failing gate or a large revoke", async () => {
+      await resetToJuly();
+      const dir = await mkdtemp(path.join(tmpdir(), "access-delta-cli-"));
+      const database = new URL(mysqlUrl ?? "mysql://x/none").pathname.slice(1);
+      const cli = (args: readonly string[]) =>
+        new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+          const child = spawn(
+            process.execPath,
+            ["--import", "tsx", "scripts/access-delta.ts", ...args],
+            {
+              env: {
+                ...process.env,
+                TZ: "UTC",
+                TSX_TSCONFIG_PATH: "apps/web/tsconfig.json",
+                DATABASE_URL: mysqlUrl,
+                EGGHEAD_RUNTIME: "local",
+              },
+              stdio: ["ignore", "ignore", "pipe"],
+            },
+          );
+          let stderr = "";
+          child.stderr.on("data", (chunk: Buffer) => {
+            stderr += chunk.toString();
+          });
+          child.on("error", reject);
+          child.on("close", (code) => resolve({ code, stderr }));
+        });
+      const writeExport = async (name: string, lines: readonly string[], ageMs: number) => {
+        const file = path.join(dir, name);
+        await writeFile(file, exportText(lines, new Date(Date.now() - ageMs).toISOString()));
+        return file;
+      };
+      const apply = (file: string, out: string, extra: readonly string[]) =>
+        cli(["--export", file, "--out", out, "--apply", "--confirm-database", database, ...extra]);
+
+      try {
+        // Stale export: the dry run is fine, --apply refuses.
+        const stale = await writeExport("stale.jsonl", novemberData(), 3 * 3_600_000);
+        const staleOut = path.join(dir, "stale");
+        const dry = await cli(["--export", stale, "--out", staleOut]);
+        assert.equal(dry.code, 0, dry.stderr);
+        assert.match(dry.stderr, /gate pass/);
+        const staleSha = await planShaIn(staleOut);
+        const noSha = await apply(stale, staleOut, []);
+        assert.equal(noSha.code, 1);
+        assert.match(noSha.stderr, /needs --expect-plan/);
+        const old = await apply(stale, staleOut, ["--expect-plan", staleSha]);
+        assert.equal(old.code, 1);
+        assert.match(old.stderr, /minutes old, over --max-export-age 120 minutes/);
+
+        // Failing gate: an empty Rails email leaves a learner unresolved.
+        const blank = await writeExport(
+          "blank.jsonl",
+          novemberData().map((value) => value.replace('"email":"u103@example.test"', '"email":""')),
+          60_000,
+        );
+        const blankOut = path.join(dir, "blank");
+        assert.match((await cli(["--export", blank, "--out", blankOut])).stderr, /gate FAIL/);
+        const gated = await apply(blank, blankOut, ["--expect-plan", await planShaIn(blankOut)]);
+        assert.equal(gated.code, 1);
+        assert.match(gated.stderr, /gate: 1 users would still be under-granted/);
+
+        // Large revoke: 60 owned rows Rails no longer grants.
+        await Promise.all(
+          Array.from({ length: 60 }, (_, index) =>
+            query(
+              `INSERT INTO egghead_Entitlement (id, entitlementType, userId, sourceType, sourceId, metadata)
+               VALUES (?, 'egghead_playlist_access', ?, 'rails_sellable_purchase', ?, '{}')`,
+              [`eh_entitlement_cli_stale_${index}`, ids.user("101"), `cli-stale-${index}`],
+            ),
+          ),
+        );
+        const fresh = await writeExport("fresh.jsonl", novemberData(), 60_000);
+        const freshOut = path.join(dir, "fresh");
+        assert.match((await cli(["--export", fresh, "--out", freshOut])).stderr, /gate FAIL/);
+        const sha = await planShaIn(freshOut);
+        const alarmed = await apply(fresh, freshOut, ["--expect-plan", sha]);
+        assert.equal(alarmed.code, 1);
+        assert.match(alarmed.stderr, /exceed the alarm threshold/);
+        const allowed = await apply(fresh, freshOut, [
+          "--expect-plan",
+          sha,
+          "--allow-large-revoke",
+        ]);
+        assert.equal(allowed.code, 0, allowed.stderr);
+        const again = await cli(["--export", fresh, "--out", path.join(dir, "again")]);
+        assert.match(again.stderr, /dry-run: 0 changes/);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     });
 
     void test("#9: the store pairs ß and ss the way the email column's collation does", async () => {

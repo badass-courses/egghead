@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-export const RAILS_ACCESS_EXPORT_FORMAT = "egghead-rails-access-export/v1";
+export const RAILS_ACCESS_EXPORT_FORMAT = "egghead-rails-access-export/v2";
 export const ACCESS_DELTA_LAW = "adr-0006-lenient-status";
 
 const SUBSCRIPTION_SOURCE_TYPE = "rails_account_subscription";
@@ -115,12 +115,26 @@ const purchaseLine = z.object({
   createdAt: nullableText,
 });
 
+/**
+ * A Rails user holding the global `pro` role: Rails' own access decision
+ * (`Ability#lesson_permissions` checks `is_pro?`). The flags say which legacy
+ * paths outside the export can keep that role alive.
+ */
+const proHolderLine = z.object({
+  kind: z.literal("pro_holder"),
+  railsUserId: z.string().min(1),
+  activeGift: z.boolean(),
+  activeManagedSubscription: z.boolean(),
+  activeLegacySubscription: z.boolean(),
+});
+
 const manifestCounts = z.object({
   user: count,
   role_grant: count,
   basic_grant: count,
   subscription: count,
   purchase: count,
+  pro_holder: count,
 });
 
 const manifestLine = z.object({
@@ -136,6 +150,7 @@ const exportLine = z.discriminatedUnion("kind", [
   basicGrantLine,
   subscriptionLine,
   purchaseLine,
+  proHolderLine,
   manifestLine,
 ]);
 
@@ -145,6 +160,7 @@ export type RailsBasicGrant = z.infer<typeof basicGrantLine>;
 export type RailsSubscription = z.infer<typeof subscriptionLine>;
 export type RailsSubscriptionMember = z.infer<typeof subscriptionMember>;
 export type RailsPurchase = z.infer<typeof purchaseLine>;
+export type RailsProHolder = z.infer<typeof proHolderLine>;
 export type RailsExportManifest = z.infer<typeof manifestLine>;
 
 export interface RailsAccessExport {
@@ -155,6 +171,7 @@ export interface RailsAccessExport {
   readonly basicGrants: readonly RailsBasicGrant[];
   readonly subscriptions: readonly RailsSubscription[];
   readonly purchases: readonly RailsPurchase[];
+  readonly proHolders: readonly RailsProHolder[];
 }
 
 export class RailsExportError extends Error {
@@ -173,6 +190,7 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
   const basicGrants: RailsBasicGrant[] = [];
   const subscriptions: RailsSubscription[] = [];
   const purchases: RailsPurchase[] = [];
+  const proHolders: RailsProHolder[] = [];
   let manifest: RailsExportManifest | null = null;
   const lines = text.split("\n");
 
@@ -213,6 +231,9 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
       case "purchase":
         purchases.push(line);
         break;
+      case "pro_holder":
+        proHolders.push(line);
+        break;
       case "manifest":
         manifest = line;
         break;
@@ -229,8 +250,16 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
     basic_grant: basicGrants.length,
     subscription: subscriptions.length,
     purchase: purchases.length,
+    pro_holder: proHolders.length,
   };
-  const kinds = ["user", "role_grant", "basic_grant", "subscription", "purchase"] as const;
+  const kinds = [
+    "user",
+    "role_grant",
+    "basic_grant",
+    "subscription",
+    "purchase",
+    "pro_holder",
+  ] as const;
   for (const kind of kinds) {
     if (read[kind] !== manifest.counts[kind]) {
       throw new RailsExportError(
@@ -258,7 +287,7 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
     }
   }
 
-  return { sha256, manifest, users, roleGrants, basicGrants, subscriptions, purchases };
+  return { sha256, manifest, users, roleGrants, basicGrants, subscriptions, purchases, proHolders };
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +384,12 @@ export interface CbMembership {
  */
 export interface CbSnapshot {
   readonly users: readonly CbUser[];
+  /**
+   * Export email -> its weight under the `egghead_User.email` column collation
+   * (MySQL `WEIGHT_STRING`). Two emails with the same weight collide on the
+   * unique key. Emails missing here fall back to `emailUniquenessKey`.
+   */
+  readonly exportEmailKeys: Readonly<Record<string, string>>;
   readonly entitlements: readonly CbEntitlement[];
   readonly memberships: readonly CbMembership[];
   readonly organizationIds: readonly string[];
@@ -418,6 +453,15 @@ export type DeltaOp =
       readonly railsUserId: string;
     }
   | {
+      /** Rails is the source of truth for email until the flip. */
+      readonly kind: "user_email_update";
+      readonly key: string;
+      readonly userId: string;
+      readonly railsUserId: string;
+      readonly email: string;
+      readonly previousEmail: string;
+    }
+  | {
       readonly kind: "organization_create";
       readonly key: string;
       readonly organization: NewOrganization;
@@ -445,6 +489,7 @@ export type DeltaOpKind = DeltaOp["kind"];
 
 export const DELTA_OP_KINDS: readonly DeltaOpKind[] = [
   "user_create",
+  "user_email_update",
   "user_link",
   "organization_create",
   "membership_create",
@@ -460,6 +505,7 @@ export const DELTA_OP_KINDS: readonly DeltaOpKind[] = [
 // Grants land before revokes so a crash mid-apply never removes access first.
 const PHASE: Record<DeltaOpKind, number> = {
   user_create: 1,
+  user_email_update: 1,
   user_link: 1,
   organization_create: 2,
   membership_create: 3,
@@ -480,7 +526,14 @@ function opKey(kind: DeltaOpKind, id: string) {
 // Identity
 
 export type IdentityOutcome =
-  | { readonly kind: "matched"; readonly userId: string }
+  | {
+      readonly kind: "matched";
+      readonly userId: string;
+      /** Rails email to write when CourseBuilder's differs under the collation. */
+      readonly emailUpdate: { readonly from: string; readonly to: string } | null;
+      /** The Rails email belongs to another user; the stale email is kept. */
+      readonly emailHeld: boolean;
+    }
   | { readonly kind: "linked"; readonly userId: string }
   | { readonly kind: "created"; readonly userId: string; readonly user: NewUser }
   | {
@@ -522,16 +575,30 @@ function newUserRow(user: RailsUser): NewUser {
   };
 }
 
-/** Match by legacy Rails id, then by email; Rails id order decides email collisions. */
+/** The unique-key identity of an email: the column collation's weight when known. */
+export function emailKeyFor(snapshot: Pick<CbSnapshot, "exportEmailKeys">) {
+  return (email: string | null | undefined) => {
+    const normalized = normalizeEmail(email);
+    const weight = snapshot.exportEmailKeys[normalized];
+    return weight === undefined ? emailUniquenessKey(normalized) : `weight:${weight}`;
+  };
+}
+
+/**
+ * Match by legacy Rails id, then by email; Rails id order decides email
+ * collisions. Emails compare under the column collation (`exportEmailKeys`), so
+ * two Rails users MySQL would treat as one email never both become creates.
+ */
 export function resolveIdentities(
   railsExport: Pick<RailsAccessExport, "users">,
-  snapshot: Pick<CbSnapshot, "users">,
+  snapshot: Pick<CbSnapshot, "users" | "exportEmailKeys">,
 ): Map<string, IdentityOutcome> {
+  const keyFor = emailKeyFor(snapshot);
   const byRailsId = new Map<string, CbUser>();
   const byEmail = new Map<string, CbUser>();
   const keysOf = (user: CbUser) => [
-    emailUniquenessKey(user.email),
-    ...user.matchedExportEmails.map((email) => emailUniquenessKey(email)),
+    keyFor(user.email),
+    ...user.matchedExportEmails.map((email) => keyFor(email)),
   ];
   for (const user of snapshot.users) {
     if (user.legacyRailsUserId) byRailsId.set(user.legacyRailsUserId, user);
@@ -546,11 +613,36 @@ export function resolveIdentities(
   const outcomes = new Map<string, IdentityOutcome>();
 
   // Pass 1: legacy-id matches claim their CourseBuilder emails first.
+  const drifted: { user: RailsUser; matched: CbUser }[] = [];
   for (const user of ordered) {
     const matched = byRailsId.get(user.railsUserId);
     if (!matched) continue;
-    outcomes.set(user.railsUserId, { kind: "matched", userId: matched.id });
-    for (const key of keysOf(matched)) claimedEmail.add(key);
+    const ownKeys = keysOf(matched);
+    for (const key of ownKeys) claimedEmail.add(key);
+    const railsEmail = normalizeEmail(user.email);
+    if (railsEmail && !ownKeys.includes(keyFor(railsEmail))) drifted.push({ user, matched });
+    outcomes.set(user.railsUserId, {
+      kind: "matched",
+      userId: matched.id,
+      emailUpdate: null,
+      emailHeld: false,
+    });
+  }
+
+  // Pass 1b: a matched user whose Rails email changed takes the Rails email,
+  // unless another user (CourseBuilder or Rails) already holds it.
+  for (const { user, matched } of drifted) {
+    const railsEmail = normalizeEmail(user.email);
+    const key = keyFor(railsEmail);
+    const holder = byEmail.get(key);
+    const held = claimedEmail.has(key) || (holder !== undefined && holder.id !== matched.id);
+    if (!held) claimedEmail.add(key);
+    outcomes.set(user.railsUserId, {
+      kind: "matched",
+      userId: matched.id,
+      emailUpdate: held ? null : { from: matched.email, to: railsEmail },
+      emailHeld: held,
+    });
   }
 
   for (const user of ordered) {
@@ -560,7 +652,7 @@ export function resolveIdentities(
       outcomes.set(user.railsUserId, { kind: "unresolved", reason: "empty_email" });
       continue;
     }
-    const key = emailUniquenessKey(email);
+    const key = keyFor(email);
     if (claimedEmail.has(key)) {
       const holder = byEmail.get(key);
       outcomes.set(user.railsUserId, {
@@ -587,6 +679,25 @@ export function resolveIdentities(
   }
 
   return outcomes;
+}
+
+/** Identity outcomes a person must resolve: they fail the gate. */
+export function identityConflicts(identities: ReadonlyMap<string, IdentityOutcome>) {
+  let duplicateEmail = 0;
+  let emailOwnedByOtherRailsUser = 0;
+  let emailUpdateHeld = 0;
+  for (const outcome of identities.values()) {
+    if (outcome.kind === "matched" && outcome.emailHeld) emailUpdateHeld++;
+    if (outcome.kind !== "unresolved") continue;
+    if (outcome.reason === "duplicate_rails_email") duplicateEmail++;
+    if (outcome.reason === "email_owned_by_other_rails_user") emailOwnedByOtherRailsUser++;
+  }
+  return {
+    duplicateEmail,
+    emailOwnedByOtherRailsUser,
+    emailUpdateHeld,
+    total: duplicateEmail + emailOwnedByOtherRailsUser + emailUpdateHeld,
+  };
 }
 
 function resolvedUserId(identities: ReadonlyMap<string, IdentityOutcome>, railsUserId: string) {
@@ -968,6 +1079,8 @@ export interface DeltaPlan {
   /** Seat flags kept because the organization also holds CourseBuilder-native grants. */
   readonly membershipFlagHeldForNativeOrganization: number;
   readonly activeOwnedEntitlements: number;
+  /** Rails-sourced memberships whose seat flag currently grants (alarm base). */
+  readonly activeRailsSeatFlags: number;
 }
 
 /**
@@ -1017,6 +1130,15 @@ export function computeDeltaPlan(
         userId: outcome.userId,
         railsUserId,
       });
+    } else if (outcome.kind === "matched" && outcome.emailUpdate) {
+      ops.push({
+        kind: "user_email_update",
+        key: opKey("user_email_update", outcome.userId),
+        userId: outcome.userId,
+        railsUserId,
+        email: outcome.emailUpdate.to,
+        previousEmail: outcome.emailUpdate.from,
+      });
     }
   }
 
@@ -1061,10 +1183,12 @@ export function computeDeltaPlan(
 
   // A Rails-sourced seat flag that Rails no longer backs would keep granting
   // through organization-level entitlements; clear it.
+  let activeRailsSeatFlags = 0;
   for (const membership of snapshot.memberships) {
     const source = membership.fields["source"];
     if (typeof source !== "string" || !RAILS_MEMBERSHIP_SOURCES.has(source)) continue;
     if (!membershipGrants(membership)) continue;
+    activeRailsSeatFlags++;
     // An expected row is handled above as create/update (no double count).
     if (expected.memberships.has(membership.id)) continue;
     const railsUserId = membership.fields["legacyRailsUserId"];
@@ -1125,6 +1249,7 @@ export function computeDeltaPlan(
     membershipRevokeHeldForIdentity,
     membershipFlagHeldForNativeOrganization,
     activeOwnedEntitlements,
+    activeRailsSeatFlags,
   };
 }
 
@@ -1173,6 +1298,18 @@ export function simulateApply(
         const user = users.get(op.userId);
         if (user && user.legacyRailsUserId === null) {
           users.set(op.userId, { ...user, legacyRailsUserId: op.railsUserId });
+        }
+        break;
+      }
+      case "user_email_update": {
+        const user = users.get(op.userId);
+        if (user) {
+          // A fresh read pairs the new email with its export email.
+          users.set(op.userId, {
+            ...user,
+            email: op.email,
+            matchedExportEmails: [...new Set([...user.matchedExportEmails, op.email])],
+          });
         }
         break;
       }
@@ -1242,6 +1379,7 @@ export function simulateApply(
 
   return {
     users: [...users.values()],
+    exportEmailKeys: snapshot.exportEmailKeys,
     organizationIds: [...organizationIds],
     memberships: [...memberships.values()],
     entitlements: [...entitlements.values()],

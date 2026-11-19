@@ -397,6 +397,19 @@ function purchase(
  *   101 second subscription           9011 on the same account 7001
  *   101 expired purchase              6009 (July row) expired in September
  */
+export function proHolder(
+  railsUserId: string,
+  flags: { gift?: boolean; managed?: boolean; legacy?: boolean } = {},
+) {
+  return {
+    kind: "pro_holder",
+    railsUserId,
+    activeGift: flags.gift ?? false,
+    activeManagedSubscription: flags.managed ?? false,
+    activeLegacySubscription: flags.legacy ?? false,
+  };
+}
+
 export function novemberExportLines() {
   const users = [
     railsUser("101"),
@@ -442,9 +455,14 @@ export function novemberExportLines() {
     purchase("6003", "113", "557", { bulk: true }),
     purchase("6010", "113", null),
   ];
+  // Rails' own decision: everyone ProStatusChecker would give `pro` (special
+  // roles and account_member seats on enabled subscriptions).
+  const proHolders = ["101", "103", "105", "106", "108", "110", "115"].map((railsUserId) =>
+    proHolder(railsUserId),
+  );
   const manifest = {
     kind: "manifest",
-    format: "egghead-rails-access-export/v1",
+    format: "egghead-rails-access-export/v2",
     exportedAt: "2026-11-19T11:00:00.000Z",
     counts: {
       user: users.length,
@@ -452,11 +470,18 @@ export function novemberExportLines() {
       basic_grant: basicGrants.length,
       subscription: subscriptions.length,
       purchase: purchases.length,
+      pro_holder: proHolders.length,
     },
   };
-  return [...users, ...roleGrants, ...basicGrants, ...subscriptions, ...purchases, manifest].map(
-    line,
-  );
+  return [
+    ...users,
+    ...roleGrants,
+    ...basicGrants,
+    ...subscriptions,
+    ...purchases,
+    ...proHolders,
+    manifest,
+  ].map(line);
 }
 
 export function novemberExportText() {

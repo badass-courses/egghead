@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import type { DeltaOp } from "./rails-access-delta";
 
-export const PLAN_FORMAT = "egghead-access-delta-plan/v1";
+export const PLAN_FORMAT = "egghead-access-delta-plan/v2";
 export const CURSOR_FORMAT = "egghead-access-delta-cursor/v1";
 
 const jsonRecord = z.record(z.string(), z.unknown());
@@ -72,6 +72,14 @@ const deltaOp = z.discriminatedUnion("kind", [
     railsUserId: z.string(),
   }),
   z.object({
+    kind: z.literal("user_email_update"),
+    key: z.string(),
+    userId: z.string(),
+    railsUserId: z.string(),
+    email: z.string(),
+    previousEmail: z.string(),
+  }),
+  z.object({
     kind: z.literal("organization_create"),
     key: z.string(),
     organization: newOrganization,
@@ -90,6 +98,8 @@ const planFile = z.object({
   format: z.literal(PLAN_FORMAT),
   exportSha256: z.string(),
   database: z.string(),
+  /** sha256 of the database host: binds the plan without storing the host. */
+  hostSha256: z.string(),
   generatedAt: z.string(),
   planSha256: z.string(),
   ops: z.array(deltaOp),
@@ -113,6 +123,10 @@ export type DeltaPlanFile = Omit<z.infer<typeof planFile>, "ops"> & {
 };
 export type ApplyCursor = z.infer<typeof cursorFile>;
 
+export function hostSha256(host: string) {
+  return createHash("sha256").update(host.trim().toLowerCase()).digest("hex");
+}
+
 export function planSha256(ops: readonly DeltaOp[]) {
   return createHash("sha256").update(JSON.stringify(ops)).digest("hex");
 }
@@ -120,6 +134,7 @@ export function planSha256(ops: readonly DeltaOp[]) {
 export function serializePlan(input: {
   exportSha256: string;
   database: string;
+  hostSha256: string;
   generatedAt: string;
   ops: readonly DeltaOp[];
 }): string {
@@ -127,6 +142,7 @@ export function serializePlan(input: {
     format: PLAN_FORMAT,
     exportSha256: input.exportSha256,
     database: input.database,
+    hostSha256: input.hostSha256,
     generatedAt: input.generatedAt,
     planSha256: planSha256(input.ops),
     ops: input.ops,
