@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import type { DeltaOp } from "./rails-access-delta";
 
-export const PLAN_FORMAT = "egghead-access-delta-plan/v2";
+export const PLAN_FORMAT = "egghead-access-delta-plan/v3";
 export const CURSOR_FORMAT = "egghead-access-delta-cursor/v1";
 
 const jsonRecord = z.record(z.string(), z.unknown());
@@ -100,6 +100,10 @@ const planFile = z.object({
   database: z.string(),
   /** sha256 of the database host: binds the plan without storing the host. */
   hostSha256: z.string(),
+  /** `identity` plans hold only email updates and links (see --identity-pass). */
+  pass: z.enum(["full", "identity"]),
+  /** `--held-seat-flag` rulings the plan was made with; apply must pass the same. */
+  seatFlagRulings: z.record(z.string(), z.enum(["clear", "keep"])),
   generatedAt: z.string(),
   planSha256: z.string(),
   ops: z.array(deltaOp),
@@ -135,6 +139,8 @@ export function serializePlan(input: {
   exportSha256: string;
   database: string;
   hostSha256: string;
+  pass: "full" | "identity";
+  seatFlagRulings: Record<string, "clear" | "keep">;
   generatedAt: string;
   ops: readonly DeltaOp[];
 }): string {
@@ -143,6 +149,8 @@ export function serializePlan(input: {
     exportSha256: input.exportSha256,
     database: input.database,
     hostSha256: input.hostSha256,
+    pass: input.pass,
+    seatFlagRulings: input.seatFlagRulings,
     generatedAt: input.generatedAt,
     planSha256: planSha256(input.ops),
     ops: input.ops,

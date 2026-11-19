@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-export const RAILS_ACCESS_EXPORT_FORMAT = "egghead-rails-access-export/v2";
+export const RAILS_ACCESS_EXPORT_FORMAT = "egghead-rails-access-export/v3";
 export const ACCESS_DELTA_LAW = "adr-0006-lenient-status";
 
 const SUBSCRIPTION_SOURCE_TYPE = "rails_account_subscription";
@@ -21,6 +21,17 @@ const SUBSCRIPTION_ACCESS_LAW = "lenient_status_v1";
 const ROLE_SOURCE_TYPE = "rails_user_role";
 const PURCHASE_SOURCE_TYPE = "rails_sellable_purchase";
 const BASIC_SOURCE_TYPE = "rails_legacy_basic_role";
+/**
+ * Backed legacy `pro` (ADR-0006 lenient): live backing Rails' ProStatusChecker
+ * ignores but Subscription#hard_cancel! honours. Projected on the backing, not
+ * on the `pro` role, so users Rails already stripped get access back.
+ */
+export const BACKING_SOURCE_TYPES = {
+  gift: "rails_gift",
+  managed_subscription: "rails_managed_subscription",
+  legacy_subscription: "rails_legacy_subscription",
+} as const;
+export type BackingSourceType = (typeof BACKING_SOURCE_TYPES)[keyof typeof BACKING_SOURCE_TYPES];
 const BASIC_ENTITLEMENT_TYPE = "egghead_basic_legacy_access";
 const BASIC_ACCESS_LAW = "adr_0007_legacy_basic_role_access_projection";
 const ALL_ACCESS_TYPE = "egghead_all_access_subscription";
@@ -38,6 +49,7 @@ export const DELTA_OWNED_SOURCE_TYPES: ReadonlySet<string> = new Set([
   SUBSCRIPTION_SOURCE_TYPE,
   PURCHASE_SOURCE_TYPE,
   BASIC_SOURCE_TYPE,
+  ...Object.values(BACKING_SOURCE_TYPES),
 ]);
 
 const RAILS_MEMBERSHIP_SOURCES: ReadonlySet<string> = new Set([
@@ -117,15 +129,27 @@ const purchaseLine = z.object({
 
 /**
  * A Rails user holding the global `pro` role: Rails' own access decision
- * (`Ability#lesson_permissions` checks `is_pro?`). The flags say which legacy
- * paths outside the export can keep that role alive.
+ * (`Ability#lesson_permissions` checks `is_pro?`). Cross-check only; grants nothing.
  */
 const proHolderLine = z.object({
   kind: z.literal("pro_holder"),
   railsUserId: z.string().min(1),
-  activeGift: z.boolean(),
-  activeManagedSubscription: z.boolean(),
-  activeLegacySubscription: z.boolean(),
+});
+
+/**
+ * Live legacy backing for `pro`: an active gift (`Gift.active`), membership of
+ * an active managed subscription, or an active legacy subscription
+ * (`Subscription.active`). Each grants all access while it is live.
+ */
+const backingGrantLine = z.object({
+  kind: z.literal("backing_grant"),
+  source: z.enum(["gift", "managed_subscription", "legacy_subscription"]),
+  railsSourceId: z.string().min(1),
+  railsUserId: z.string().min(1),
+  /** Gifts only: claimed_at + COALESCE(duration_months, 12) months, UTC. */
+  expiresAt: nullableText,
+  /** Legacy subscriptions only: Stripe's renewing period end, metadata only. */
+  currentPeriodEnd: nullableText,
 });
 
 const manifestCounts = z.object({
@@ -135,6 +159,7 @@ const manifestCounts = z.object({
   subscription: count,
   purchase: count,
   pro_holder: count,
+  backing_grant: count,
 });
 
 const manifestLine = z.object({
@@ -151,6 +176,7 @@ const exportLine = z.discriminatedUnion("kind", [
   subscriptionLine,
   purchaseLine,
   proHolderLine,
+  backingGrantLine,
   manifestLine,
 ]);
 
@@ -161,6 +187,7 @@ export type RailsSubscription = z.infer<typeof subscriptionLine>;
 export type RailsSubscriptionMember = z.infer<typeof subscriptionMember>;
 export type RailsPurchase = z.infer<typeof purchaseLine>;
 export type RailsProHolder = z.infer<typeof proHolderLine>;
+export type RailsBackingGrant = z.infer<typeof backingGrantLine>;
 export type RailsExportManifest = z.infer<typeof manifestLine>;
 
 export interface RailsAccessExport {
@@ -172,6 +199,7 @@ export interface RailsAccessExport {
   readonly subscriptions: readonly RailsSubscription[];
   readonly purchases: readonly RailsPurchase[];
   readonly proHolders: readonly RailsProHolder[];
+  readonly backingGrants: readonly RailsBackingGrant[];
 }
 
 export class RailsExportError extends Error {
@@ -191,6 +219,7 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
   const subscriptions: RailsSubscription[] = [];
   const purchases: RailsPurchase[] = [];
   const proHolders: RailsProHolder[] = [];
+  const backingGrants: RailsBackingGrant[] = [];
   let manifest: RailsExportManifest | null = null;
   const lines = text.split("\n");
 
@@ -234,6 +263,9 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
       case "pro_holder":
         proHolders.push(line);
         break;
+      case "backing_grant":
+        backingGrants.push(line);
+        break;
       case "manifest":
         manifest = line;
         break;
@@ -251,6 +283,7 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
     subscription: subscriptions.length,
     purchase: purchases.length,
     pro_holder: proHolders.length,
+    backing_grant: backingGrants.length,
   };
   const kinds = [
     "user",
@@ -259,6 +292,7 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
     "subscription",
     "purchase",
     "pro_holder",
+    "backing_grant",
   ] as const;
   for (const kind of kinds) {
     if (read[kind] !== manifest.counts[kind]) {
@@ -279,6 +313,7 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
     ...roleGrants.map((grant) => grant.railsUserId),
     ...basicGrants.map((grant) => grant.railsUserId),
     ...purchases.map((purchase) => purchase.railsUserId),
+    ...backingGrants.map((grant) => grant.railsUserId),
     ...subscriptions.flatMap((sub) => sub.members.map((member) => member.railsUserId)),
   ];
   for (const railsUserId of referenced) {
@@ -287,7 +322,17 @@ export function parseRailsAccessExport(text: string): RailsAccessExport {
     }
   }
 
-  return { sha256, manifest, users, roleGrants, basicGrants, subscriptions, purchases, proHolders };
+  return {
+    sha256,
+    manifest,
+    users,
+    roleGrants,
+    basicGrants,
+    subscriptions,
+    purchases,
+    proHolders,
+    backingGrants,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -715,6 +760,8 @@ export interface PolicyCounts {
   subscriptionsWithoutAccount: number;
   purchasesWithoutSellable: number;
   unresolvedGrantRows: number;
+  /** Projected backed-`pro` rows per source type (each alarms on growth). */
+  backingGrants: Record<BackingSourceType, number>;
 }
 
 export interface ExpectedProjection {
@@ -773,6 +820,34 @@ function basicEntitlement(grant: RailsBasicGrant, userId: string): ExpectedEntit
   };
 }
 
+function backingEntitlement(grant: RailsBackingGrant, userId: string): ExpectedEntitlement {
+  const sourceType = BACKING_SOURCE_TYPES[grant.source];
+  const key = `${sourceType}:${grant.railsSourceId}:${grant.railsUserId}`;
+  return {
+    id: projectionIds.entitlement(key),
+    entitlementType: ALL_ACCESS_TYPE,
+    userId,
+    organizationId: null,
+    organizationMembershipId: null,
+    sourceType,
+    sourceId: `${grant.railsSourceId}:${grant.railsUserId}`,
+    metadata: compact({
+      idempotencyKey: key,
+      source: `backed_pro_${grant.source}`,
+      railsSourceId: grant.railsSourceId,
+      railsUserId: grant.railsUserId,
+      accessReason: "backed_legacy_pro",
+      accessLaw: SUBSCRIPTION_ACCESS_LAW,
+      // Legacy subscriptions follow the lenient law: the period end is metadata.
+      currentPeriodEnd: railsTimestampToIso(grant.currentPeriodEnd) ?? undefined,
+    }),
+    // Gifts end on their own clock; managed and legacy subscriptions while live.
+    expiresAt:
+      grant.source === "gift" ? mysqlExpiryOrNull(railsTimestampToIso(grant.expiresAt)) : null,
+    createdAt: null,
+  };
+}
+
 function membershipRole(member: RailsSubscriptionMember) {
   if (member.hasOwnerRole) return "owner";
   if (member.hasMemberRole) return "member";
@@ -793,6 +868,7 @@ export function buildExpectedProjection(
     subscriptionsWithoutAccount: 0,
     purchasesWithoutSellable: 0,
     unresolvedGrantRows: 0,
+    backingGrants: { rails_gift: 0, rails_managed_subscription: 0, rails_legacy_subscription: 0 },
   };
   const put = (row: ExpectedEntitlement) => entitlements.set(row.id, row);
 
@@ -965,6 +1041,17 @@ export function buildExpectedProjection(
     });
   }
 
+  for (const grant of railsExport.backingGrants) {
+    const userId = resolvedUserId(identities, grant.railsUserId);
+    if (!userId) {
+      policy.unresolvedGrantRows++;
+      continue;
+    }
+    const row = backingEntitlement(grant, userId);
+    if (!entitlements.has(row.id)) policy.backingGrants[BACKING_SOURCE_TYPES[grant.source]]++;
+    put(row);
+  }
+
   return { entitlements, memberships, organizations, policy };
 }
 
@@ -1078,6 +1165,10 @@ export interface DeltaPlan {
   readonly membershipRevokeHeldForIdentity: number;
   /** Seat flags kept because the organization also holds CourseBuilder-native grants. */
   readonly membershipFlagHeldForNativeOrganization: number;
+  /** Membership ids behind that count, for `--held-seat-flag <id>=clear|keep`. */
+  readonly heldSeatFlags: readonly HeldSeatFlag[];
+  /** Overrides that matched no held seat flag (stale): they fail the gate. */
+  readonly unusedSeatFlagOverrides: readonly string[];
   readonly activeOwnedEntitlements: number;
   /** Rails-sourced memberships whose seat flag currently grants (alarm base). */
   readonly activeRailsSeatFlags: number;
@@ -1088,10 +1179,30 @@ export interface DeltaPlan {
  * `nowMs` is the export's clock (manifest `exportedAt`): owned rows Rails dropped
  * only because they expired by then become `entitlement_expire`, not revokes.
  */
+export interface HeldSeatFlag {
+  readonly membershipId: string;
+  readonly userId: string;
+  readonly organizationId: string;
+  /** null: held (fails the gate through the over-grant); otherwise the person's ruling. */
+  readonly ruling: SeatFlagRuling | null;
+}
+
+/**
+ * A person's ruling on one held seat flag (an org with CourseBuilder-native
+ * grants): `clear` removes the seat (the member loses the native grant too);
+ * `keep` leaves it and accepts that member's over-grant.
+ */
+export type SeatFlagRuling = "clear" | "keep";
+
+export interface DeltaPlanOptions {
+  readonly seatFlagRulings?: ReadonlyMap<string, SeatFlagRuling>;
+}
+
 export function computeDeltaPlan(
   railsExport: RailsAccessExport,
   snapshot: CbSnapshot,
   nowMs: number,
+  options: DeltaPlanOptions = {},
 ): DeltaPlan {
   const identities = resolveIdentities(railsExport, snapshot);
   const expected = buildExpectedProjection(railsExport, identities);
@@ -1114,6 +1225,21 @@ export function computeDeltaPlan(
   );
   let membershipRevokeHeldForIdentity = 0;
   let membershipFlagHeldForNativeOrganization = 0;
+  const rulings = options.seatFlagRulings ?? new Map<string, SeatFlagRuling>();
+  const heldSeatFlags: HeldSeatFlag[] = [];
+  /** Hold a seat flag unless a person ruled `clear`; true means push the op. */
+  const holdSeatFlag = (membership: Pick<CbMembership, "id" | "userId" | "organizationId">) => {
+    const ruling = rulings.get(membership.id) ?? null;
+    heldSeatFlags.push({
+      membershipId: membership.id,
+      userId: membership.userId,
+      organizationId: membership.organizationId ?? "",
+      ruling,
+    });
+    if (ruling === "clear") return true;
+    membershipFlagHeldForNativeOrganization++;
+    return false;
+  };
 
   for (const [railsUserId, outcome] of identities) {
     if (outcome.kind === "created") {
@@ -1167,8 +1293,12 @@ export function computeDeltaPlan(
     }
     const reasons = membershipReasons(membership, existing);
     const clearsFlag = membershipGrants(existing) && !membershipGrants(membership);
-    if (clearsFlag && existing.organizationId && nativeOrganizations.has(existing.organizationId)) {
-      membershipFlagHeldForNativeOrganization++;
+    if (
+      clearsFlag &&
+      existing.organizationId &&
+      nativeOrganizations.has(existing.organizationId) &&
+      !holdSeatFlag(existing)
+    ) {
       continue;
     }
     if (reasons.length > 0) {
@@ -1196,8 +1326,11 @@ export function computeDeltaPlan(
       membershipRevokeHeldForIdentity++;
       continue;
     }
-    if (membership.organizationId && nativeOrganizations.has(membership.organizationId)) {
-      membershipFlagHeldForNativeOrganization++;
+    if (
+      membership.organizationId &&
+      nativeOrganizations.has(membership.organizationId) &&
+      !holdSeatFlag(membership)
+    ) {
       continue;
     }
     ops.push({
@@ -1248,10 +1381,20 @@ export function computeDeltaPlan(
     revokeHeldForIdentity,
     membershipRevokeHeldForIdentity,
     membershipFlagHeldForNativeOrganization,
+    heldSeatFlags,
+    unusedSeatFlagOverrides: [...rulings.keys()].filter(
+      (id) => !heldSeatFlags.some((held) => held.membershipId === id),
+    ),
     activeOwnedEntitlements,
     activeRailsSeatFlags,
   };
 }
+
+/** Identity ops: the identity pass applies only these, then the full plan re-runs. */
+export const IDENTITY_OP_KINDS: ReadonlySet<DeltaOpKind> = new Set([
+  "user_email_update",
+  "user_link",
+]);
 
 // ---------------------------------------------------------------------------
 // Simulated apply (same semantics as the store's SQL)
@@ -1304,12 +1447,9 @@ export function simulateApply(
       case "user_email_update": {
         const user = users.get(op.userId);
         if (user) {
-          // A fresh read pairs the new email with its export email.
-          users.set(op.userId, {
-            ...user,
-            email: op.email,
-            matchedExportEmails: [...new Set([...user.matchedExportEmails, op.email])],
-          });
+          // A fresh read pairs the new email with its export email, and the
+          // old email (now free) with nobody.
+          users.set(op.userId, { ...user, email: op.email, matchedExportEmails: [op.email] });
         }
         break;
       }

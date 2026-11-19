@@ -1,4 +1,4 @@
--- Rails paid-access export for scripts/access-delta.ts (format egghead-rails-access-export/v2).
+-- Rails paid-access export for scripts/access-delta.ts (format egghead-rails-access-export/v3).
 --
 -- Read-only. Run against the Rails Postgres database (a read replica is fine):
 --
@@ -12,8 +12,9 @@
 --   subscription  an account subscription in an enabled status, with its members
 --   purchase      a viewable sellable purchase
 --   pro_holder    a user holding the global `pro` role: Rails' own access decision
---                 (Ability#lesson_permissions checks is_pro?), with flags for the
---                 legacy paths outside this export that keep `pro` alive
+--                 (Ability#lesson_permissions checks is_pro?). Cross-check only
+--   backing_grant live legacy backing for `pro`: an active gift, an active managed
+--                 subscription or an active legacy subscription (grants access)
 --   manifest      always the LAST line: row counts computed in the same snapshot
 --
 -- The delta script refuses any file whose manifest is missing, is not the last
@@ -32,16 +33,24 @@
 --   * Purchases grant while expires_at is NULL or in the future and the
 --     purchase_state is not access_revoked. Bulk and country flags are exported;
 --     the delta script applies the bulk/country rules.
---   * Bare legacy `pro` never grants (quarantine rows stay as the July
---     projection wrote them). The pro_holder lines exist only so the delta can
---     cross-check the export against Rails' decision; they grant nothing.
---   * pro_holder flags (app/models/gift.rb, managed_subscription.rb,
---     subscription.rb; Subscription#hard_cancel! keeps `pro` for these):
---       activeGift                 gifts.user_id, claimed_at within
---                                  COALESCE(duration_months, 12) months (Gift.active)
---       activeManagedSubscription  users.managed_subscription_id -> is_active
---       activeLegacySubscription   subscriptions.user_id, cancelled_on IS NULL and
---                                  "willCancelAfterPeriod" = false (Subscription.active)
+--   * Bare legacy `pro` (no special role, seat or live backing) never grants
+--     (quarantine rows stay as the July projection wrote them). The pro_holder
+--     lines exist only so the delta can cross-check the export against Rails'
+--     decision; they grant nothing.
+--   * Backed `pro` (ADR-0006 lenient; a deliberate departure from
+--     Subscription::ProStatusChecker, which ignores these paths, while
+--     Subscription#hard_cancel! keeps `pro` for them). Exported on the backing,
+--     whether or not the user still holds `pro`:
+--       gift                  gifts.user_id while claimed_at +
+--                             COALESCE(duration_months, 12) months is in the
+--                             future (Gift.active, app/models/gift.rb). expiresAt
+--                             is that end.
+--       managed_subscription  users.managed_subscription_id -> is_active
+--                             (User#belongs_to_active_managed_subscription?)
+--       legacy_subscription   subscriptions.user_id with cancelled_on IS NULL and
+--                             "willCancelAfterPeriod" = false (Subscription.active,
+--                             app/models/subscription.rb). currentPeriodEnd is
+--                             exported as metadata only, like account subscriptions.
 --
 -- It never selects passwords, tokens, IP addresses, Stripe ids or billing info.
 
@@ -145,11 +154,31 @@ pro_holders AS (
   JOIN roles r ON r.id = ur.role_id
   WHERE r.resource_type IS NULL AND r.name = 'pro'
 ),
+backing AS (
+  SELECT 'gift' AS source, g.id AS source_id, g.user_id,
+         g.claimed_at + (COALESCE(g.duration_months, 12) || ' months')::interval AS expires_at,
+         NULL::date AS current_period_end
+  FROM gifts g
+  WHERE g.user_id IS NOT NULL
+    AND g.claimed_at >= NOW() - (COALESCE(g.duration_months, 12) || ' months')::interval
+  UNION ALL
+  SELECT 'managed_subscription', ms.id, u.id, NULL::timestamp, NULL::date
+  FROM users u
+  JOIN managed_subscriptions ms ON ms.id = u.managed_subscription_id
+  WHERE ms.is_active
+  UNION ALL
+  SELECT 'legacy_subscription', ls.id, ls.user_id, NULL::timestamp, ls."currentPeriodEnd"
+  FROM subscriptions ls
+  WHERE ls.user_id IS NOT NULL
+    AND ls.cancelled_on IS NULL
+    AND ls."willCancelAfterPeriod" = FALSE
+),
 referenced_users AS (
   SELECT user_id FROM special_roles
   UNION SELECT user_id FROM basic_roles
   UNION SELECT user_id FROM sub_members WHERE user_id IS NOT NULL
   UNION SELECT user_id FROM viewable_purchases WHERE user_id IS NOT NULL
+  UNION SELECT user_id FROM backing
 ),
 user_lines AS (
   SELECT 1 AS ord, u.id AS sort_id, json_build_object(
@@ -233,30 +262,25 @@ purchase_lines AS (
 pro_holder_lines AS (
   SELECT 6 AS ord, ph.user_id AS sort_id, json_build_object(
     'kind', 'pro_holder',
-    'railsUserId', ph.user_id::text,
-    'activeGift', EXISTS (
-      SELECT 1 FROM gifts g
-      WHERE g.user_id = ph.user_id
-        AND g.claimed_at >= NOW() - (COALESCE(g.duration_months, 12) || ' months')::interval
-    ),
-    'activeManagedSubscription', EXISTS (
-      SELECT 1 FROM users u
-      JOIN managed_subscriptions ms ON ms.id = u.managed_subscription_id
-      WHERE u.id = ph.user_id AND ms.is_active
-    ),
-    'activeLegacySubscription', EXISTS (
-      SELECT 1 FROM subscriptions ls
-      WHERE ls.user_id = ph.user_id
-        AND ls.cancelled_on IS NULL
-        AND ls."willCancelAfterPeriod" = FALSE
-    )
+    'railsUserId', ph.user_id::text
   )::text AS line
   FROM pro_holders ph
+),
+backing_lines AS (
+  SELECT 7 AS ord, b.user_id AS sort_id, json_build_object(
+    'kind', 'backing_grant',
+    'source', b.source,
+    'railsSourceId', b.source_id::text,
+    'railsUserId', b.user_id::text,
+    'expiresAt', b.expires_at,
+    'currentPeriodEnd', b.current_period_end
+  )::text AS line
+  FROM backing b
 ),
 manifest_line AS (
   SELECT 9 AS ord, 0::bigint AS sort_id, json_build_object(
     'kind', 'manifest',
-    'format', 'egghead-rails-access-export/v2',
+    'format', 'egghead-rails-access-export/v3',
     'exportedAt', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
     'counts', json_build_object(
       'user', (SELECT COUNT(*) FROM user_lines),
@@ -264,7 +288,8 @@ manifest_line AS (
       'basic_grant', (SELECT COUNT(*) FROM basic_lines),
       'subscription', (SELECT COUNT(*) FROM subscription_lines),
       'purchase', (SELECT COUNT(*) FROM purchase_lines),
-      'pro_holder', (SELECT COUNT(*) FROM pro_holder_lines)
+      'pro_holder', (SELECT COUNT(*) FROM pro_holder_lines),
+      'backing_grant', (SELECT COUNT(*) FROM backing_lines)
     )
   )::text AS line
 )
@@ -275,6 +300,7 @@ SELECT line FROM (
   UNION ALL SELECT ord, sort_id, line FROM subscription_lines
   UNION ALL SELECT ord, sort_id, line FROM purchase_lines
   UNION ALL SELECT ord, sort_id, line FROM pro_holder_lines
+  UNION ALL SELECT ord, sort_id, line FROM backing_lines
   UNION ALL SELECT ord, sort_id, line FROM manifest_line
 ) export_lines
 ORDER BY ord, sort_id, line;

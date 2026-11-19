@@ -396,7 +396,7 @@ async function createUser(
   if (other) {
     throw new UserCreateCollisionError(
       `Rails user ${op.railsUserId}: CourseBuilder user ${other.id} already holds this email. ` +
-        "Nothing in this batch was written; rerun the dry run so it links the user.",
+        "Nothing in this batch was written. Dry-run into a NEW --out folder, review it and --apply that plan; this partial apply is safe to leave.",
     );
   }
   await writer
@@ -441,7 +441,7 @@ async function linkUser(writer: Writer, op: Extract<DeltaOp, { kind: "user_link"
   if (row?.legacyRailsUserId !== op.railsUserId) {
     throw new UserWriteConflictError(
       `Rails user ${op.railsUserId}: user ${op.userId} ${row ? `is linked to Rails user ${row.legacyRailsUserId ?? "(none)"}` : "no longer exists"}. ` +
-        "Nothing in this batch was written; rerun the dry run.",
+        "Nothing in this batch was written. Dry-run into a NEW --out folder, review it and --apply that plan; this partial apply is safe to leave.",
     );
   }
 }
@@ -458,7 +458,7 @@ async function updateUserEmail(
   if (other) {
     throw new UserWriteConflictError(
       `Rails user ${op.railsUserId}: CourseBuilder user ${other.id} already holds the Rails email. ` +
-        "Nothing in this batch was written; rerun the dry run.",
+        "Nothing in this batch was written. Dry-run into a NEW --out folder, review it and --apply that plan; this partial apply is safe to leave.",
     );
   }
   await writer
@@ -475,7 +475,7 @@ async function updateUserEmail(
   if (row?.email !== op.email || row.legacyRailsUserId !== op.railsUserId) {
     throw new UserWriteConflictError(
       `Rails user ${op.railsUserId}: user ${op.userId} changed since the plan; its email was not updated. ` +
-        "Nothing in this batch was written; rerun the dry run.",
+        "Nothing in this batch was written. Dry-run into a NEW --out folder, review it and --apply that plan; this partial apply is safe to leave.",
     );
   }
 }
@@ -585,8 +585,18 @@ async function writeOp(writer: Writer, op: DeltaOp, now: Date) {
   }
 }
 
+export interface BatchTiming {
+  readonly batch: number;
+  readonly ops: number;
+  /** Wall time of the batch transaction, commit included. */
+  readonly ms: number;
+  readonly lastKey: string | null;
+}
+
 export interface ApplyOptions {
   readonly batchSize: number;
+  /** Called after each committed batch, before the cursor is saved. */
+  readonly onBatch?: (timing: BatchTiming) => void;
   /** Stop after this many committed batches (resume later). */
   readonly maxBatches?: number;
   readonly now: () => Date;
@@ -612,7 +622,14 @@ async function applyBatches(
   const batch = batches[done];
   if (!batch || (options.maxBatches !== undefined && done >= options.maxBatches)) return cursor;
   const now = options.now();
+  const started = performance.now();
   await db.transaction((transaction) => writeInOrder(transaction, batch, now));
+  options.onBatch?.({
+    batch: cursor.batches + 1,
+    ops: batch.length,
+    ms: Math.round(performance.now() - started),
+    lastKey: batch.at(-1)?.key ?? null,
+  });
   const appliedOps = cursor.appliedOps + batch.length;
   const next: ApplyCursor = {
     ...cursor,
