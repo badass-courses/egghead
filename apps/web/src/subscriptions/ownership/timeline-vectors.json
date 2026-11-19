@@ -1,0 +1,191 @@
+{
+  "about": "Shared parser and routing vectors for the egghead owner timeline. The TypeScript tests (marker.test.ts) and the Rails EggheadOwnership specs must both pass every case. `routedTimeline` is the timeline routing uses after parsing (an invalid or missing timeline routes everything to rails). `source` is CB-only diagnostic detail.",
+  "parse": [
+    {
+      "name": "missing metadata",
+      "metadata": null,
+      "source": "absent",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "empty metadata",
+      "metadata": {},
+      "source": "absent",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "empty timeline string",
+      "metadata": { "egghead_owner_timeline": "" },
+      "source": "absent",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "cb from the start",
+      "metadata": {
+        "egghead_owner": "cb",
+        "egghead_owner_timeline": "cb@0",
+        "egghead_owner_generation": "1"
+      },
+      "source": "explicit",
+      "routedTimeline": "cb@0",
+      "generation": 1
+    },
+    {
+      "name": "scheduled handover",
+      "metadata": {
+        "egghead_owner": "cb",
+        "egghead_owner_timeline": "rails@0;cb@1800000900",
+        "egghead_owner_generation": "1"
+      },
+      "source": "explicit",
+      "routedTimeline": "rails@0;cb@1800000900",
+      "generation": 1
+    },
+    {
+      "name": "handover then handback",
+      "metadata": {
+        "egghead_owner": "rails",
+        "egghead_owner_timeline": "rails@0;cb@1800000900;rails@1800100000",
+        "egghead_owner_generation": "2"
+      },
+      "source": "explicit",
+      "routedTimeline": "rails@0;cb@1800000900;rails@1800100000",
+      "generation": 2
+    },
+    {
+      "name": "mirror key disagrees: routing ignores it",
+      "metadata": {
+        "egghead_owner": "rails",
+        "egghead_owner_timeline": "rails@0;cb@1800000900",
+        "egghead_owner_generation": "1"
+      },
+      "source": "explicit",
+      "routedTimeline": "rails@0;cb@1800000900",
+      "generation": 1
+    },
+    {
+      "name": "bare owner key without a timeline",
+      "metadata": { "egghead_owner": "cb" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "first entry not at zero",
+      "metadata": { "egghead_owner_timeline": "cb@5" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "owners do not alternate",
+      "metadata": { "egghead_owner_timeline": "rails@0;rails@10" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "times not increasing",
+      "metadata": { "egghead_owner_timeline": "rails@0;cb@10;rails@10" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "uppercase owner",
+      "metadata": { "egghead_owner_timeline": "rails@0;CB@10" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "comma separator",
+      "metadata": { "egghead_owner_timeline": "rails@0,cb@10" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "trailing separator",
+      "metadata": { "egghead_owner_timeline": "rails@0;" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "leading space",
+      "metadata": { "egghead_owner_timeline": " rails@0" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "trailing newline",
+      "metadata": { "egghead_owner_timeline": "rails@0\n" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "negative time",
+      "metadata": { "egghead_owner_timeline": "rails@0;cb@-1" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "thirteen-digit time",
+      "metadata": { "egghead_owner_timeline": "rails@0;cb@1234567890123" },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "nine entries is too many",
+      "metadata": {
+        "egghead_owner_timeline": "rails@0;cb@1;rails@2;cb@3;rails@4;cb@5;rails@6;cb@7;rails@8"
+      },
+      "source": "unrecognized",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "eight entries is allowed",
+      "metadata": {
+        "egghead_owner_timeline": "rails@0;cb@1;rails@2;cb@3;rails@4;cb@5;rails@6;cb@7"
+      },
+      "source": "explicit",
+      "routedTimeline": "rails@0;cb@1;rails@2;cb@3;rails@4;cb@5;rails@6;cb@7",
+      "generation": 0
+    },
+    {
+      "name": "non-string timeline value",
+      "metadata": { "egghead_owner_timeline": 5 },
+      "source": "absent",
+      "routedTimeline": "rails@0",
+      "generation": 0
+    },
+    {
+      "name": "malformed generation reads as zero",
+      "metadata": { "egghead_owner_timeline": "cb@0", "egghead_owner_generation": "1.5" },
+      "source": "explicit",
+      "routedTimeline": "cb@0",
+      "generation": 0
+    }
+  ],
+  "ownerAt": [
+    { "timeline": "rails@0", "created": 1800000000, "owner": "rails" },
+    { "timeline": "cb@0", "created": 0, "owner": "cb" },
+    { "timeline": "rails@0;cb@1800000900", "created": 1800000899, "owner": "rails" },
+    { "timeline": "rails@0;cb@1800000900", "created": 1800000900, "owner": "cb" },
+    { "timeline": "rails@0;cb@1800000900;rails@1800100000", "created": 1800099999, "owner": "cb" },
+    {
+      "timeline": "rails@0;cb@1800000900;rails@1800100000",
+      "created": 1800100000,
+      "owner": "rails"
+    }
+  ]
+}

@@ -8,7 +8,8 @@
 // last entry whose `since` is at or before the event's `created`. A flip is written
 // minutes before it takes effect, so both apps read it before any event it governs.
 //
-// Parse rules (Rails must mirror them exactly):
+// Parse rules (Rails must mirror them exactly; the shared cases in
+// `timeline-vectors.json` are loaded by both test suites):
 // - 1 to MAX_TIMELINE_ENTRIES entries, each `(rails|cb)@<1-12 digits>`;
 // - the first `since` is 0, `since` strictly increases, and owners alternate;
 // - anything else, including a missing timeline, routes every event to Rails.
@@ -200,12 +201,4 @@ export function ownerMarkerIdempotencyKey(
   return `egghead-owner:${customerId}:${generation}:${nonce}`;
 }
 
-/**
- * Events with no Stripe customer (guest one-time payments) route by the checkout
- * session that created them: `egghead_owner == "cb"` on the session means CB.
- */
-export function oneTimePaymentOwner(checkoutSessionMetadata: unknown): Owner {
-  if (typeof checkoutSessionMetadata !== "object" || checkoutSessionMetadata === null)
-    return "rails";
-  return readStringField(checkoutSessionMetadata, OWNER_METADATA_KEY) === "cb" ? "cb" : "rails";
-}
+// Customerless events route by the PaymentIntent flag; see `routing.ts`.
