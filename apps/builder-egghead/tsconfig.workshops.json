@@ -5,6 +5,7 @@
     "src/app/api/workshop-mcp/**/*.ts",
     "test/workshops/**/*.ts",
     "test/workshops-mysql/**/*.ts",
+    "test/auth/**/*.ts",
     "vitest.workshops.config.ts",
     "vitest.workshops-mysql.config.ts"
   ],

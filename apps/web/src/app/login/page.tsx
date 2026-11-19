@@ -8,6 +8,7 @@ import { z } from "zod";
 import { isEmailAuthConfigured, isGithubAuthConfigured } from "../../coursebuilder/auth-config";
 import { getCurrentUserFromRequest } from "../../coursebuilder/current-user";
 import { signIn, signOut } from "../../server/auth";
+import { LoginErrorAlert } from "./login-error";
 
 type LoginSearchParams = {
   callbackUrl?: string | string[];
@@ -85,18 +86,6 @@ function safeCallbackPath(value: unknown) {
   }
 }
 
-function loginErrorMessage(error: string | undefined) {
-  if (error === "Verification") {
-    return "That sign-in link is invalid, expired, or has already been used. Request a new link below.";
-  }
-
-  if (error === "EmailSignin") {
-    return "We couldn't send that sign-in link. Check the address and try again.";
-  }
-
-  return null;
-}
-
 async function signInWithGithub(callbackUrl: string) {
   "use server";
 
@@ -171,7 +160,6 @@ async function AccountState({
     );
   }
 
-  const errorMessage = loginErrorMessage(error);
   const signInWithEmailAndCallback = signInWithEmail.bind(null, callbackUrl);
   const signInWithGithubAndCallback = signInWithGithub.bind(null, callbackUrl);
   const description =
@@ -187,14 +175,7 @@ async function AccountState({
     <section aria-labelledby="auth-title" className={authPanelClassName}>
       <AuthHeader description={description} eyebrow="Welcome back" title="Sign in to egghead" />
 
-      {errorMessage ? (
-        <p
-          className="rounded-xl border border-rust/40 bg-rust/10 px-4 py-3 text-sm font-bold text-rust"
-          role="alert"
-        >
-          {errorMessage}
-        </p>
-      ) : null}
+      <LoginErrorAlert error={error} />
 
       {emailAuthConfigured ? (
         <form action={signInWithEmailAndCallback} className="grid gap-4">
