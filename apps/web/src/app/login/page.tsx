@@ -91,7 +91,7 @@ function loginErrorMessage(error: string | undefined) {
   }
 
   if (error === "OAuthAccountNotLinked") {
-    return "That GitHub account isn't connected to an egghead account with this email yet. Sign in with an email link, then connect GitHub from your profile.";
+    return "That GitHub account is already connected to a different egghead account.";
   }
 
   if (error === "EmailSignin") {

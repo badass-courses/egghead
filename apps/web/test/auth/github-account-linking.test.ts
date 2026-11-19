@@ -185,7 +185,7 @@ type TestAuthConfig = ReturnType<typeof createAuthConfig> & {
 const authErrors: string[] = [];
 const quietLogger = { error: (error: Error) => void authErrors.push(error.name) };
 
-function fixedConfig(store: MemoryStore, sentLinks: string[]): TestAuthConfig {
+function eggheadConfig(store: MemoryStore, sentLinks: string[]): TestAuthConfig {
   return {
     ...createAuthConfig({
       adapter: store.adapter,
@@ -206,8 +206,8 @@ function fixedConfig(store: MemoryStore, sentLinks: string[]): TestAuthConfig {
   };
 }
 
-/** The exact GitHub provider config shipped before this fix. */
-function preFixConfig(store: MemoryStore): TestAuthConfig {
+/** Stock Auth.js GitHub provider with email linking, no verified-email check. */
+function stockProviderConfig(store: MemoryStore): TestAuthConfig {
   return {
     ...createAuthConfig({
       adapter: store.adapter,
@@ -338,69 +338,93 @@ function githubAccountOwner(store: MemoryStore, githubId: number) {
   );
 }
 
-const VICTIM_EMAIL = "victim@example.test";
+const EXISTING_EMAIL = "existing@example.test";
 
-/** Attacker's GitHub account: holds the victim's address, never verified it. */
-const attackerUnverified: FakeGithubIdentity = {
+/** A GitHub account holding the existing user's address, never verified at GitHub. */
+const unverifiedHolder: FakeGithubIdentity = {
   id: 90_001,
-  login: "throwaway-attacker",
+  login: "throwaway-unverified",
   email: null,
-  emails: [{ email: VICTIM_EMAIL, primary: true, verified: false, visibility: "private" }],
+  emails: [{ email: EXISTING_EMAIL, primary: true, verified: false, visibility: "private" }],
 };
 
-/** Same attack where GitHub reports the address verified (stale or recycled address). */
-const attackerVerified: FakeGithubIdentity = {
-  ...attackerUnverified,
-  emails: [{ email: VICTIM_EMAIL, primary: true, verified: true, visibility: "private" }],
+/** The same person's GitHub account with the address verified at GitHub. */
+const verifiedOwner: FakeGithubIdentity = {
+  ...unverifiedHolder,
+  login: "throwaway-verified",
+  emails: [{ email: EXISTING_EMAIL, primary: true, verified: true, visibility: "private" }],
 };
 
-void test("before: the pre-fix GitHub config hands a matching-email user to a stranger", async () => {
+void test("stock Auth.js GitHub provider links an unverified address (why the check exists)", async () => {
   const store = createMemoryStore();
-  const victim = store.seedUser(VICTIM_EMAIL);
-  const config = preFixConfig(store);
-  const attacker = new CookieJar();
+  const existing = store.seedUser(EXISTING_EMAIL);
+  const config = stockProviderConfig(store);
+  const jar = new CookieJar();
 
-  const landed = await signInWithGithub(config, attacker, attackerUnverified);
+  const landed = await signInWithGithub(config, jar, unverifiedHolder);
 
   assert.equal(landed.pathname, "/profile");
-  assert.equal(await sessionUserId(config, attacker), victim.id);
-  assert.equal(githubAccountOwner(store, attackerUnverified.id), victim.id);
+  assert.equal(await sessionUserId(config, jar), existing.id);
+  assert.equal(githubAccountOwner(store, unverifiedHolder.id), existing.id);
 });
 
-void test("after: an unverified GitHub email is refused and nothing is linked", async () => {
+void test("a verified matching GitHub email links to the existing user", async () => {
   const store = createMemoryStore();
-  store.seedUser(VICTIM_EMAIL);
-  const config = fixedConfig(store, []);
-  const attacker = new CookieJar();
+  const existing = store.seedUser(EXISTING_EMAIL);
+  const config = eggheadConfig(store, []);
+  const jar = new CookieJar();
 
-  const landed = await signInWithGithub(config, attacker, attackerUnverified);
+  const landed = await signInWithGithub(config, jar, verifiedOwner);
+
+  assert.equal(landed.pathname, "/profile");
+  assert.equal(await sessionUserId(config, jar), existing.id);
+  assert.equal(githubAccountOwner(store, verifiedOwner.id), existing.id);
+  assert.equal(store.users.size, 1);
+
+  const later = new CookieJar();
+  await signInWithGithub(config, later, verifiedOwner);
+  assert.equal(await sessionUserId(config, later), existing.id);
+});
+
+void test("an unverified GitHub email does not link and nothing is created", async () => {
+  const store = createMemoryStore();
+  store.seedUser(EXISTING_EMAIL);
+  const config = eggheadConfig(store, []);
+  const jar = new CookieJar();
+
+  const landed = await signInWithGithub(config, jar, unverifiedHolder);
 
   assert.equal(landed.pathname, "/login");
   assert.ok(landed.searchParams.get("error"));
-  assert.equal(await sessionUserId(config, attacker), null);
+  assert.equal(await sessionUserId(config, jar), null);
   assert.equal(store.accounts.length, 0);
   assert.equal(store.users.size, 1);
 });
 
-void test("after: a verified matching email still cannot take over an unlinked user", async () => {
+void test("a GitHub account with no email does not sign in", async () => {
   const store = createMemoryStore();
-  store.seedUser(VICTIM_EMAIL);
-  const config = fixedConfig(store, []);
-  const attacker = new CookieJar();
+  store.seedUser(EXISTING_EMAIL);
+  const config = eggheadConfig(store, []);
+  const jar = new CookieJar();
 
-  const landed = await signInWithGithub(config, attacker, attackerVerified);
+  const landed = await signInWithGithub(config, jar, {
+    id: 90_002,
+    login: "no-email",
+    email: null,
+    emails: [],
+  });
 
   assert.equal(landed.pathname, "/login");
-  assert.equal(landed.searchParams.get("error"), "OAuthAccountNotLinked");
-  assert.equal(await sessionUserId(config, attacker), null);
+  assert.equal(await sessionUserId(config, jar), null);
   assert.equal(store.accounts.length, 0);
+  assert.equal(store.users.size, 1);
 });
 
-void test("after: a migrated GitHub user signs in by GitHub user id, not by email", async () => {
+void test("a migrated GitHub user signs in by GitHub user id, not by email", async () => {
   const store = createMemoryStore();
   const migrated = store.seedUser("old-address@example.test");
   store.seedGithubAccount(migrated.id, 4_242);
-  const config = fixedConfig(store, []);
+  const config = eggheadConfig(store, []);
   const jar = new CookieJar();
 
   const landed = await signInWithGithub(config, jar, {
@@ -417,10 +441,10 @@ void test("after: a migrated GitHub user signs in by GitHub user id, not by emai
   assert.equal(store.users.size, 1);
 });
 
-void test("after: a new GitHub user gets a new account", async () => {
+void test("a new GitHub user gets a new account", async () => {
   const store = createMemoryStore();
-  const existing = store.seedUser(VICTIM_EMAIL);
-  const config = fixedConfig(store, []);
+  const existing = store.seedUser(EXISTING_EMAIL);
+  const config = eggheadConfig(store, []);
   const jar = new CookieJar();
 
   const landed = await signInWithGithub(config, jar, {
@@ -441,47 +465,26 @@ void test("after: a new GitHub user gets a new account", async () => {
   assert.equal(githubAccountOwner(store, 7_007), userId);
 });
 
-void test("after: magic link sign-in still works for an existing user", async () => {
+void test("magic link sign-in still works for an existing user", async () => {
   const store = createMemoryStore();
-  const existing = store.seedUser(VICTIM_EMAIL);
+  const existing = store.seedUser(EXISTING_EMAIL);
   const sentLinks: string[] = [];
-  const config = fixedConfig(store, sentLinks);
+  const config = eggheadConfig(store, sentLinks);
   const jar = new CookieJar();
 
-  const callback = await signInWithMagicLink(config, jar, VICTIM_EMAIL, sentLinks);
+  const callback = await signInWithMagicLink(config, jar, EXISTING_EMAIL, sentLinks);
 
   assert.equal(new URL(callback.headers.get("location") ?? "", BASE_URL).pathname, "/profile");
   assert.equal(await sessionUserId(config, jar), existing.id);
 });
 
-void test("after: an unlinked migrated user recovers by magic link, then connects GitHub", async () => {
-  const store = createMemoryStore();
-  const migrated = store.seedUser(VICTIM_EMAIL);
-  const sentLinks: string[] = [];
-  const config = fixedConfig(store, sentLinks);
-  const owner = { ...attackerVerified, id: 5_150, login: "real-owner" };
-
-  const refused = await signInWithGithub(config, new CookieJar(), owner);
-  assert.equal(refused.searchParams.get("error"), "OAuthAccountNotLinked");
-
-  const signedIn = new CookieJar();
-  await signInWithMagicLink(config, signedIn, VICTIM_EMAIL, sentLinks);
-  const connected = await signInWithGithub(config, signedIn, owner);
-  assert.equal(connected.pathname, "/profile");
-  assert.equal(githubAccountOwner(store, owner.id), migrated.id);
-
-  const later = new CookieJar();
-  await signInWithGithub(config, later, owner);
-  assert.equal(await sessionUserId(config, later), migrated.id);
-});
-
-void test("after: a GitHub id already owned by one user cannot be connected to another", async () => {
+void test("a GitHub id already owned by one user cannot be connected to another", async () => {
   const store = createMemoryStore();
   const firstOwner = store.seedUser("first-owner@example.test");
   const secondUser = store.seedUser("second-user@example.test");
   store.seedGithubAccount(firstOwner.id, 3_333);
   const sentLinks: string[] = [];
-  const config = fixedConfig(store, sentLinks);
+  const config = eggheadConfig(store, sentLinks);
   const jar = new CookieJar();
 
   await signInWithMagicLink(config, jar, "second-user@example.test", sentLinks);

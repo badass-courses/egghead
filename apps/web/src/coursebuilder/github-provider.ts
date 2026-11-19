@@ -76,18 +76,17 @@ function isGithubProfile(value: unknown): value is GitHubProfile {
 /**
  * GitHub sign-in for egghead.
  *
- * Email account linking is off. Auth.js then resolves a GitHub sign-in only by
- * the `(github, GitHub user id)` account row. It links a GitHub identity to an
- * existing user only while that user is already signed in, for example from
- * the profile "Connect GitHub" action after a magic-link sign-in. A GitHub
- * sign-in whose email matches an unlinked existing user is refused with
- * `OAuthAccountNotLinked` instead of taking that user over.
+ * Email account linking is on by design (Joel, 2026-11-18: "a github account
+ * with the same email is same person"). A GitHub sign-in first matches the
+ * `(github, GitHub user id)` account row, then links to an existing user with
+ * the same email. That rule holds only for an address GitHub has verified, so
+ * this provider never hands Auth.js an unverified address.
  */
 export function createGithubProvider({ clientId, clientSecret }: GithubProviderOptions) {
   return GithubProvider({
     clientId,
     clientSecret,
-    allowDangerousEmailAccountLinking: false,
+    allowDangerousEmailAccountLinking: true,
     userinfo: {
       url: `${GITHUB_API_BASE_URL}/user`,
       async request({ tokens }: { tokens: { access_token?: string } }) {
