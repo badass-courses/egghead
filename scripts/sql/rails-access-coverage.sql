@@ -3,12 +3,11 @@
 --   psql "$RAILS_DATABASE_URL" -X -q -A -v ON_ERROR_STOP=1 \
 --     -f scripts/sql/rails-access-coverage.sql
 --
--- The access export covers special roles, `basic`, enabled account
--- subscriptions and viewable sellable purchases. Three legacy paths outside it
--- can keep a user's global `pro` role alive (Subscription#hard_cancel! skips
--- removing `pro` for them). Each row counts one path, and how many of its users
--- hold `pro` today. A path with 0 users is dead; any other count is a decision
--- for the desk: carry it over as paid access, or accept it as a pro gap.
+-- Three legacy paths can keep a user's global `pro` role alive
+-- (Subscription#hard_cancel! skips removing `pro` for them). The access export
+-- projects each live one as backed `pro` (ADR-0006 lenient). Each row counts
+-- one path, and how many of its users hold `pro` today. A path with 0 users is
+-- dead. Compare the counts with receipt.backingGrants.bySourceType.
 --
 -- Aggregates only: no ids, emails or names leave Rails.
 

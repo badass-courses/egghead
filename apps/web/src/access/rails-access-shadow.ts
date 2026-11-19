@@ -63,6 +63,13 @@ export function railsGrantsByUser(railsExport: RailsAccessExport): Map<string, G
       );
     }
   }
+  for (const grant of railsExport.backingGrants) {
+    addGrant(
+      grants(grant.railsUserId),
+      ALL_ACCESS,
+      `backed pro: ${grant.source.replace("_", " ")} ${grant.railsSourceId}`,
+    );
+  }
   for (const purchase of railsExport.purchases) {
     if (!purchase.sellableType || !purchase.sellableId) continue;
     if (purchase.sellableType === "Resource::Membership") {

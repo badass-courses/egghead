@@ -34,6 +34,8 @@ export const ids = {
     julyId("eh_orgmem", `role:${account}:${rails}`),
   purchaseEntitlement: (purchaseId: string) =>
     julyId("eh_entitlement", `rails_sellable_purchase:${purchaseId}`),
+  backingEntitlement: (sourceType: string, sourceId: string, rails: string) =>
+    julyId("eh_entitlement", `${sourceType}:${sourceId}:${rails}`),
 };
 
 export const CB_NATIVE_LINK_USER = "cb-native-user-111";
@@ -396,17 +398,29 @@ function purchase(
  *                                     no account_users row (role membership id)
  *   101 second subscription           9011 on the same account 7001
  *   101 expired purchase              6009 (July row) expired in September
+ *   120 backed pro: active gift       gift 7701 until March 2027
+ *   121 backed pro: managed sub       managed subscription 7702 is active
+ *   122 backed pro: legacy sub        legacy subscription 7703, stale period end,
+ *                                     and Rails already stripped its `pro` role
  */
-export function proHolder(
+export function proHolder(railsUserId: string) {
+  return { kind: "pro_holder", railsUserId };
+}
+
+/** Live legacy backing for `pro` (gift, managed subscription, legacy subscription). */
+export function backingGrant(
+  source: "gift" | "managed_subscription" | "legacy_subscription",
+  railsSourceId: string,
   railsUserId: string,
-  flags: { gift?: boolean; managed?: boolean; legacy?: boolean } = {},
+  dates: { expiresAt?: string; currentPeriodEnd?: string } = {},
 ) {
   return {
-    kind: "pro_holder",
+    kind: "backing_grant",
+    source,
+    railsSourceId,
     railsUserId,
-    activeGift: flags.gift ?? false,
-    activeManagedSubscription: flags.managed ?? false,
-    activeLegacySubscription: flags.legacy ?? false,
+    expiresAt: dates.expiresAt ?? null,
+    currentPeriodEnd: dates.currentPeriodEnd ?? null,
   };
 }
 
@@ -424,6 +438,9 @@ export function novemberExportLines() {
     railsUser("113"),
     railsUser("114"),
     railsUser("115"),
+    railsUser("120"),
+    railsUser("121"),
+    railsUser("122"),
   ];
   const roleGrants = [{ kind: "role_grant", railsUserId: "108", roleName: "lifetime_subscriber" }];
   const basicGrants = [{ kind: "basic_grant", railsUserId: "114" }];
@@ -457,12 +474,19 @@ export function novemberExportLines() {
   ];
   // Rails' own decision: everyone ProStatusChecker would give `pro` (special
   // roles and account_member seats on enabled subscriptions).
-  const proHolders = ["101", "103", "105", "106", "108", "110", "115"].map((railsUserId) =>
-    proHolder(railsUserId),
+  // 122 is backed but already lost `pro` at a magic-link sign-in: still granted.
+  const proHolders = ["101", "103", "105", "106", "108", "110", "115", "120", "121"].map(
+    (railsUserId) => proHolder(railsUserId),
   );
+  const backingGrants = [
+    backingGrant("gift", "7701", "120", { expiresAt: "2027-03-01 00:00:00" }),
+    backingGrant("managed_subscription", "7702", "121"),
+    // Stripe stopped renewing it: the period end is past, the subscription is active.
+    backingGrant("legacy_subscription", "7703", "122", { currentPeriodEnd: "2026-10-01" }),
+  ];
   const manifest = {
     kind: "manifest",
-    format: "egghead-rails-access-export/v2",
+    format: "egghead-rails-access-export/v3",
     exportedAt: "2026-11-19T11:00:00.000Z",
     counts: {
       user: users.length,
@@ -471,6 +495,7 @@ export function novemberExportLines() {
       subscription: subscriptions.length,
       purchase: purchases.length,
       pro_holder: proHolders.length,
+      backing_grant: backingGrants.length,
     },
   };
   return [
@@ -480,6 +505,7 @@ export function novemberExportLines() {
     ...subscriptions,
     ...purchases,
     ...proHolders,
+    ...backingGrants,
     manifest,
   ].map(line);
 }
