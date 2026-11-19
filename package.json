@@ -32,7 +32,12 @@
     "progress:import:test": "pnpm --filter @egghead/web exec vitest run src/progress/import.test.ts src/progress/lesson-progress-sources.test.ts",
     "beta:runtime-guard": "tsx --tsconfig apps/web/tsconfig.json scripts/beta-runtime-guard.ts",
     "builder:smoke": "tsx --tsconfig apps/builder-egghead/tsconfig.json scripts/builder-smoke.ts",
-    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm routing:parity-contract && pnpm workshop:boundaries && pnpm workshop:contract && pnpm workshop:test && pnpm search:typesense-contract && pnpm search:pagination:contract && pnpm sitemap:contract && pnpm stripe:subscription-contract && pnpm subscription:behaviors && pnpm stripe:webhook-signature-contract && pnpm checkout:customer:smoke && pnpm membership:config:smoke && pnpm coursebuilder:prices:smoke && pnpm coursebuilder:v3:smoke && pnpm profile:contract && pnpm email:contract && pnpm auth:linking:contract && pnpm access:delta:test && pnpm beta:runtime-guard && pnpm builder:smoke && pnpm workshops:test && pnpm progress:import:test && pnpm --filter @egghead/web exec vitest run src/subscriptions/ownership",
+    "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm routing:parity-contract && pnpm workshop:boundaries && pnpm workshop:contract && pnpm workshop:test && pnpm search:typesense-contract && pnpm search:pagination:contract && pnpm sitemap:contract && pnpm stripe:subscription-contract && pnpm subscription:behaviors && pnpm stripe:webhook-signature-contract && pnpm checkout:customer:smoke && pnpm membership:config:smoke && pnpm coursebuilder:prices:smoke && pnpm coursebuilder:v3:smoke && pnpm profile:contract && pnpm email:contract && pnpm auth:linking:contract && pnpm access:delta:test && pnpm beta:runtime-guard && pnpm builder:smoke && pnpm workshops:test && pnpm progress:import:test && pnpm --filter @egghead/web exec vitest run src/subscriptions/ownership && pnpm feeds:test",
+    "feeds:test": "pnpm --filter @egghead/web exec vitest run src/feeds",
+    "feeds:mysql-test": "tsx --tsconfig apps/web/tsconfig.json scripts/feeds-mysql-test.ts",
+    "feeds:parity": "tsx --tsconfig apps/web/tsconfig.json scripts/feeds-parity.ts",
+    "feeds:backfill-rails": "tsx --tsconfig apps/web/tsconfig.json scripts/backfill-feed-rails-fields.ts",
+    "feeds:import-tokens": "tsx --tsconfig apps/web/tsconfig.json scripts/import-legacy-feed-tokens.ts",
     "hooks:install": "lefthook install",
     "hooks:pre-commit": "lefthook run pre-commit --all-files",
     "coursebuilder:prices:smoke": "node --import tsx scripts/coursebuilder-prices-smoke.ts",
@@ -51,8 +56,8 @@
     "search:pagination:contract": "node --experimental-test-module-mocks --import tsx --test scripts/search-pagination.test.ts scripts/search-readers.test.ts scripts/readiness-regression/search-fallback.test.ts",
     "search:pagination:smoke": "tsx --tsconfig apps/web/tsconfig.json scripts/search-pagination-smoke.ts",
     "routing:redirect-targets": "tsx --tsconfig apps/web/tsconfig.json scripts/redirect-targets-check.ts",
-    "subscription:mysql-test": "TSX_TSCONFIG_PATH=apps/web/tsconfig.json node --import tsx --test --test-concurrency=1 scripts/subscription-mysql.test.ts",
-    "subscription:behaviors": "TSX_TSCONFIG_PATH=apps/web/tsconfig.json node --experimental-test-module-mocks --import tsx --test scripts/subscription-lifecycle.test.ts scripts/subscription-boundary.test.ts scripts/subscription-store.test.ts scripts/subscription-inngest.test.ts scripts/subscription-route.test.ts && node --import tsx scripts/subscription-boundaries.ts"
+    "subscription:behaviors": "TSX_TSCONFIG_PATH=apps/web/tsconfig.json node --experimental-test-module-mocks --import tsx --test scripts/subscription-lifecycle.test.ts scripts/subscription-boundary.test.ts scripts/subscription-store.test.ts scripts/subscription-inngest.test.ts scripts/subscription-route.test.ts && node --import tsx scripts/subscription-boundaries.ts",
+    "subscription:mysql-test": "TSX_TSCONFIG_PATH=apps/web/tsconfig.json node --import tsx --test --test-concurrency=1 scripts/subscription-mysql.test.ts"
   },
   "dependencies": {
     "@coursebuilder/adapter-drizzle": "3.1.3",

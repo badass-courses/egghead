@@ -116,6 +116,18 @@ function publicFile(
   return { legacy, origin: "public", sourceFile: `public${legacy}`, sample, disposition, ...extra };
 }
 
+// A Rails feed URL with its .rss format suffix (Rails routes.rb format
+// segment), served through a content rewrite.
+function railsFeedSuffix(legacy: string, sample: string, cbRoute: string): RouteInventoryRow {
+  return {
+    legacy,
+    origin: "coursebuilder",
+    sourceFile: "apps/web/src/feeds/rewrites.ts (Rails routes.rb format suffix)",
+    sample,
+    disposition: served(cbRoute),
+  };
+}
+
 function nextRedirect(
   legacy: string,
   group: string,
@@ -133,7 +145,6 @@ function nextRedirect(
   };
 }
 
-const FEEDS = "Rails feed; the rails-off feeds lane builds it in CourseBuilder.";
 const PAID_PATHS = "Paid-customer surface with no CourseBuilder equivalent yet (audit lane L5).";
 const POWER_USER_REFERENCE =
   "Workshop companion reference sold with the workshop; bespoke egghead-next content.";
@@ -738,7 +749,7 @@ export const ROUTE_INVENTORY: readonly RouteInventoryRow[] = [
     "/i/[slug]/rss.xml",
     "i/[slug]/rss.xml.tsx",
     "/i/kent-c-dodds/rss.xml",
-    build("instructor-feeds", "Instructor RSS feed from egghead-next."),
+    served("/i/[slug]/rss.xml"),
   ),
   page(
     "/i/[slug]/atom.xml",
@@ -1017,7 +1028,7 @@ export const ROUTE_INVENTORY: readonly RouteInventoryRow[] = [
     "/instructors/:id/feed",
     "instructorRoutes",
     "/instructors/kent-c-dodds/feed",
-    build("feeds", FEEDS),
+    served("/instructors/[id]/feed"),
   ),
   nextRedirect(
     "/instructors/:instructor/:rest(.+)",
@@ -1199,25 +1210,40 @@ export const ROUTE_INVENTORY: readonly RouteInventoryRow[] = [
   ),
 
   // rssRoutes.
-  nextRedirect(
-    "/feed",
-    "rssRoutes",
-    "/feed",
-    build("feeds", "CourseBuilder /feed is a one-item placeholder. " + FEEDS),
-  ),
-  nextRedirect("/lessons/pro_feed", "rssRoutes", "/lessons/pro_feed", build("feeds", FEEDS)),
-  nextRedirect("/lessons/feed", "rssRoutes", "/lessons/feed", build("feeds", FEEDS)),
+  nextRedirect("/feed", "rssRoutes", "/feed", served("/feed")),
+  nextRedirect("/lessons/pro_feed", "rssRoutes", "/lessons/pro_feed", served("/lessons/pro_feed")),
+  nextRedirect("/lessons/feed", "rssRoutes", "/lessons/feed", served("/lessons/feed")),
   nextRedirect(
     "/courses/:id/course_feed",
     "rssRoutes",
     `/courses/${COURSE}/course_feed`,
-    build("feeds", FEEDS),
+    served("/courses/[course]/course_feed"),
   ),
   nextRedirect(
     "/playlists/:id/playlist_feed",
     "rssRoutes",
     `/playlists/${COURSE}/playlist_feed`,
-    build("feeds", FEEDS),
+    served("/playlists/[id]/playlist_feed"),
+  ),
+  // Rails served every feed route with a .rss format suffix too. Content
+  // rewrites in src/feeds/rewrites.ts send them to the same handlers.
+  railsFeedSuffix("/feed.rss", "/feed.rss", "/feed"),
+  railsFeedSuffix("/lessons/feed.rss", "/lessons/feed.rss", "/lessons/feed"),
+  railsFeedSuffix("/lessons/pro_feed.rss", "/lessons/pro_feed.rss", "/lessons/pro_feed"),
+  railsFeedSuffix(
+    "/courses/:id/course_feed.rss",
+    `/courses/${COURSE}/course_feed.rss`,
+    "/courses/[course]/course_feed",
+  ),
+  railsFeedSuffix(
+    "/playlists/:id/playlist_feed.rss",
+    `/playlists/${COURSE}/playlist_feed.rss`,
+    "/playlists/[id]/playlist_feed",
+  ),
+  railsFeedSuffix(
+    "/instructors/:id/feed.rss",
+    "/instructors/kent-c-dodds/feed.rss",
+    "/instructors/[id]/feed",
   ),
   // egghead-next public/ files.
   publicFile("/robots.txt", "/robots.txt", served("/robots.txt"), {
