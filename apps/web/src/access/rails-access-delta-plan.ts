@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import type { DeltaOp } from "./rails-access-delta";
 
-export const PLAN_FORMAT = "egghead-access-delta-plan/v5";
+export const PLAN_FORMAT = "egghead-access-delta-plan/v6";
 export const CURSOR_FORMAT = "egghead-access-delta-cursor/v1";
 
 const jsonRecord = z.record(z.string(), z.unknown());
@@ -104,6 +104,10 @@ const gateInputsSchema = z.object({
   acceptBarePro: z.string().nullable(),
   /** sha256 of the accepted held legacy-subscription id list. */
   acceptStaleLegacy: z.string().nullable(),
+  /** sha256 of the accepted orphan Rails user id list (their rows are revoked). */
+  acceptOrphanGrants: z.string().nullable(),
+  /** sha256 of the accepted held-organization reach list. */
+  acceptHeldOrgReach: z.string().nullable(),
   /** First-run backing counts a person accepted, per source type. */
   acceptFirstBacking: z.record(z.string(), z.number().int().nonnegative()),
   /** sha256 of the `--previous-receipt` file's bytes. */

@@ -19,6 +19,7 @@ import {
   simulateApply,
   BARE_PRO_ACTIVE_SOURCE_TYPE,
   type BackingSourceType,
+  type CbEntitlement,
   type CbSnapshot,
   type GatedSourceType,
   type DeltaOp,
@@ -419,12 +420,16 @@ export function staleLegacyReconciliation(
 }
 
 /**
- * Join every op that takes access away to the Rails ids it reaches: revokes
- * and expiries of a row (its `railsUserId`, its user's link, or, for an
- * organization row, every member whose seat flag grants), membership revokes,
- * and seat-flag clears. Counted against held users (held bare `pro` and held
- * stale-only holders); the gate fails unless both counts are 0. Written apart
- * from the plan's own hold so a regression there shows here.
+ * Join every op that takes access away to the Rails ids it reaches:
+ * revokes and expiries of a row (its `railsUserId`, its user's link, or, for
+ * an organization row, every member whose seat flag grants), an
+ * `entitlement_update` that moves a row to another user or organization or
+ * brings its expiry forward, membership revokes, seat-flag clears, and a
+ * `membership_update` that moves a seat. Counted against held users (held
+ * bare `pro` and held stale-only holders). An op whose row is not in the
+ * snapshot counts as `missingTargets`: it reaches someone we cannot name.
+ * The gate fails unless `ops` and `missingTargets` are 0. Written apart from
+ * the plan's own hold so a regression there shows here.
  */
 export function revokesOnHeldUsers(
   plan: Pick<DeltaPlan, "ops" | "barePro" | "heldLegacySubscriptions">,
@@ -450,37 +455,109 @@ export function revokesOnHeldUsers(
     snapshot.memberships
       .filter((row) => row.organizationId === organizationId && membershipGrants(row))
       .flatMap((row) => railsIdsOf(row.userId, row.fields["legacyRailsUserId"]));
-  const reached = (op: DeltaOp): string[] => {
-    if (op.kind === "entitlement_revoke" || op.kind === "entitlement_expire") {
-      const row = entitlementsById.get(op.entitlementId);
-      if (!row) return [];
-      return [
-        ...railsIdsOf(row.userId, row.metadata["railsUserId"]),
-        ...(row.organizationId === null ? [] : seatHolders(row.organizationId)),
-      ];
+  const entitlementReach = (row: CbEntitlement) => [
+    ...railsIdsOf(row.userId, row.metadata["railsUserId"]),
+    ...(row.organizationId === null ? [] : seatHolders(row.organizationId)),
+  ];
+  /** Rails ids the op takes from, or null when its row is not in the snapshot. */
+  const reached = (op: DeltaOp): string[] | null => {
+    switch (op.kind) {
+      case "entitlement_revoke":
+      case "entitlement_expire": {
+        const row = entitlementsById.get(op.entitlementId);
+        return row ? entitlementReach(row) : null;
+      }
+      case "entitlement_update": {
+        const row = entitlementsById.get(op.entitlement.id);
+        if (!row) return null;
+        const next = op.entitlement;
+        const moved = next.userId !== row.userId || next.organizationId !== row.organizationId;
+        const shortened =
+          next.expiresAt !== null &&
+          (row.expiresAt === null || Date.parse(next.expiresAt) < Date.parse(row.expiresAt));
+        return moved || shortened ? entitlementReach(row) : [];
+      }
+      case "membership_revoke":
+      case "membership_update": {
+        const id = op.kind === "membership_revoke" ? op.membershipId : op.membership.id;
+        const row = membershipsById.get(id);
+        if (!row) return null;
+        const takes =
+          op.kind === "membership_revoke" ||
+          (membershipGrants(row) && !membershipGrants(op.membership)) ||
+          op.membership.userId !== row.userId ||
+          op.membership.organizationId !== row.organizationId;
+        return takes ? railsIdsOf(row.userId, row.fields["legacyRailsUserId"]) : [];
+      }
+      default:
+        return [];
     }
-    if (op.kind === "membership_revoke" || op.kind === "membership_update") {
-      const id = op.kind === "membership_revoke" ? op.membershipId : op.membership.id;
-      const row = membershipsById.get(id);
-      if (!row) return [];
-      const clears =
-        op.kind === "membership_revoke" ||
-        (membershipGrants(row) && !membershipGrants(op.membership));
-      return clears ? railsIdsOf(row.userId, row.fields["legacyRailsUserId"]) : [];
-    }
-    return [];
   };
   const users = new Set<string>();
   const byKind: Record<string, number> = {};
   let ops = 0;
+  let missingTargets = 0;
   for (const op of plan.ops) {
-    const hits = reached(op).filter((id) => held.has(id));
+    const ids = reached(op);
+    if (ids === null) {
+      missingTargets++;
+      continue;
+    }
+    const hits = ids.filter((id) => held.has(id));
     if (hits.length === 0) continue;
     ops++;
     byKind[op.kind] = (byKind[op.kind] ?? 0) + 1;
     for (const id of hits) users.add(id);
   }
-  return { heldUsers: held.size, ops, users: users.size, byKind };
+  return { heldUsers: held.size, ops, users: users.size, byKind, missingTargets };
+}
+
+/**
+ * Non-held users the after-apply shadow shows over-granted through an
+ * organization row kept only because a held member's seat holds it.
+ */
+export function heldOrganizationReach(
+  plan: Pick<DeltaPlan, "barePro" | "heldLegacySubscriptions" | "heldForMemberEntitlementIds">,
+  after: ShadowResult,
+  snapshot: CbSnapshot,
+) {
+  const held = new Set([
+    ...plan.barePro.held.map((holder) => holder.railsUserId),
+    ...plan.heldLegacySubscriptions.map((entry) => entry.railsUserId),
+  ]);
+  // Rails grants these users nothing, so the shadow may carry no Rails id:
+  // name them through the user link, or the Rails id on their own seats and rows.
+  const railsIdByCbUser = new Map<string, string>();
+  for (const user of snapshot.users) {
+    if (user.legacyRailsUserId !== null) railsIdByCbUser.set(user.id, user.legacyRailsUserId);
+  }
+  for (const row of snapshot.memberships) {
+    const id = row.fields["legacyRailsUserId"];
+    if (typeof id === "string" && !railsIdByCbUser.has(row.userId)) {
+      railsIdByCbUser.set(row.userId, id);
+    }
+  }
+  for (const row of snapshot.entitlements) {
+    const id = row.metadata["railsUserId"];
+    if (row.userId !== null && typeof id === "string" && !railsIdByCbUser.has(row.userId)) {
+      railsIdByCbUser.set(row.userId, id);
+    }
+  }
+  const railsIdOf = (user: UserShadow) =>
+    user.railsUserIds[0] ??
+    (user.cbUserId === null ? null : (railsIdByCbUser.get(user.cbUserId) ?? null));
+  const ids = after.users
+    .filter((user) => {
+      const id = railsIdOf(user);
+      return (
+        user.overGrant.length > 0 &&
+        !(id !== null && held.has(id)) &&
+        !user.railsUserIds.some((railsId) => held.has(railsId)) &&
+        user.overGrantPaths.some((path) => plan.heldForMemberEntitlementIds.has(path.entitlementId))
+      );
+    })
+    .map((user) => railsIdOf(user) ?? `cb:${user.cbUserId ?? ""}`);
+  return { ...heldList(ids), ids: [...ids].toSorted(byRailsId) };
 }
 
 /** A held list with the sha256 a person accepts it by. */
@@ -854,10 +931,14 @@ export interface ReceiptContext {
 
 /**
  * Why a `--previous-receipt` file is not a plausible earlier run: another
- * receipt format, or an export newer than this one. The same export is
- * allowed (dry runs repeat on one export). Empty means usable.
+ * receipt format, an export not strictly earlier than this one, another
+ * target, or a gate that did not pass. Empty means usable.
  */
-export function previousReceiptProblems(json: unknown, exportedAt: string): string[] {
+export function previousReceiptProblems(
+  json: unknown,
+  exportedAt: string,
+  target: ReceiptContext["target"],
+): string[] {
   const record = typeof json === "object" && json !== null ? json : {};
   const problems: string[] = [];
   const format = Reflect.get(record, "format");
@@ -870,10 +951,37 @@ export function previousReceiptProblems(json: unknown, exportedAt: string): stri
   const previousMs = typeof previousAt === "string" ? Date.parse(previousAt) : Number.NaN;
   if (Number.isNaN(previousMs)) {
     problems.push("it has no export.exportedAt");
-  } else if (previousMs > Date.parse(exportedAt)) {
-    problems.push(`its export (${String(previousAt)}) is newer than this one (${exportedAt})`);
+  } else if (previousMs >= Date.parse(exportedAt)) {
+    problems.push(
+      `its export (${String(previousAt)}) is not earlier than this one (${exportedAt})`,
+    );
   }
+  const previousTarget = Reflect.get(record, "target");
+  const sameTarget =
+    typeof previousTarget === "object" &&
+    previousTarget !== null &&
+    Reflect.get(previousTarget, "runtime") === target.runtime &&
+    Reflect.get(previousTarget, "database") === target.database &&
+    Reflect.get(previousTarget, "hostSha256") === target.hostSha256 &&
+    Reflect.get(previousTarget, "databaseUserSha256") === target.databaseUserSha256;
+  if (!sameTarget) problems.push("it is for another target (runtime, database, host or user)");
+  const previousGate = Reflect.get(record, "gate");
+  const passed =
+    typeof previousGate === "object" &&
+    previousGate !== null &&
+    Reflect.get(previousGate, "pass") === true;
+  if (!passed) problems.push("its gate did not pass");
   return problems;
+}
+
+/**
+ * D3: a non-local URL needs a database user, or the plan's user binding
+ * means nothing.
+ */
+export function databaseUserProblem(runtime: string, user: string): string | null {
+  return runtime !== "local" && user === ""
+    ? `the ${runtime} DATABASE_URL has no user name; the plan binds to it, so refusing`
+    : null;
 }
 
 /** Gate inputs with nothing accepted: a first dry run. */
@@ -883,6 +991,8 @@ export function defaultGateInputs(overrides: Partial<GateInputs> = {}): GateInpu
       allowLargeRevoke: false,
       acceptBarePro: null,
       acceptStaleLegacy: null,
+      acceptOrphanGrants: null,
+      acceptHeldOrgReach: null,
       acceptFirstBacking: {},
       previousReceiptSha256: null,
       allowBackingGrowth: false,
@@ -940,10 +1050,11 @@ export function buildReceipt(
   };
   // Orphans (grant lines, no user line: deleted in Rails) are revoked, not held.
   const orphans = {
-    count: railsExport.orphanRailsUserIds.length,
+    ...heldList(railsExport.orphanRailsUserIds),
     railsUserIds: railsExport.orphanRailsUserIds,
     rowsRevoked: plan.orphanRowsRevoked,
   };
+  const orgReach = heldOrganizationReach(plan, after, analysis.snapshot);
   const heldRevokes = revokesOnHeldUsers(plan, analysis.snapshot);
   // An over-grant is accepted only when every owned row behind it is one a
   // hold keeps, or reaches the user through a seat a person ruled `keep`.
@@ -983,6 +1094,12 @@ export function buildReceipt(
     if (under !== shadow.summary.underGrantUsers || over !== shadow.summary.overGrantUsers) {
       failures.push("the shadow summary disagrees with its user list; refusing to trust either");
     }
+  }
+  if (heldRevokes.missingTargets > 0) {
+    failures.push(
+      `${heldRevokes.missingTargets} ops target rows not in the CourseBuilder snapshot (revokesOnHeldUsers.missingTargets); ` +
+        "refusing to guess whom they reach. This is a bug: do not apply",
+    );
   }
   if (heldRevokes.ops > 0) {
     failures.push(
@@ -1025,6 +1142,19 @@ export function buildReceipt(
       failures.push(
         `${pro.bareProHolders.count} bare pro holders (pro role, no special role, seat or live backing; ids in proCrossCheck.bareProHolders); ` +
           "rule on them, then pass --accept-bare-pro with proCrossCheck.bareProHolders.sha256",
+      );
+    }
+    if (orphans.count > 0 && orphans.sha256 !== gate.acceptOrphanGrants) {
+      failures.push(
+        `${orphans.count} Rails users have grant lines but no user line (ids in orphanGrants); ` +
+          `their ${orphans.rowsRevoked} rows and seats would be revoked. Check the export did not drop user lines, ` +
+          "then pass --accept-orphan-grants with orphanGrants.sha256",
+      );
+    }
+    if (orgReach.count > 0 && orgReach.sha256 !== gate.acceptHeldOrgReach) {
+      failures.push(
+        `${orgReach.count} users keep all access only through an organization row held for a held member's seat ` +
+          "(heldOrganizationReach); rule on them, then pass --accept-held-org-reach with heldOrganizationReach.sha256",
       );
     }
     if (heldLegacy.count > 0 && heldLegacy.sha256 !== gate.acceptStaleLegacy) {
@@ -1114,6 +1244,7 @@ export function buildReceipt(
     ),
     orphanGrants: orphans,
     revokesOnHeldUsers: heldRevokes,
+    heldOrganizationReach: orgReach,
     identityOps,
     heldSeatFlags: plan.heldSeatFlags,
     overGrantAcceptedBySeatFlagKeep: overGrantAccepted,
