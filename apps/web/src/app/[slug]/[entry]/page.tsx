@@ -15,6 +15,7 @@ import {
   getPodcastShowBySlug,
 } from "../../../content/podcast";
 import { PodcastEpisodePageStatic } from "../../../content/podcast-page";
+import { slugParamOrNotFound } from "../../../routing/slug-param";
 
 type CollectionEntryPageProps = {
   params: Promise<{
@@ -27,8 +28,8 @@ async function routeParams(params: CollectionEntryPageProps["params"]) {
   const resolved = await params;
 
   return {
-    collection: decodeURIComponent(resolved.slug),
-    entry: decodeURIComponent(resolved.entry),
+    collection: slugParamOrNotFound(resolved.slug),
+    entry: slugParamOrNotFound(resolved.entry),
   };
 }
 

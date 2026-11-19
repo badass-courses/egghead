@@ -15,6 +15,7 @@ import {
 } from "../../content/public-resource";
 import { renderPublicContentRoute } from "../../content/public-route";
 import { STANDALONE_PUBLIC_CONTENT_FAMILIES } from "../../content/routes";
+import { slugParamOrNotFound } from "../../routing/slug-param";
 
 type RootContentPageProps = {
   params: Promise<{
@@ -37,7 +38,7 @@ function uniqueStaticParams(params: Array<{ slug: string }>) {
 
 async function slugFromParams(params: RootContentPageProps["params"]) {
   const resolved = await params;
-  return decodeURIComponent(resolved.slug);
+  return slugParamOrNotFound(resolved.slug);
 }
 
 export async function generateStaticParams() {
