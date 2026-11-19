@@ -26,6 +26,7 @@ import {
   type DeltaPlan,
   type RailsAccessExport,
   type RailsBackingGrant,
+  type RailsProHolder,
   type SeatFlagRuling,
   railsTimestampToIso,
 } from "../apps/web/src/access/rails-access-delta";
@@ -215,6 +216,21 @@ export function railsIdListSha256(railsUserIds: readonly string[]) {
     .digest("hex");
 }
 
+/** Holders by latest sign-in before `nowMs`. */
+export function signInBuckets(holders: readonly RailsProHolder[], nowMs: number) {
+  const buckets = { within90Days: 0, within1Year: 0, within3Years: 0, older: 0, never: 0 };
+  for (const holder of holders) {
+    const iso = railsTimestampToIso(holder.lastSignInOn);
+    const days = iso === null ? Number.NaN : (nowMs - Date.parse(iso)) / 86_400_000;
+    if (Number.isNaN(days)) buckets.never++;
+    else if (days <= 90) buckets.within90Days++;
+    else if (days <= 365) buckets.within1Year++;
+    else if (days <= 3 * 365) buckets.within3Years++;
+    else buckets.older++;
+  }
+  return buckets;
+}
+
 /**
  * Compare the export with Rails' own decision. Rails gates lessons on `is_pro?`
  * (`Ability#lesson_permissions`, which also unlocks `is_basic?` and
@@ -240,16 +256,7 @@ export function proCrossCheck(
   const extra = [...exportPro]
     .filter((railsUserId) => !railsPro.has(railsUserId) && !withoutProByRails.has(railsUserId))
     .toSorted(byRailsId);
-  const buckets = { within90Days: 0, within1Year: 0, within3Years: 0, older: 0, never: 0 };
-  for (const holder of plan.barePro.all) {
-    const iso = railsTimestampToIso(holder.lastSignInOn);
-    const days = iso === null ? Number.NaN : (nowMs - Date.parse(iso)) / 86_400_000;
-    if (Number.isNaN(days)) buckets.never++;
-    else if (days <= 90) buckets.within90Days++;
-    else if (days <= 365) buckets.within1Year++;
-    else if (days <= 3 * 365) buckets.within3Years++;
-    else buckets.older++;
-  }
+  const buckets = signInBuckets(plan.barePro.all, nowMs);
   return {
     railsProHolders: railsPro.size,
     exportProEquivalent: exportPro.size,
@@ -719,6 +726,14 @@ export function buildReceipt(
     ...heldList(plan.heldLegacySubscriptions.map((held) => held.railsSourceId)),
     staleDays: gate.legacyStaleDays,
     subscriptions: plan.heldLegacySubscriptions,
+    /** Every holder whose only backing is a stale legacy subscription, granted or held. */
+    holderSignIn: signInBuckets(
+      plan.barePro.staleOnly,
+      Date.parse(railsExport.manifest.exportedAt),
+    ),
+    grantedInWindow: plan.barePro.staleOnly.filter((holder) =>
+      plan.barePro.active.some((active) => active.railsUserId === holder.railsUserId),
+    ).length,
     rowsKept: plan.revokeHeldForStaleLegacy,
   };
   const orphans = {
@@ -804,7 +819,8 @@ export function buildReceipt(
     }
     if (heldLegacy.count > 0 && heldLegacy.sha256 !== gate.acceptStaleLegacy) {
       failures.push(
-        `${heldLegacy.count} legacy subscriptions held as stale (period end over ${gate.legacyStaleDays} days past, or none; ` +
+        `${heldLegacy.count} legacy subscriptions held as stale (period end over ${gate.legacyStaleDays} days past, or none, ` +
+          `and no sign-in within ${gate.bareProActiveDays} days; ` +
           "ids in heldLegacySubscriptions); rule on them, then pass --accept-stale-legacy with heldLegacySubscriptions.sha256",
       );
     }
