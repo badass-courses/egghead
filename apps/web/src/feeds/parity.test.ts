@@ -129,6 +129,21 @@ describe("feed parity (judge #9)", () => {
     expect(missReason({ ...base, visibilityState: "hidden" }, null, item)).toBe(
       "CB visibilityState is hidden",
     );
+    expect(
+      missReason(
+        { ...base, visibilityState: "public", railsVisibilityState: "hidden" },
+        null,
+        item,
+      ),
+    ).toBe("migrated railsVisibilityState is hidden");
+    // pro_feed and the course feeds are neither indexed nor without_series.
+    const memberRules = { requireIndexed: false, withoutSeries: false };
+    expect(missReason({ ...base, visibilityState: "hidden" }, null, item, memberRules)).toBe(
+      "unexplained (CB type lesson, state published)",
+    );
+    expect(missReason({ ...base, hasSeriesId: true }, null, item, memberRules)).toBe(
+      "unexplained (CB type lesson, state published)",
+    );
     expect(missReason({ ...base, hasSeriesId: true }, null, item)).toBe(
       "CB lesson carries a Rails Series id",
     );
@@ -141,7 +156,7 @@ describe("feed parity (judge #9)", () => {
         { ...item, pubDate: new Date("2025-01-29T00:00:00Z") },
       ),
     ).toBe(
-      "CB date 2024-03-01T00:00:00.000Z is older than the CB feed's 200-item window (no CB publishedAt)",
+      "CB date 2024-03-01T00:00:00.000Z is older than the CB feed's item window (no CB publishedAt)",
     );
   });
 

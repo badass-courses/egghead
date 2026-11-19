@@ -119,6 +119,16 @@ export type FeedResourceKind = "lesson" | "course";
  */
 const INDEXED_VISIBILITY_STATES = "'indexed', 'public'";
 
+/**
+ * The migration also wrote "public" for some rows Rails had hidden (61 on
+ * beta). When the migrated railsVisibilityState is present it must say
+ * "indexed" too. It narrows, never widens: a CB visibilityState of hidden
+ * still hides the row. Rows without it (CB-native) follow CB alone.
+ */
+function railsIndexedSql(alias: string) {
+  return `AND LOWER(COALESCE(${jsonString(alias, "railsVisibilityState")}, 'indexed')) = 'indexed'`;
+}
+
 export function feedPublicationSql(
   alias: string,
   options: { kind: FeedResourceKind; requireIndexed: boolean },
@@ -128,6 +138,7 @@ export function feedPublicationSql(
     ? `
       AND LOWER(COALESCE(${jsonString(alias, "visibilityState")}, 'indexed')) IN (${INDEXED_VISIBILITY_STATES})
       AND LOWER(COALESCE(${jsonString(alias, "visibility")}, 'public')) = 'public'
+      ${railsIndexedSql(alias)}
     `
     : "";
 
@@ -143,7 +154,14 @@ export function feedPublicationSql(
 export function fieldsAreIndexed(fields: JsonFields) {
   const visibilityState = (stringField(fields, "visibilityState") ?? "indexed").toLowerCase();
   const visibility = (stringField(fields, "visibility") ?? "public").toLowerCase();
-  return (visibilityState === "indexed" || visibilityState === "public") && visibility === "public";
+  const railsVisibilityState = (
+    stringField(fields, "railsVisibilityState") ?? "indexed"
+  ).toLowerCase();
+  return (
+    (visibilityState === "indexed" || visibilityState === "public") &&
+    visibility === "public" &&
+    railsVisibilityState === "indexed"
+  );
 }
 
 /**

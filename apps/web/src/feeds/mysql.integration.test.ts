@@ -48,6 +48,9 @@ const SEEDED = {
     "L14",
     "C5",
     "V2",
+    "L15",
+    "L16",
+    "C6",
   ],
   contributionTypes: ["ct_instructor"],
   contributions: ["cc_L1", "cc_L3", "cc_L8", "cc_C1", "cc_C2", "cc_C3"],
@@ -332,6 +335,23 @@ async function seed(db: Db) {
       // The backfill must skip drafts even when Rails has a date for them.
       eggheadLessonId: 5005,
     }),
+    // Migrated visibilityState "public" for a lesson Rails hid: /feed drops
+    // it, pro_feed (no indexed filter) keeps it.
+    resource("L15", "lesson", {
+      slug: "fixture-rails-hidden",
+      title: "Rails hidden",
+      state: "published",
+      visibilityState: "public",
+      railsVisibilityState: "hidden",
+    }),
+    // The same migrated "public", with Rails indexed: stays in /feed.
+    resource("L16", "lesson", {
+      slug: "fixture-rails-indexed",
+      title: "Rails indexed",
+      state: "published",
+      visibilityState: "public",
+      railsVisibilityState: "indexed",
+    }),
     // A stored JSON null publishedAt must count as missing (judge-3 #7).
     resource(
       "L14",
@@ -406,6 +426,15 @@ async function seed(db: Db) {
       state: "published",
       visibilityState: "hidden",
       eggheadPlaylistId: 9005,
+    }),
+    // Migrated "public" but Rails had it hidden: not in /feed.
+    resource("C6", "course", {
+      slug: "fixture-rails-hidden-course",
+      title: "Rails-hidden course",
+      state: "published",
+      visibilityState: "public",
+      railsVisibilityState: "hidden",
+      eggheadPlaylistId: 9006,
     }),
     resource("C4", "course", {
       slug: "fixture-draft-course",
@@ -527,8 +556,10 @@ describe.skipIf(!TEST_URL)("feeds against MySQL", () => {
         "fixture-mongodb-docs-vu2o7",
         "fixture-old-slug-zz9zz",
         "fixture-podcast~ab1cd",
+        "fixture-rails-indexed",
         "fixture-standalone-indexed",
       ]);
+      // The Rails-hidden lesson L15 and course C6 are absent above.
       // Judge-3 #9: identity from the migrated row, content from the edited post.
       const pair = entries.find(
         (entry) => entry.kind === "lesson" && entry.lesson.slug === "fixture-mongodb-docs-vu2o7",
@@ -570,6 +601,7 @@ describe.skipIf(!TEST_URL)("feeds against MySQL", () => {
         "https://egghead.io/lessons/fixture-flagged-standalone",
         "https://egghead.io/lessons/fixture-course-lesson-a",
         "https://egghead.io/lessons/fixture-course-lesson-b",
+        "https://egghead.io/lessons/fixture-rails-indexed",
       ]);
     });
 
@@ -592,7 +624,22 @@ describe.skipIf(!TEST_URL)("feeds against MySQL", () => {
         .map((lesson) => lesson.id)
         .toSorted();
       // The L10/L11 pair is one item; it keeps the content row's id (L11).
-      expect(all).toEqual(["L1", "L11", "L12", "L13", "L14", "L2", "L3", "L4", "L7", "L8", "L9"]);
+      // L15 (Rails hidden) is still Lesson.published, so pro_feed keeps it.
+      expect(all).toEqual([
+        "L1",
+        "L11",
+        "L12",
+        "L13",
+        "L14",
+        "L15",
+        "L16",
+        "L2",
+        "L3",
+        "L4",
+        "L7",
+        "L8",
+        "L9",
+      ]);
       expect((await readProFeedLessons(["node"])).map((lesson) => lesson.id)).toEqual(["L4"]);
       expect((await readProFeedLessons(["node-js"])).map((lesson) => lesson.id)).toEqual(["L4"]);
       expect((await readProFeedLessons(["react", "node"])).map((l) => l.id).toSorted()).toEqual([
@@ -651,6 +698,76 @@ describe.skipIf(!TEST_URL)("feeds against MySQL", () => {
       expect(items[2]?.itunes?.duration).toBe(itunesDuration(120));
       expect(itunesDuration(120)).not.toBeNull();
       expect(await readInstructorFeed("nobody-fixture")).toBeNull();
+    });
+  });
+
+  describe("feed parity runner", () => {
+    it("compares every feed target against saved Rails XML, read-only", async () => {
+      const { readFeedCourse, readProFeedLessons, readPublicFeedEntries } =
+        await import("./content");
+      const feeds = await import("./feeds");
+      const { renderRss } = await import("./rss");
+      const { parseFeedItems } = await import("./parity");
+      const { runFeedParity } = await import("./parity-run");
+      const course = await readFeedCourse("fixture-hooks-course", "course");
+      expect(course).not.toBeNull();
+      if (!course) return;
+      const targets = [
+        {
+          target: { feed: "lessons" } as const,
+          xml: renderRss(feeds.publicFeedChannel(await readPublicFeedEntries())),
+        },
+        {
+          target: { feed: "pro", tech: [] } as const,
+          xml: renderRss(feeds.proFeedChannel(await readProFeedLessons([]), new Date())),
+        },
+        {
+          target: { feed: "course", param: "fixture-hooks-course" } as const,
+          xml: renderRss(feeds.courseFeedChannel(course)),
+        },
+        {
+          target: { feed: "playlist", param: "fixture-hooks-course" } as const,
+          xml: renderRss(feeds.playlistFeedChannel(course)),
+        },
+      ];
+      const previous = process.env["EGGHEAD_DB_READ_ONLY"];
+      process.env["EGGHEAD_DB_READ_ONLY"] = "guard";
+      try {
+        const results = await Promise.all(
+          targets.map(async ({ target, xml }) => ({
+            feed: target.feed,
+            result: await runFeedParity(parseFeedItems(xml), target),
+          })),
+        );
+        for (const { feed, result } of results) {
+          expect(result.diff.missing, feed).toEqual([]);
+          expect(result.diff.extra, feed).toEqual([]);
+          expect(result.diff.matched, feed).toBeGreaterThan(0);
+        }
+        // A Rails-only course item gets a member-feed reason: the course feed
+        // has no indexed rule, so a hidden lesson is not blamed on visibility.
+        const planted = [
+          ...parseFeedItems(targets[2]?.xml ?? ""),
+          {
+            guid: "https://egghead.io/lessons/fixture-rails-hidden",
+            title: "Rails hidden",
+            pubDate: new Date("2020-01-01T00:00:00.000Z"),
+          },
+        ];
+        const course2 = await runFeedParity(planted, {
+          feed: "course",
+          param: "fixture-hooks-course",
+        });
+        expect(course2.reasons.get("https://egghead.io/lessons/fixture-rails-hidden")).toBe(
+          "unexplained (CB type lesson, state published)",
+        );
+        await expect(
+          runFeedParity([], { feed: "course", param: "no-such-course" }),
+        ).rejects.toThrow("No published CB course");
+      } finally {
+        if (previous === undefined) delete process.env["EGGHEAD_DB_READ_ONLY"];
+        else process.env["EGGHEAD_DB_READ_ONLY"] = previous;
+      }
     });
   });
 

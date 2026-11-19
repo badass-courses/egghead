@@ -152,6 +152,8 @@ export type CbSlugFacts = {
   type: string;
   state: string | null;
   visibilityState: string | null;
+  /** Migrated Rails visibility_state; when present it must be indexed. */
+  railsVisibilityState?: string | null;
   visibility: string | null;
   deleted: boolean;
   hasSeriesId: boolean;
@@ -161,29 +163,45 @@ export type CbSlugFacts = {
 
 const LESSON_STATES = new Set(["published", "flagged", "revised"]);
 
+/**
+ * Which Rails scopes the compared feed applies. lessons#feed is indexed and
+ * without_series; pro_feed and the course feeds are neither.
+ */
+export type MissRules = { requireIndexed: boolean; withoutSeries: boolean };
+export const LESSONS_FEED_RULES: MissRules = { requireIndexed: true, withoutSeries: true };
+
 /** Why a Rails item is missing from CB output, in plain words. */
 export function missReason(
   facts: CbSlugFacts | null,
   cbWindowOldest: Date | null,
   rails: ParityItem,
+  rules: MissRules = LESSONS_FEED_RULES,
 ) {
   if (!facts) return "slug not in the CB snapshot";
   if (facts.deleted) return "deleted in CB";
   const state = (facts.state ?? "published").toLowerCase();
   const isCourse = facts.type === "course";
   if (isCourse ? state !== "published" : !LESSON_STATES.has(state)) return `CB state is ${state}`;
-  const visibilityState = (facts.visibilityState ?? "indexed").toLowerCase();
-  if (visibilityState !== "indexed" && visibilityState !== "public") {
-    return `CB visibilityState is ${visibilityState}`;
+  if (rules.requireIndexed) {
+    const visibilityState = (facts.visibilityState ?? "indexed").toLowerCase();
+    if (visibilityState !== "indexed" && visibilityState !== "public") {
+      return `CB visibilityState is ${visibilityState}`;
+    }
   }
   const visibility = (facts.visibility ?? "public").toLowerCase();
   if (visibility !== "public") return `CB visibility is ${visibility}`;
-  if (facts.hasSeriesId) return "CB lesson carries a Rails Series id";
+  if (rules.requireIndexed) {
+    const railsVisibilityState = (facts.railsVisibilityState ?? "indexed").toLowerCase();
+    if (railsVisibilityState !== "indexed") {
+      return `migrated railsVisibilityState is ${railsVisibilityState}`;
+    }
+  }
+  if (rules.withoutSeries && facts.hasSeriesId) return "CB lesson carries a Rails Series id";
   if (cbWindowOldest && facts.feedDate && facts.feedDate < cbWindowOldest) {
-    return `CB date ${facts.feedDate.toISOString()} is older than the CB feed's 200-item window (no CB publishedAt)`;
+    return `CB date ${facts.feedDate.toISOString()} is older than the CB feed's item window (no CB publishedAt)`;
   }
   if (cbWindowOldest && rails.pubDate && rails.pubDate < cbWindowOldest) {
-    return "older than the CB feed's 200-item window";
+    return "older than the CB feed's item window";
   }
   return `unexplained (CB type ${facts.type}, state ${state})`;
 }
@@ -200,7 +218,10 @@ function iso(date: Date | null) {
 export type DuplicateCounts = {
   lessons: number;
   playlists: number;
-  /** CB visibilityState "public" rows whose railsVisibilityState is not indexed. */
+  /**
+   * CB visibilityState "public" rows whose railsVisibilityState is not
+   * indexed. The indexed feeds exclude these; the count shows how many.
+   */
   publicButRailsUnindexed?: number;
 };
 
@@ -226,7 +247,7 @@ export function formatParityReport(
           ...(duplicates.publicButRailsUnindexed === undefined
             ? []
             : [
-                `visibilityState "public" but Rails not indexed: ${duplicates.publicButRailsUnindexed}`,
+                `visibilityState "public" but Rails not indexed (excluded): ${duplicates.publicButRailsUnindexed}`,
               ]),
         ]
       : []),
