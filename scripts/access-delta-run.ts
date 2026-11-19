@@ -26,6 +26,7 @@ import {
   type DeltaPlan,
   type RailsAccessExport,
   type RailsBackingGrant,
+  type RailsProHolder,
   type SeatFlagRuling,
   railsTimestampToIso,
 } from "../apps/web/src/access/rails-access-delta";
@@ -215,6 +216,21 @@ export function railsIdListSha256(railsUserIds: readonly string[]) {
     .digest("hex");
 }
 
+/** Holders by latest sign-in before `nowMs`. */
+export function signInBuckets(holders: readonly RailsProHolder[], nowMs: number) {
+  const buckets = { within90Days: 0, within1Year: 0, within3Years: 0, older: 0, never: 0 };
+  for (const holder of holders) {
+    const iso = railsTimestampToIso(holder.lastSignInOn);
+    const days = iso === null ? Number.NaN : (nowMs - Date.parse(iso)) / 86_400_000;
+    if (Number.isNaN(days)) buckets.never++;
+    else if (days <= 90) buckets.within90Days++;
+    else if (days <= 365) buckets.within1Year++;
+    else if (days <= 3 * 365) buckets.within3Years++;
+    else buckets.older++;
+  }
+  return buckets;
+}
+
 /**
  * Compare the export with Rails' own decision. Rails gates lessons on `is_pro?`
  * (`Ability#lesson_permissions`, which also unlocks `is_basic?` and
@@ -240,16 +256,7 @@ export function proCrossCheck(
   const extra = [...exportPro]
     .filter((railsUserId) => !railsPro.has(railsUserId) && !withoutProByRails.has(railsUserId))
     .toSorted(byRailsId);
-  const buckets = { within90Days: 0, within1Year: 0, within3Years: 0, older: 0, never: 0 };
-  for (const holder of plan.barePro.all) {
-    const iso = railsTimestampToIso(holder.lastSignInOn);
-    const days = iso === null ? Number.NaN : (nowMs - Date.parse(iso)) / 86_400_000;
-    if (Number.isNaN(days)) buckets.never++;
-    else if (days <= 90) buckets.within90Days++;
-    else if (days <= 365) buckets.within1Year++;
-    else if (days <= 3 * 365) buckets.within3Years++;
-    else buckets.older++;
-  }
+  const buckets = signInBuckets(plan.barePro.all, nowMs);
   return {
     railsProHolders: railsPro.size,
     exportProEquivalent: exportPro.size,
@@ -303,6 +310,110 @@ export function backingCounts(railsExport: RailsAccessExport, plan: DeltaPlan, n
       const iso = railsTimestampToIso(grant.currentPeriodEnd);
       return iso !== null && Date.parse(iso) < nowMs;
     }).length,
+  };
+}
+
+function idsOf(list: readonly { railsUserId: string }[]) {
+  return new Set(list.map((entry) => entry.railsUserId));
+}
+
+/**
+ * Where every user with a pro-eligible stale legacy subscription lands, counts
+ * only. Each user is in exactly one bucket (`held`, `grantedInWindow`,
+ * `orphan`, `grantedAnotherWay`, `other`), so the buckets add up to `users`.
+ * `grantedAnotherWay` is split by the first reason in `byReason` order; each
+ * reason also has a non-exclusive count. `other` should be 0.
+ */
+export function staleLegacyReconciliation(
+  railsExport: RailsAccessExport,
+  plan: Pick<
+    DeltaPlan,
+    "staleLegacyAll" | "heldLegacySubscriptions" | "barePro" | "liveBackingGrants"
+  >,
+  after: ShadowResult,
+  nowMs: number,
+  activeDays: number,
+) {
+  const users = [...new Set(plan.staleLegacyAll.map((held) => held.railsUserId))];
+  const held = new Set(plan.heldLegacySubscriptions.map((entry) => entry.railsUserId));
+  const inWindow = new Set(plan.barePro.active.map((holder) => holder.railsUserId));
+  const orphans = new Set(railsExport.orphanRailsUserIds);
+  const reasons = {
+    role: idsOf(railsExport.roleGrants),
+    basic: idsOf(railsExport.basicGrants),
+    seat: new Set(
+      railsExport.subscriptions.flatMap((sub) =>
+        sub.members.filter((member) => member.hasMemberRole).map((member) => member.railsUserId),
+      ),
+    ),
+    membershipPurchase: idsOf(
+      railsExport.purchases.filter((purchase) => purchase.sellableType === "Resource::Membership"),
+    ),
+    gift: idsOf(plan.liveBackingGrants.filter((grant) => grant.source === "gift")),
+    managedSubscription: idsOf(
+      plan.liveBackingGrants.filter((grant) => grant.source === "managed_subscription"),
+    ),
+    liveLegacySubscription: idsOf(
+      plan.liveBackingGrants.filter((grant) => grant.source === "legacy_subscription"),
+    ),
+  };
+  const reasonNames = Object.keys(reasons).filter(
+    (name): name is keyof typeof reasons => name in reasons,
+  );
+  const signIn = new Map(
+    railsExport.proHolders.map((holder) => [holder.railsUserId, holder.lastSignInOn]),
+  );
+  const cutoffMs = nowMs - activeDays * 86_400_000;
+  const withinWindow = (id: string) => {
+    const iso = railsTimestampToIso(signIn.get(id) ?? null);
+    return iso !== null && Date.parse(iso) >= cutoffMs;
+  };
+  const allAccessAfter = new Set(
+    after.users
+      .filter((user) => "all_access" in user.railsSays)
+      .flatMap((user) => user.railsUserIds),
+  );
+  const buckets = { held: 0, grantedInWindow: 0, orphan: 0, grantedAnotherWay: 0, other: 0 };
+  const firstReason: Record<string, number> = {};
+  const anyReason: Record<string, number> = {};
+  for (const name of reasonNames) {
+    firstReason[name] = 0;
+    anyReason[name] = 0;
+  }
+  let anotherWayWithinWindow = 0;
+  let anotherWayWithoutProLine = 0;
+  let anotherWayWithoutAllAccess = 0;
+  for (const id of users) {
+    if (held.has(id)) buckets.held++;
+    else if (inWindow.has(id)) buckets.grantedInWindow++;
+    else if (orphans.has(id)) buckets.orphan++;
+    else {
+      const matched = reasonNames.filter((name) => reasons[name].has(id));
+      if (matched.length === 0) {
+        buckets.other++;
+        continue;
+      }
+      buckets.grantedAnotherWay++;
+      const first = matched[0] ?? "";
+      firstReason[first] = (firstReason[first] ?? 0) + 1;
+      for (const name of matched) anyReason[name] = (anyReason[name] ?? 0) + 1;
+      if (!signIn.has(id)) anotherWayWithoutProLine++;
+      else if (withinWindow(id)) anotherWayWithinWindow++;
+      if (!allAccessAfter.has(id)) anotherWayWithoutAllAccess++;
+    }
+  }
+  return {
+    users: users.length,
+    subscriptions: plan.staleLegacyAll.length,
+    ...buckets,
+    grantedAnotherWayByFirstReason: firstReason,
+    grantedAnotherWayByAnyReason: anyReason,
+    /** Granted another way and signed in within the window (counted in a raw Rails sign-in query, not as in-window grants). */
+    grantedAnotherWaySignedInWithinWindow: anotherWayWithinWindow,
+    /** Granted another way with no `pro_holder` line (role or basic without `pro`): no sign-in date in the export. */
+    grantedAnotherWayWithoutProLine: anotherWayWithoutProLine,
+    /** Should be 0: granted another way, yet the plan's Rails side has no all access for them. */
+    grantedAnotherWayWithoutAllAccess: anotherWayWithoutAllAccess,
   };
 }
 
@@ -719,6 +830,14 @@ export function buildReceipt(
     ...heldList(plan.heldLegacySubscriptions.map((held) => held.railsSourceId)),
     staleDays: gate.legacyStaleDays,
     subscriptions: plan.heldLegacySubscriptions,
+    /** Every holder whose only backing is a stale legacy subscription, granted or held. */
+    holderSignIn: signInBuckets(
+      plan.barePro.staleOnly,
+      Date.parse(railsExport.manifest.exportedAt),
+    ),
+    grantedInWindow: plan.barePro.staleOnly.filter((holder) =>
+      plan.barePro.active.some((active) => active.railsUserId === holder.railsUserId),
+    ).length,
     rowsKept: plan.revokeHeldForStaleLegacy,
   };
   const orphans = {
@@ -804,7 +923,8 @@ export function buildReceipt(
     }
     if (heldLegacy.count > 0 && heldLegacy.sha256 !== gate.acceptStaleLegacy) {
       failures.push(
-        `${heldLegacy.count} legacy subscriptions held as stale (period end over ${gate.legacyStaleDays} days past, or none; ` +
+        `${heldLegacy.count} legacy subscriptions held as stale (period end over ${gate.legacyStaleDays} days past, or none, ` +
+          `and no sign-in within ${gate.bareProActiveDays} days; ` +
           "ids in heldLegacySubscriptions); rule on them, then pass --accept-stale-legacy with heldLegacySubscriptions.sha256",
       );
     }
@@ -885,6 +1005,13 @@ export function buildReceipt(
     proCrossCheck: { ...pro, acceptedBareProSha256: gate.acceptBarePro },
     backingGrants: { ...backing, growth, previous: context.previousBackingCounts },
     heldLegacySubscriptions: heldLegacy,
+    staleLegacyReconciliation: staleLegacyReconciliation(
+      railsExport,
+      plan,
+      after,
+      Date.parse(railsExport.manifest.exportedAt),
+      gate.bareProActiveDays,
+    ),
     orphanGrants: orphans,
     identityOps,
     heldSeatFlags: plan.heldSeatFlags,

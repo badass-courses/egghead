@@ -1017,6 +1017,8 @@ export function buildExpectedProjection(
   railsExport: RailsAccessExport,
   identities: ReadonlyMap<string, IdentityOutcome>,
   bareProActive: readonly RailsProHolder[] = [],
+  /** Stale legacy subscription ids behind a bare-active grant, by Rails user id. */
+  staleLegacyByUser: ReadonlyMap<string, readonly string[]> = new Map(),
 ): ExpectedProjection {
   const entitlements = new Map<string, ExpectedEntitlement>();
   const memberships = new Map<string, ExpectedMembership>();
@@ -1237,6 +1239,7 @@ export function buildExpectedProjection(
         source: "bare_pro_recently_active",
         railsUserId: holder.railsUserId,
         lastSignInOn: holder.lastSignInOn ?? undefined,
+        staleLegacySubscriptionIds: staleLegacyByUser.get(holder.railsUserId),
         accessReason: "bare_pro_recently_active",
         accessLaw: SUBSCRIPTION_ACCESS_LAW,
       }),
@@ -1374,6 +1377,7 @@ export interface DeltaPlan {
   /** Bare `pro` (sorted by Rails id): all, granted as recently active, and held. */
   readonly barePro: {
     readonly all: readonly RailsProHolder[];
+    readonly staleOnly: readonly RailsProHolder[];
     readonly active: readonly RailsProHolder[];
     readonly kept: readonly RailsProHolder[];
     readonly held: readonly RailsProHolder[];
@@ -1386,6 +1390,8 @@ export interface DeltaPlan {
   readonly projectedExport: RailsAccessExport;
   /** Legacy subscriptions held as stale: granted nothing, existing rows kept. */
   readonly heldLegacySubscriptions: readonly HeldLegacySubscription[];
+  /** Every pro-eligible stale legacy subscription, before the one-list rule (for reconciliation). */
+  readonly staleLegacyAll: readonly HeldLegacySubscription[];
   /** Existing rows kept for a stale legacy subscription or an orphan Rails user. */
   readonly revokeHeldForStaleLegacy: number;
   readonly revokeHeldForOrphan: number;
@@ -1436,13 +1442,17 @@ export function deltaScope(
     nowMs,
     options.legacyStaleDays ?? DEFAULT_LEGACY_STALE_DAYS,
   );
+  // A pro holder whose only backing is a stale legacy subscription is bare `pro`
+  // with dead billing: the same sign-in window decides.
   const split = splitBarePro(
     railsExport,
     backing.live,
-    new Set([...backing.held.map((held) => held.railsUserId), ...railsExport.orphanRailsUserIds]),
+    new Set(railsExport.orphanRailsUserIds),
     nowMs,
     options.bareProActiveDays ?? DEFAULT_BARE_PRO_ACTIVE_DAYS,
   );
+  const staleUsers = new Set(backing.held.map((held) => held.railsUserId));
+  const isStaleOnly = (holder: RailsProHolder) => staleUsers.has(holder.railsUserId);
   const activeIds = new Set(split.active.map((holder) => holder.railsUserId));
   const seenKept = new Set<string>();
   const kept = railsExport.proHolders
@@ -1454,14 +1464,33 @@ export function deltaScope(
     })
     .toSorted(byRailsUserId);
   const keptIds = new Set(kept.map((holder) => holder.railsUserId));
+  const active = [...split.active, ...kept].toSorted(byRailsUserId);
+  const grantedIds = new Set(active.map((holder) => holder.railsUserId));
   const barePro = {
-    all: split.all,
+    /** Bare holders without a stale legacy subscription. */
+    all: split.all.filter((holder) => !isStaleOnly(holder)),
+    /** Holders whose only backing is a stale legacy subscription (granted or held). */
+    staleOnly: split.all.filter(isStaleOnly),
     /** Granted: inside the window now, or keeping a row from an earlier run. */
-    active: [...split.active, ...kept].toSorted(byRailsUserId),
+    active,
     /** Outside the window but kept because their row exists and `pro` remains. */
     kept,
-    held: split.held.filter((holder) => !keptIds.has(holder.railsUserId)),
+    /** Held bare `pro`; stale-only holders are on the stale legacy list instead. */
+    held: split.held.filter((holder) => !keptIds.has(holder.railsUserId) && !isStaleOnly(holder)),
   };
+  // One list per person: a stale subscription is held only when its holder has
+  // nothing else that grants and is outside the window.
+  const staleOnlyIds = new Set(barePro.staleOnly.map((holder) => holder.railsUserId));
+  const heldLegacy = backing.held.filter(
+    (held) => staleOnlyIds.has(held.railsUserId) && !grantedIds.has(held.railsUserId),
+  );
+  const staleByGrantedUser = new Map<string, string[]>();
+  for (const held of backing.held) {
+    if (!staleOnlyIds.has(held.railsUserId) || !grantedIds.has(held.railsUserId)) continue;
+    const list = staleByGrantedUser.get(held.railsUserId) ?? [];
+    list.push(held.railsSourceId);
+    staleByGrantedUser.set(held.railsUserId, list);
+  }
   const grantReferenced = new Set([
     ...railsExport.roleGrants.map((grant) => grant.railsUserId),
     ...railsExport.basicGrants.map((grant) => grant.railsUserId),
@@ -1480,7 +1509,7 @@ export function deltaScope(
     users: railsExport.users.filter((user) => !proOnly.has(user.railsUserId)),
     backingGrants: backing.live,
   };
-  return { backing, barePro, projectedExport };
+  return { backing, barePro, heldLegacy, staleByGrantedUser, projectedExport };
 }
 
 export interface DeltaPlanOptions {
@@ -1508,16 +1537,21 @@ export function computeDeltaPlan(
     }),
   );
   const scope = deltaScope(railsExport, nowMs, options, existingBareProActive);
-  const { backing, barePro, projectedExport } = scope;
+  const { backing, barePro, heldLegacy, staleByGrantedUser, projectedExport } = scope;
   const identities = resolveIdentities(projectedExport, snapshot);
-  const expected = buildExpectedProjection(projectedExport, identities, barePro.active);
+  const expected = buildExpectedProjection(
+    projectedExport,
+    identities,
+    barePro.active,
+    staleByGrantedUser,
+  );
   const ops: DeltaOp[] = [];
   const unresolvedRailsUserIds = new Set(
     [...identities].filter(([, outcome]) => outcome.kind === "unresolved").map(([id]) => id),
   );
   const orphanRailsUserIds = new Set(railsExport.orphanRailsUserIds);
   const heldLegacyRowIds = new Set(
-    backing.held.map((held) =>
+    heldLegacy.map((held) =>
       projectionIds.entitlement(
         `${BACKING_SOURCE_TYPES.legacy_subscription}:${held.railsSourceId}:${held.railsUserId}`,
       ),
@@ -1723,7 +1757,8 @@ export function computeDeltaPlan(
     backingWithoutPro: backing.withoutPro,
     barePro,
     projectedExport,
-    heldLegacySubscriptions: backing.held,
+    heldLegacySubscriptions: heldLegacy,
+    staleLegacyAll: backing.held,
     revokeHeldForStaleLegacy,
     revokeHeldForOrphan,
     heldEntitlementIds,

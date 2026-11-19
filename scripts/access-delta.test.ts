@@ -1182,6 +1182,13 @@ function linkOp(userId: string, railsUserId: string): DeltaOp {
   return { kind: "user_link", key: `user_link:${userId}:${railsUserId}`, userId, railsUserId };
 }
 
+/** A legacy subscription long past its period end. */
+function staleLegacyLine(id: string, user: string) {
+  return JSON.stringify(
+    backingGrant("legacy_subscription", id, user, { currentPeriodEnd: "2025-01-01" }),
+  );
+}
+
 /** No op of any kind names this row or membership id. */
 function noOpNames(ops: readonly DeltaOp[], id: string) {
   return !ops.some((op) => op.key.endsWith(`:${id}`));
@@ -1243,8 +1250,11 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     // A wider window grants it; no period end at all is held too.
     const wide = analyze(railsExport, julySnapshot(), NOW_MS, { legacyStaleDays: 90 });
     assert.ok(opFor(wide.plan.ops, "entitlement_grant", staleRow));
+    // An undated subscription is held too (133 holds `pro`, nothing else grants).
     const undated = exportWith([
-      JSON.stringify(backingGrant("legacy_subscription", "7705", "101")),
+      JSON.stringify(railsUser("133")),
+      proLine("133", null),
+      JSON.stringify(backingGrant("legacy_subscription", "7705", "133")),
     ]);
     assert.deepEqual(
       analyze(undated, julySnapshot(), NOW_MS).plan.heldLegacySubscriptions.map((held) => [
@@ -1255,6 +1265,128 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
         ["7704", "period_end_stale"],
         ["7705", "no_period_end"],
       ],
+    );
+  });
+
+  void test("r6: a stale-only holder signed in within the window is granted bare-active, not held", () => {
+    const recent = parseRailsAccessExport(
+      exportText(
+        novemberData().map((value) =>
+          value === JSON.stringify(proHolder("123")) ? proLine("123", "2026-10-01") : value,
+        ),
+      ),
+    );
+    const result = analyze(recent, julySnapshot(), NOW_MS);
+    const row = projectionIds.entitlement("rails_bare_pro_active:123");
+    const grant = opFor(result.plan.ops, "entitlement_grant", row);
+    assert.ok(grant && grant.kind === "entitlement_grant");
+    assert.deepEqual(grant.entitlement.metadata["staleLegacySubscriptionIds"], ["7704"]);
+    assert.equal(opFor(result.plan.ops, "entitlement_grant", staleRow), undefined);
+    assert.deepEqual(result.plan.heldLegacySubscriptions, []);
+    const receipt = buildReceipt(recent, result, ctx({ acceptStaleLegacy: null }));
+    assert.equal(receipt.heldLegacySubscriptions.count, 0);
+    assert.equal(receipt.heldLegacySubscriptions.grantedInWindow, 1);
+    assert.equal(receipt.backingGrants.bySourceType.rails_bare_pro_active, 1);
+    assert.match(receipt.gate.failures.join(), /first run: 1 rails_bare_pro_active grants/);
+    assert.equal(
+      buildReceipt(
+        recent,
+        result,
+        ctx({
+          acceptStaleLegacy: null,
+          acceptFirstBacking: { ...FIXTURE_FIRST_BACKING, rails_bare_pro_active: 1 },
+        }),
+      ).gate.pass,
+      true,
+    );
+  });
+
+  void test("r6: one list per person; stale buckets cover stale-only holders, bare buckets the rest", () => {
+    const receipt = buildReceipt(railsExport, analysis, CTX);
+    // 123 never signed in: held on the stale list, not the bare list.
+    assert.equal(receipt.heldLegacySubscriptions.count, 1);
+    assert.deepEqual(receipt.heldLegacySubscriptions.holderSignIn, {
+      within90Days: 0,
+      within1Year: 0,
+      within3Years: 0,
+      older: 0,
+      never: 1,
+    });
+    assert.deepEqual(receipt.proCrossCheck.bareProHolders.railsUserIds, []);
+    assert.equal(
+      Object.values(receipt.proCrossCheck.bareProSignIn).reduce((sum, n) => sum + n, 0),
+      0,
+    );
+    // A stale subscription for someone granted another way (101's seat) is on no list.
+    const seated = exportWith([
+      JSON.stringify(
+        backingGrant("legacy_subscription", "7706", "101", { currentPeriodEnd: "2025-01-01" }),
+      ),
+    ]);
+    const seatedReceipt = buildReceipt(seated, analyze(seated, julySnapshot(), NOW_MS), CTX);
+    assert.deepEqual(
+      seatedReceipt.heldLegacySubscriptions.subscriptions.map((held) => held.railsSourceId),
+      ["7704"],
+    );
+  });
+
+  void test("r6: staleLegacyReconciliation puts every stale-subscription user in exactly one bucket", () => {
+    const mixed = exportWith([
+      staleLegacyLine("7706", "101"), // seat
+      staleLegacyLine("7707", "108"), // lifetime role (also a pro holder in this test)
+      proLine("108", "2026-10-01"),
+      staleLegacyLine("7708", "114"), // basic, no pro_holder line
+      JSON.stringify(railsUser("130")),
+      proLine("130", "2026-10-01"),
+      staleLegacyLine("7709", "130"), // stale-only, signed in recently
+      proLine("134", "2026-10-01"),
+      staleLegacyLine("7710", "134"), // no user line: orphan
+    ]);
+    const result = analyze(mixed, julySnapshot(), NOW_MS);
+    const receipt = buildReceipt(mixed, result, CTX);
+    const recon = receipt.staleLegacyReconciliation;
+    assert.equal(recon.users, 6, "123, 101, 108, 114, 130, 134");
+    assert.equal(recon.held, 1);
+    assert.equal(recon.grantedInWindow, 1);
+    assert.equal(recon.orphan, 1);
+    assert.equal(recon.grantedAnotherWay, 3);
+    assert.equal(recon.other, 0);
+    assert.equal(
+      recon.held + recon.grantedInWindow + recon.orphan + recon.grantedAnotherWay + recon.other,
+      recon.users,
+    );
+    assert.equal(recon.grantedAnotherWayByFirstReason["role"], 1);
+    assert.equal(recon.grantedAnotherWayByFirstReason["basic"], 1);
+    assert.equal(recon.grantedAnotherWayByFirstReason["seat"], 1);
+    assert.equal(recon.grantedAnotherWaySignedInWithinWindow, 1, "108 signed in recently");
+    assert.equal(recon.grantedAnotherWayWithoutProLine, 1, "114");
+    assert.equal(recon.grantedAnotherWayWithoutAllAccess, 0);
+  });
+
+  void test("r6: a stale-only holder's bare-active row from an earlier run stays outside the window", () => {
+    const row = projectionIds.entitlement("rails_bare_pro_active:123");
+    const snapshot = julySnapshot();
+    const earlier: CbSnapshot = {
+      ...snapshot,
+      entitlements: [
+        ...snapshot.entitlements,
+        liveRow({
+          id: row,
+          entitlementType: "egghead_all_access_subscription",
+          userId: ids.user("123"),
+          sourceType: "rails_bare_pro_active",
+          sourceId: "123",
+          metadata: { railsUserId: "123" },
+          expiresAt: null,
+        }),
+      ],
+    };
+    const result = analyze(railsExport, earlier, NOW_MS);
+    assert.equal(opFor(result.plan.ops, "entitlement_revoke", row), undefined);
+    assert.deepEqual(result.plan.heldLegacySubscriptions, []);
+    assert.deepEqual(
+      result.plan.barePro.kept.map((holder) => holder.railsUserId),
+      ["123"],
     );
   });
 
