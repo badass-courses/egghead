@@ -22,7 +22,7 @@
     "membership:config:smoke": "tsx --tsconfig apps/web/tsconfig.json scripts/membership-configuration-smoke.ts",
     "profile:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/profile-contract.ts",
     "email:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/email-delivery-contract.ts",
-    "auth:linking:contract": "node --import tsx --test apps/web/test/auth/github-account-linking.test.ts",
+    "auth:linking:contract": "TSX_TSCONFIG_PATH=apps/web/tsconfig.json node --import tsx --test apps/web/test/auth/github-account-linking.test.ts",
     "beta:runtime-guard": "tsx --tsconfig apps/web/tsconfig.json scripts/beta-runtime-guard.ts",
     "builder:smoke": "tsx --tsconfig apps/builder-egghead/tsconfig.json scripts/builder-smoke.ts",
     "check": "pnpm typecheck && pnpm typecheck:tsgo && pnpm lint && pnpm format:check && pnpm phase0:imports && pnpm routing:v2-contract && pnpm workshop:boundaries && pnpm workshop:contract && pnpm workshop:test && pnpm search:typesense-contract && pnpm search:pagination:contract && pnpm sitemap:contract && pnpm stripe:subscription-contract && pnpm stripe:webhook-signature-contract && pnpm checkout:customer:smoke && pnpm membership:config:smoke && pnpm coursebuilder:prices:smoke && pnpm coursebuilder:v3:smoke && pnpm profile:contract && pnpm email:contract && pnpm auth:linking:contract && pnpm beta:runtime-guard && pnpm builder:smoke && pnpm workshops:test",

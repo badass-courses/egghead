@@ -26,7 +26,8 @@ function isGithubEmail(value: unknown): value is GitHubEmail {
  * GitHub lets an account hold unverified addresses, and the stock Auth.js
  * provider falls back to the primary address without checking `verified`.
  * Only a verified address is returned here, so an unverified address can
- * never be used to create an account.
+ * never be used to create an account. The address comes back trimmed and
+ * lowercased, so a case-only difference can't create a second user.
  */
 export function selectVerifiedGithubEmail(
   profileEmail: string | null | undefined,
@@ -39,27 +40,48 @@ export function selectVerifiedGithubEmail(
     const match = verified.find(
       (email) => email.email.trim().toLowerCase() === normalizedProfileEmail,
     );
-    if (match) return match.email;
+    if (match) return normalizeEmail(match.email);
   }
 
-  return verified.find((email) => email.primary)?.email ?? null;
+  const primary = verified.find((email) => email.primary);
+  return primary ? normalizeEmail(primary.email) : null;
 }
 
-async function fetchGithubJson(url: string, accessToken: string | undefined): Promise<unknown> {
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+/** OAuth scope the provider needs: profile plus the `/user/emails` list. */
+export const GITHUB_OAUTH_SCOPE = "read:user user:email";
+
+/** `/login` error code for a GitHub sign-in with no verified email. */
+export const GITHUB_EMAIL_UNVERIFIED_ERROR = "GithubEmailUnverified";
+
+function githubRequest(url: string, accessToken: string | undefined) {
   if (!accessToken) throw new Error("GitHub sign-in returned no access token");
 
-  const response = await fetch(url, {
+  return fetch(url, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "User-Agent": "authjs",
     },
   });
+}
 
-  if (!response.ok) {
-    throw new Error(`GitHub API request failed with status ${response.status}`);
+/**
+ * The verified addresses GitHub reports for this token. A failed or malformed
+ * response counts as "no verified email", which refuses the sign-in with a
+ * clear message instead of an error.
+ */
+async function fetchGithubEmails(accessToken: string | undefined): Promise<GitHubEmail[]> {
+  try {
+    const response = await githubRequest(`${GITHUB_API_BASE_URL}/user/emails`, accessToken);
+    if (!response.ok) return [];
+    const emails: unknown = await response.json();
+    return Array.isArray(emails) ? emails.filter(isGithubEmail) : [];
+  } catch {
+    return [];
   }
-
-  return response.json();
 }
 
 function isGithubProfile(value: unknown): value is GitHubProfile {
@@ -80,31 +102,29 @@ function isGithubProfile(value: unknown): value is GitHubProfile {
  * with the same email is same person"). A GitHub sign-in first matches the
  * `(github, GitHub user id)` account row, then links to an existing user with
  * the same email. That rule holds only for an address GitHub has verified, so
- * this provider never hands Auth.js an unverified address.
+ * this provider never hands Auth.js an unverified address. With no verified
+ * address the profile email is null, and `createAuthConfig`'s `signIn`
+ * callback sends the user to `/login?error=GithubEmailUnverified`.
  */
 export function createGithubProvider({ clientId, clientSecret }: GithubProviderOptions) {
   return GithubProvider({
     clientId,
     clientSecret,
     allowDangerousEmailAccountLinking: true,
+    authorization: { params: { scope: GITHUB_OAUTH_SCOPE } },
     userinfo: {
       url: `${GITHUB_API_BASE_URL}/user`,
       async request({ tokens }: { tokens: { access_token?: string } }) {
-        const profile = await fetchGithubJson(`${GITHUB_API_BASE_URL}/user`, tokens.access_token);
+        const response = await githubRequest(`${GITHUB_API_BASE_URL}/user`, tokens.access_token);
+        if (!response.ok) {
+          throw new Error(`GitHub user request failed with status ${response.status}`);
+        }
+        const profile: unknown = await response.json();
         if (!isGithubProfile(profile)) throw new Error("GitHub returned an invalid user profile");
 
-        const emails = await fetchGithubJson(
-          `${GITHUB_API_BASE_URL}/user/emails`,
-          tokens.access_token,
-        );
-        const email = selectVerifiedGithubEmail(
-          profile.email,
-          Array.isArray(emails) ? emails.filter(isGithubEmail) : [],
-        );
+        const emails = await fetchGithubEmails(tokens.access_token);
 
-        if (!email) throw new Error("GitHub account has no verified email address");
-
-        return { ...profile, email };
+        return { ...profile, email: selectVerifiedGithubEmail(profile.email, emails) };
       },
     },
   });

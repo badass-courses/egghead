@@ -7,14 +7,12 @@ import { env } from '@/env.mjs'
 import { USER_CREATED_EVENT } from '@/inngest/events/user-created'
 import { inngest } from '@/inngest/inngest.server'
 import { addRoleToUser } from '@/lib/users'
-import GithubProvider from '@auth/core/providers/github'
-import TwitterProvider from '@auth/core/providers/twitter'
-import { and, eq } from 'drizzle-orm'
 import NextAuth, { type DefaultSession, type NextAuthConfig } from 'next-auth'
 import { z } from 'zod'
 
 import { userSchema } from '@coursebuilder/core/schemas'
 
+import { accountRowMatch } from './auth-account-tokens'
 import egghead from './egghead-auth-provider'
 
 type Role = 'admin' | 'user' | string
@@ -77,12 +75,7 @@ export const authOptions: NextAuthConfig = {
 						access_token: account.access_token,
 						expires_at: account.expires_at,
 					})
-					.where(
-						and(
-							eq(accounts.provider, account.provider),
-							eq(accounts.providerAccountId, account.providerAccountId),
-						),
-					)
+					.where(accountRowMatch(accounts, account))
 			}
 
 			if (user.id && profile.roles.includes('instructor')) {
