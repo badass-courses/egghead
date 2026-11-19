@@ -1,6 +1,7 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 
 import { createLocalMysqlConnection, getEggheadMysqlPool } from "../db/local-docker";
+import type { LessonProgressSource } from "./lesson-progress-sources";
 
 type ResourceProgressRow = RowDataPacket & {
   userId: string;
@@ -264,10 +265,15 @@ export async function completeResourcesForUser(input: {
   }
 }
 
+/**
+ * A learner's own un-complete. `source` is limited to `LESSON_PROGRESS_SOURCES`,
+ * the sources the Rails progress import treats as explicit learner decisions,
+ * so a new un-complete path must be added there and the import sees it.
+ */
 export async function uncompleteResourceForUser(input: {
   userId: string;
   resourceId: string;
-  source: string;
+  source: LessonProgressSource;
 }) {
   const connection = await createLocalMysqlConnection();
 

@@ -91,28 +91,37 @@ export async function assertUtcSession(db: Pick<Connection, "query">) {
   }
 }
 
-type KeyColumnRow = RowDataPacket & { columnName: string };
+type KeyColumnRow = RowDataPacket & { indexName: string; columnName: string };
 
 /**
  * The insert relies on `ON DUPLICATE KEY` to leave a row that appeared after
- * planning alone. That only holds while the primary key is exactly
- * `(userId, resourceId)`, as in the CourseBuilder drizzle schema. A target
- * whose key differs (for example one that includes `organizationMembershipId`)
- * could take a duplicate row instead, so the import refuses it.
+ * planning alone. That only holds while `(userId, resourceId)` is the table's
+ * only unique key, as in the CourseBuilder drizzle schema. A primary key that
+ * differs (for example one that includes `organizationMembershipId`) could take
+ * a duplicate row, and any other UNIQUE index could fire the no-op on a
+ * different row, so the import refuses both.
  */
-export async function assertProgressPrimaryKey(db: Pick<Connection, "query">) {
+export async function assertProgressUniqueKeys(db: Pick<Connection, "query">) {
   const [rows] = await db.query<KeyColumnRow[]>(`
-    SELECT COLUMN_NAME AS columnName
+    SELECT INDEX_NAME AS indexName, COLUMN_NAME AS columnName
     FROM information_schema.STATISTICS
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME = 'egghead_ResourceProgress'
-      AND INDEX_NAME = 'PRIMARY'
-    ORDER BY SEQ_IN_INDEX
+      AND NON_UNIQUE = 0
+    ORDER BY INDEX_NAME, SEQ_IN_INDEX
   `);
-  const columns = rows.map((row) => row.columnName);
-  if (columns.join(",") !== "userId,resourceId") {
+  const primary = rows.filter((row) => row.indexName === "PRIMARY").map((row) => row.columnName);
+  if (primary.join(",") !== "userId,resourceId") {
     throw new Error(
-      `egghead_ResourceProgress primary key is (${columns.join(", ") || "none"}), not (userId, resourceId). The import's duplicate guard depends on that key; nothing was written.`,
+      `egghead_ResourceProgress primary key is (${primary.join(", ") || "none"}), not (userId, resourceId). The import's duplicate guard depends on that key; nothing was written.`,
+    );
+  }
+  const others = [
+    ...new Set(rows.filter((row) => row.indexName !== "PRIMARY").map((row) => row.indexName)),
+  ];
+  if (others.length > 0) {
+    throw new Error(
+      `egghead_ResourceProgress has unique index(es) besides the primary key (${others.join(", ")}). ON DUPLICATE KEY could fire on one of them; nothing was written.`,
     );
   }
 }
@@ -242,6 +251,14 @@ export type ProgressImportReceipt = {
   lastRailsUserId: number | null;
   batches: number;
   transactions: number;
+  /** Write cap per transaction for this run (`--max-rows-per-transaction`). */
+  maxRowsPerTransaction: number;
+  /** Wall time of the write transactions, to size the cap against a target's limits. */
+  timings: {
+    writeMs: number;
+    slowestTransactionMs: number;
+    slowestTransactionRows: number;
+  };
   catalog: CbContentCatalog["stats"];
   users: {
     seen: number;
@@ -267,6 +284,7 @@ export type ProgressImportReceipt = {
     mappedByRailsPlaylistId: number;
     mappedBySlug: number;
     unmapped: number;
+    distinctUnmapped: number;
     skippedForUnmatchedUser: number;
   };
   rows: {
@@ -333,6 +351,7 @@ export function emptyProgressImportReceipt(input: {
   source: string;
   afterRailsUserId: number;
   maxUsers?: number;
+  maxRowsPerTransaction?: number;
   catalog: CbContentCatalog;
   startedAt: Date;
 }): ProgressImportReceipt {
@@ -348,6 +367,8 @@ export function emptyProgressImportReceipt(input: {
     lastRailsUserId: null,
     batches: 0,
     transactions: 0,
+    maxRowsPerTransaction: input.maxRowsPerTransaction ?? MAX_ROWS_PER_TRANSACTION,
+    timings: { writeMs: 0, slowestTransactionMs: 0, slowestTransactionRows: 0 },
     catalog: input.catalog.stats,
     users: {
       seen: 0,
@@ -371,6 +392,7 @@ export function emptyProgressImportReceipt(input: {
       mappedByRailsPlaylistId: 0,
       mappedBySlug: 0,
       unmapped: 0,
+      distinctUnmapped: 0,
       skippedForUnmatchedUser: 0,
     },
     rows: {
@@ -399,28 +421,72 @@ function pushSample<T>(samples: T[], value: T, limit = SAMPLE_LIMIT) {
   if (samples.length < limit) samples.push(value);
 }
 
-/** Tracks unmapped Rails lessons across batches so the receipt can name the biggest gaps. */
-export class UnmappedLessonTally {
-  readonly #byId = new Map<number, { slug: string | null; users: number }>();
+export type UnmappedLesson = { railsLessonId: number; slug: string | null; users: number };
+export type UnmappedSeries = {
+  railsPlaylistId: number | null;
+  railsSeriesId: number | null;
+  slug: string | null;
+  users: number;
+};
 
-  add(railsLessonId: number, slug: string | null) {
-    const current = this.#byId.get(railsLessonId);
+function idOrLast(value: number | null) {
+  return value ?? Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * Tracks every distinct Rails lesson and series with no CB row, across
+ * batches, with how many matched learners completed it. The receipt keeps the
+ * biggest gaps; `lessons()` and `series()` give the full lists (ids, slugs and
+ * counts only) for `--unmapped-out`.
+ */
+export class UnmappedContentTally {
+  readonly #lessons = new Map<number, UnmappedLesson>();
+  readonly #series = new Map<string, UnmappedSeries>();
+
+  addLesson(railsLessonId: number, slug: string | null) {
+    const current = this.#lessons.get(railsLessonId);
     if (current) current.users += 1;
-    else this.#byId.set(railsLessonId, { slug, users: 1 });
+    else this.#lessons.set(railsLessonId, { railsLessonId, slug, users: 1 });
+  }
+
+  addSeries(railsPlaylistId: number | null, railsSeriesId: number | null, slug: string | null) {
+    const key = `${String(railsPlaylistId)}:${String(railsSeriesId)}`;
+    const current = this.#series.get(key);
+    if (current) current.users += 1;
+    else this.#series.set(key, { railsPlaylistId, railsSeriesId, slug, users: 1 });
+  }
+
+  /** Most-completed first, then by Rails id. */
+  lessons(): UnmappedLesson[] {
+    return [...this.#lessons.values()]
+      .map((lesson) => structuredClone(lesson))
+      .toSorted(
+        (left, right) => right.users - left.users || left.railsLessonId - right.railsLessonId,
+      );
+  }
+
+  series(): UnmappedSeries[] {
+    return [...this.#series.values()]
+      .map((series) => structuredClone(series))
+      .toSorted(
+        (left, right) =>
+          right.users - left.users ||
+          idOrLast(left.railsPlaylistId) - idOrLast(right.railsPlaylistId) ||
+          idOrLast(left.railsSeriesId) - idOrLast(right.railsSeriesId),
+      );
   }
 
   applyTo(receipt: ProgressImportReceipt) {
-    receipt.lessons.distinctUnmappedRailsLessonIds = this.#byId.size;
-    receipt.samples.unmappedLessons = [...this.#byId.entries()]
-      .map(([railsLessonId, value]) => ({
-        railsLessonId,
-        slug: value.slug,
-        users: value.users,
-      }))
-      .toSorted(
-        (left, right) => right.users - left.users || left.railsLessonId - right.railsLessonId,
-      )
-      .slice(0, UNMAPPED_LESSON_SAMPLE_LIMIT);
+    receipt.lessons.distinctUnmappedRailsLessonIds = this.#lessons.size;
+    receipt.series.distinctUnmapped = this.#series.size;
+    receipt.samples.unmappedLessons = this.lessons().slice(0, UNMAPPED_LESSON_SAMPLE_LIMIT);
+    receipt.samples.unmappedSeries = this.series()
+      .slice(0, UNMAPPED_LESSON_SAMPLE_LIMIT)
+      .map(({ railsPlaylistId, railsSeriesId, slug }) => ({
+        railsPlaylistId,
+        railsSeriesId,
+        slug,
+      }));
   }
 }
 
@@ -429,7 +495,7 @@ function candidatesForUser(input: {
   cbUserId: string;
   catalog: CbContentCatalog;
   receipt: ProgressImportReceipt;
-  unmappedLessons: UnmappedLessonTally;
+  unmapped: UnmappedContentTally;
   fallbackCompletedAt: Date;
 }) {
   const { user, cbUserId, catalog, receipt } = input;
@@ -450,7 +516,7 @@ function candidatesForUser(input: {
 
     if (!resourceId) {
       receipt.lessons.unmapped += 1;
-      input.unmappedLessons.add(lesson.railsLessonId, lesson.slug);
+      input.unmapped.addLesson(lesson.railsLessonId, lesson.slug);
       continue;
     }
 
@@ -480,11 +546,7 @@ function candidatesForUser(input: {
 
     if (!resourceId) {
       receipt.series.unmapped += 1;
-      pushSample(receipt.samples.unmappedSeries, {
-        railsPlaylistId: series.railsPlaylistId,
-        railsSeriesId: series.railsSeriesId,
-        slug: series.slug,
-      });
+      input.unmapped.addSeries(series.railsPlaylistId, series.railsSeriesId, series.slug);
       continue;
     }
 
@@ -716,7 +778,7 @@ async function countStampedRows(
 }
 
 /**
- * Writes a batch in transactions of at most `MAX_ROWS_PER_TRANSACTION` rows.
+ * Writes a batch in transactions of at most `receipt.maxRowsPerTransaction` rows.
  * A crash between transactions leaves earlier ones committed; the resume
  * cursor only moves after the whole batch, so a resume replays the batch and
  * the already-written rows classify as `kept_cb_completed`.
@@ -726,12 +788,13 @@ async function writePlannedRows(
   writes: readonly PlannedWrite[],
   receipt: ProgressImportReceipt,
 ) {
-  await runInOrder(chunks(writes, MAX_ROWS_PER_TRANSACTION), async (group) => {
+  await runInOrder(chunks(writes, receipt.maxRowsPerTransaction), async (group) => {
     const stamp: WriteStamp = {
       runId: receipt.runId,
       at: mysqlUtcDateTime(new Date()),
       tx: randomUUID(),
     };
+    const started = performance.now();
     await db.beginTransaction();
     try {
       await writeInserts(
@@ -746,6 +809,12 @@ async function writePlannedRows(
       );
       const written = await countStampedRows(db, group, stamp);
       await db.commit();
+      const elapsedMs = Math.round(performance.now() - started);
+      receipt.timings.writeMs += elapsedMs;
+      if (elapsedMs >= receipt.timings.slowestTransactionMs) {
+        receipt.timings.slowestTransactionMs = elapsedMs;
+        receipt.timings.slowestTransactionRows = group.length;
+      }
       receipt.transactions += 1;
       receipt.rows.inserted += written.inserted;
       receipt.rows.updated += written.updated;
@@ -768,7 +837,7 @@ export async function importProgressBatch(input: {
   users: readonly RailsUserProgress[];
   catalog: CbContentCatalog;
   receipt: ProgressImportReceipt;
-  unmappedLessons: UnmappedLessonTally;
+  unmapped: UnmappedContentTally;
   apply: boolean;
   now: Date;
   emailOwners?: ReadonlyMap<string, number>;
@@ -813,7 +882,7 @@ export async function importProgressBatch(input: {
         cbUserId: match.cbUserId,
         catalog,
         receipt,
-        unmappedLessons: input.unmappedLessons,
+        unmapped: input.unmapped,
         fallbackCompletedAt: input.now,
       }),
     );
@@ -885,9 +954,13 @@ export async function runProgressImport(input: {
   afterRailsUserId?: number;
   batchSize?: number;
   maxUsers?: number;
+  /** Write cap per transaction; defaults to `MAX_ROWS_PER_TRANSACTION`. */
+  maxRowsPerTransaction?: number;
   catalog?: CbContentCatalog;
   now?: Date;
   runId?: string;
+  /** Collects every unmapped Rails lesson and series; pass one in to read the full lists. */
+  unmapped?: UnmappedContentTally;
   onBeforeWrite?: (input: { cbUserIds: string[]; runId: string }) => Promise<void> | void;
   onBatchCommitted?: (cursor: {
     lastRailsUserId: number;
@@ -895,7 +968,7 @@ export async function runProgressImport(input: {
   }) => Promise<void> | void;
 }): Promise<ProgressImportReceipt> {
   await assertUtcSession(input.db);
-  await assertProgressPrimaryKey(input.db);
+  await assertProgressUniqueKeys(input.db);
   const now = input.now ?? new Date();
   const afterRailsUserId = input.afterRailsUserId ?? 0;
   const batchSize = Math.max(1, input.batchSize ?? DEFAULT_PROGRESS_IMPORT_BATCH_SIZE);
@@ -907,10 +980,13 @@ export async function runProgressImport(input: {
     source: input.source.description,
     afterRailsUserId,
     ...(input.maxUsers === undefined ? {} : { maxUsers: input.maxUsers }),
+    ...(input.maxRowsPerTransaction === undefined
+      ? {}
+      : { maxRowsPerTransaction: Math.max(1, input.maxRowsPerTransaction) }),
     catalog,
     startedAt: now,
   });
-  const unmappedLessons = new UnmappedLessonTally();
+  const unmapped = input.unmapped ?? new UnmappedContentTally();
   let batch: RailsUserProgress[] = [];
   let usersRead = 0;
   let stoppedEarly = false;
@@ -922,7 +998,7 @@ export async function runProgressImport(input: {
       users: batch,
       catalog,
       receipt,
-      unmappedLessons,
+      unmapped,
       apply: input.apply,
       now,
       emailOwners,
@@ -946,7 +1022,7 @@ export async function runProgressImport(input: {
   }
   await flush();
 
-  unmappedLessons.applyTo(receipt);
+  unmapped.applyTo(receipt);
   receipt.fullSource = afterRailsUserId === 0 && !stoppedEarly && input.maxUsers === undefined;
   receipt.finishedAt = new Date().toISOString();
   return receipt;
@@ -982,7 +1058,7 @@ export async function importProgressForUser(
   },
 ): Promise<UserProgressImportResult> {
   await assertUtcSession(options.db);
-  await assertProgressPrimaryKey(options.db);
+  await assertProgressUniqueKeys(options.db);
   const [userRows] = await options.db.execute<CbUserRow[]>(
     `
       SELECT id, email, legacyRailsUserId
@@ -1011,21 +1087,21 @@ export async function importProgressForUser(
     catalog,
     startedAt: now,
   });
-  const unmappedLessons = new UnmappedLessonTally();
+  const unmapped = new UnmappedContentTally();
 
   await importProgressBatch({
     db: options.db,
     users: [railsUser],
     catalog,
     receipt,
-    unmappedLessons,
+    unmapped,
     apply: options.apply,
     now,
     emailOwners: await options.source.emailOwners(),
     restrictToCbUserId: user.id,
   });
 
-  unmappedLessons.applyTo(receipt);
+  unmapped.applyTo(receipt);
   receipt.finishedAt = new Date().toISOString();
 
   const matched = receipt.users.matchedByLegacyRailsUserId + receipt.users.matchedByEmail > 0;

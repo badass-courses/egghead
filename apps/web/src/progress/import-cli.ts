@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 
 /**
@@ -32,25 +32,71 @@ export const rollbackCursorSchema = z.object({
 export type RollbackCursor = z.infer<typeof rollbackCursorSchema>;
 
 /**
- * Which database a receipt was made against: the runtime and a hash of the
- * host and database name, so a receipt never carries the host itself.
+ * The database a connection reaches. The user and port are part of it: on
+ * PlanetScale every branch of a database shares one host and database name,
+ * and the branch-specific credentials pick the branch.
+ */
+export type ProgressImportIdentity = {
+  runtime: string;
+  host: string;
+  port: number;
+  user: string;
+  database: string;
+};
+
+/**
+ * Which database a receipt was made against: the runtime, plus a hash of the
+ * full identity with a random per-receipt salt. The receipt never carries the
+ * host or user, and the salt stops a list of likely hosts from reversing the
+ * hash.
  */
 export const progressImportTargetSchema = z.object({
   runtime: z.string(),
-  hostHash: z.string(),
+  salt: z.string().regex(/^[0-9a-f]{32}$/),
+  identityHash: z.string().regex(/^[0-9a-f]{64}$/),
 });
 export type ProgressImportTarget = z.infer<typeof progressImportTargetSchema>;
 
-export function progressImportTarget(input: {
-  runtime: string;
-  host: string;
-  database: string;
-}): ProgressImportTarget {
-  const hostHash = createHash("sha256")
-    .update(`${input.host.toLowerCase()}/${input.database}`)
-    .digest("hex")
-    .slice(0, 16);
-  return { runtime: input.runtime, hostHash };
+function identityHash(identity: ProgressImportIdentity, salt: string) {
+  return createHash("sha256")
+    .update(
+      [
+        salt,
+        identity.runtime,
+        identity.host.toLowerCase(),
+        String(identity.port),
+        identity.user,
+        identity.database,
+      ].join("\u0000"),
+    )
+    .digest("hex");
+}
+
+export function progressImportTarget(
+  identity: ProgressImportIdentity,
+  salt = randomBytes(16).toString("hex"),
+): ProgressImportTarget {
+  return { runtime: identity.runtime, salt, identityHash: identityHash(identity, salt) };
+}
+
+export function targetMatches(target: ProgressImportTarget, identity: ProgressImportIdentity) {
+  return (
+    target.runtime === identity.runtime &&
+    target.identityHash === identityHash(identity, target.salt)
+  );
+}
+
+/** What the import CLI writes as its receipt and prints: the dry run's proof for `--apply`. */
+export function importOutput<Receipt>(input: {
+  identity: ProgressImportIdentity;
+  sourceSha256: string;
+  receipt: Receipt;
+}) {
+  return {
+    target: progressImportTarget(input.identity),
+    sourceSha256: input.sourceSha256,
+    receipt: input.receipt,
+  };
 }
 
 function parseJson(text: string, what: string): unknown {
@@ -153,20 +199,17 @@ const dryRunReceiptSchema = z.object({
 export function assertDryRunReceiptMatches(
   text: string,
   sourceSha256: string,
-  target: ProgressImportTarget,
+  identity: ProgressImportIdentity,
 ) {
   const parsed = dryRunReceiptSchema.safeParse(parseJson(text, "Dry-run receipt"));
   if (!parsed.success) {
     throw new Error(
-      "The --expect-dry-run receipt is not a finished full-file dry run (mode dry_run, fullSource true, with a target). Run the dry run over the whole file first.",
+      "The --expect-dry-run receipt is not a finished full-file dry run (mode dry_run, fullSource true, with a salted target). Receipts from before the salted target are refused. Run the dry run over the whole file first.",
     );
   }
-  if (
-    parsed.data.target.runtime !== target.runtime ||
-    parsed.data.target.hostHash !== target.hostHash
-  ) {
+  if (!targetMatches(parsed.data.target, identity)) {
     throw new Error(
-      `The --expect-dry-run receipt was made against another database (${parsed.data.target.runtime} ${parsed.data.target.hostHash}), not this one (${target.runtime} ${target.hostHash}). Dry-run this target first.`,
+      `The --expect-dry-run receipt was made against another database or branch (runtime ${parsed.data.target.runtime}), not this connection (runtime ${identity.runtime}, same host, port, user and database required). Dry-run this target first.`,
     );
   }
   if (parsed.data.sourceSha256 !== sourceSha256) {
