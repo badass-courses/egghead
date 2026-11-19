@@ -6,6 +6,7 @@ import {
   getDatabaseUrl,
   mysqlConnectionOptionsFromUrl,
 } from "../db/local-docker";
+import { progressImportTarget } from "./import-cli";
 
 export const PROGRESS_IMPORT_APPLY_APPROVAL_ENV = "EGGHEAD_PROGRESS_IMPORT_APPLY_APPROVED";
 
@@ -59,8 +60,5 @@ export async function openProgressImportDatabase(input: { apply: boolean; rawUrl
   });
 
   const db = await openUtcConnection(mysqlConnectionOptionsFromUrl(rawUrl));
-  return {
-    db,
-    target: { runtime: safety.runtime, host: safety.host, database: safety.database },
-  };
+  return { db, target: progressImportTarget(safety) };
 }

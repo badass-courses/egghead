@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { RowDataPacket } from "mysql2";
 import mysql from "mysql2/promise";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -22,7 +24,15 @@ import {
   PROGRESS_IMPORT_SOURCE,
   runProgressImport,
 } from "./import";
-import { assertDryRunReceiptMatches, manifestUserIds, parseImportCursor } from "./import-cli";
+import {
+  assertDryRunReceiptMatches,
+  assertRollbackCursorFits,
+  manifestUserIds,
+  parseImportCursor,
+  parseRollbackCursor,
+  progressImportTarget,
+  resolveImportStart,
+} from "./import-cli";
 import { assertProgressImportAccess, openUtcConnection } from "./import-db";
 import { rollbackProgressImport } from "./import-rollback";
 import {
@@ -55,6 +65,163 @@ import {
  */
 const testDatabaseUrl = process.env["PROGRESS_IMPORT_TEST_DATABASE_URL"];
 if (testDatabaseUrl) process.env["DATABASE_URL"] = testDatabaseUrl;
+
+/**
+ * The export case also needs a throwaway local Postgres database ending in
+ * `_test` and a `psql` client (`PROGRESS_EXPORT_TEST_PSQL`, default `psql`):
+ *
+ *   PROGRESS_EXPORT_TEST_PG_URL='postgresql://postgres@localhost/rails_export_test' \
+ *
+ * It drops and recreates a synthetic subset of the Rails tables there, runs
+ * the real export and counts files through psql, and imports the output.
+ */
+const exportTestPgUrl = testDatabaseUrl ? process.env["PROGRESS_EXPORT_TEST_PG_URL"] : undefined;
+const psqlBinary = process.env["PROGRESS_EXPORT_TEST_PSQL"] ?? "psql";
+const EXPORT_SQL = fileURLToPath(
+  new URL("../../../../scripts/sql/rails-progress-export.sql", import.meta.url),
+);
+const COUNTS_SQL = fileURLToPath(
+  new URL("../../../../scripts/sql/rails-progress-export-counts.sql", import.meta.url),
+);
+
+function assertLocalPgTestUrl(rawUrl: string) {
+  const url = new URL(rawUrl);
+  const database = url.pathname.replace(/^\//, "");
+  const socket = url.searchParams.get("host");
+  const local =
+    ["127.0.0.1", "localhost", "::1", ""].includes(url.hostname) &&
+    (socket === null || socket.startsWith("/"));
+  if (!local || !database.endsWith("_test")) {
+    throw new Error(
+      `PROGRESS_EXPORT_TEST_PG_URL must be a local database ending in _test, got host=${url.hostname} database=${database}`,
+    );
+  }
+  return rawUrl;
+}
+
+/** Runs psql as an operator would, with no psqlrc, and returns stdout. */
+function psql(url: string, args: readonly string[]) {
+  return execFileSync(psqlBinary, ["-X", url, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, PGTZ: "UTC" },
+  });
+}
+
+/**
+ * A synthetic slice of the Rails tables the export reads, with the column
+ * types from Rails' schema (datetimes are `timestamp without time zone`).
+ * Cutoff for the test: 2024-06-01.
+ */
+const RAILS_EXPORT_FIXTURE_SQL = `
+SET client_min_messages = warning;
+DROP TABLE IF EXISTS users, lessons, lesson_views, playlists, series, series_progresses;
+CREATE TABLE users (
+  id serial PRIMARY KEY,
+  email varchar NOT NULL DEFAULT '',
+  current_sign_in_at timestamp,
+  last_sign_in_at timestamp
+);
+CREATE TABLE lessons (id serial PRIMARY KEY, slug varchar, current_lesson_version_id integer);
+CREATE TABLE lesson_views (
+  id serial PRIMARY KEY,
+  user_id integer,
+  lesson_id integer,
+  lesson_version_id integer,
+  did_complete boolean DEFAULT false,
+  created_at timestamp,
+  updated_at timestamp
+);
+CREATE INDEX ON lesson_views (user_id);
+CREATE TABLE playlists (id serial PRIMARY KEY, slug varchar);
+CREATE TABLE series (id serial PRIMARY KEY, slug varchar);
+CREATE TABLE series_progresses (
+  id serial PRIMARY KEY,
+  user_id integer,
+  progressable_type varchar,
+  progressable_id integer,
+  series_id integer,
+  is_complete boolean DEFAULT false,
+  completed_at timestamp,
+  updated_at timestamp,
+  last_lesson_watched_at timestamp,
+  site text DEFAULT 'egghead.io'
+);
+
+INSERT INTO lessons VALUES (1, 'lesson-a', 11), (2, 'lesson-b', 21), (3, 'lesson-c', 31);
+INSERT INTO playlists VALUES (50, 'course-x');
+INSERT INTO series VALUES (70, 'course-z');
+
+INSERT INTO users (id, email, current_sign_in_at, last_sign_in_at) VALUES
+  (101, ' Alpha@Example.test ', '2024-09-01 10:00:00', NULL),  -- active by sign-in
+  (102, 'beta@example.test', NULL, '2023-01-01'),               -- active by a recent view
+  (103, 'gamma@example.test', '2023-01-01', '2023-01-01'),      -- inactive
+  (104, 'nobody@example.test', '2024-09-01', NULL),             -- active, nothing completed
+  (105, 'delta@example.test', NULL, NULL),                      -- active by series progress
+  (250, 'later@example.test', '2024-10-01', NULL);              -- a later chunk, no CB user
+
+INSERT INTO lesson_views (user_id, lesson_id, lesson_version_id, did_complete, created_at, updated_at) VALUES
+  (101, 1, 11, true, '2024-01-01 12:00:00', '2024-01-02 12:00:00'),
+  (101, 1, 11, true, '2024-01-03 12:00:00', NULL),             -- latest, by created_at
+  (101, 2, 20, true, '2024-01-04', '2024-01-04'),              -- superseded version
+  (101, 3, 31, false, '2024-01-05', '2024-01-05'),             -- not completed
+  (102, 2, 21, true, '2024-07-01 08:30:00.123', '2024-07-01 08:30:00.123'),
+  (103, 1, 11, true, '2023-01-01', '2023-01-01'),              -- inactive user
+  (NULL, 1, 11, true, '2024-09-01', '2024-09-01'),             -- no user
+  (250, 1, 11, true, '2024-10-01', '2024-10-01');
+
+INSERT INTO series_progresses
+  (user_id, progressable_type, progressable_id, series_id, is_complete, completed_at, updated_at, last_lesson_watched_at, site)
+VALUES
+  (105, 'Playlist', 50, NULL, true, '2024-08-01', '2024-08-02', NULL, 'egghead.io'),
+  (105, 'Series', 70, NULL, true, NULL, '2024-08-03', '2024-08-03', 'egghead.io'),  -- completed_at from updated_at
+  (105, 'Playlist', 51, NULL, false, NULL, '2024-08-04', NULL, 'egghead.io'),       -- not complete
+  (105, 'Playlist', 52, NULL, true, '2024-08-05', '2024-08-05', NULL, 'other.site'), -- another site
+  (105, 'Course', 9, NULL, true, '2024-08-06', '2024-08-06', NULL, NULL);           -- neither playlist nor series
+`;
+
+const EXPECTED_EXPORT = [
+  {
+    railsUserId: 101,
+    email: "alpha@example.test",
+    lastActiveAt: "2024-09-01T10:00:00.000Z",
+    lessons: [{ railsLessonId: 1, slug: "lesson-a", completedAt: "2024-01-03T12:00:00.000Z" }],
+    series: [],
+  },
+  {
+    railsUserId: 102,
+    email: "beta@example.test",
+    lastActiveAt: "2024-07-01T08:30:00.123Z",
+    lessons: [{ railsLessonId: 2, slug: "lesson-b", completedAt: "2024-07-01T08:30:00.123Z" }],
+    series: [],
+  },
+  {
+    railsUserId: 105,
+    email: "delta@example.test",
+    lastActiveAt: "2024-08-06T00:00:00.000Z",
+    lessons: [],
+    series: [
+      {
+        railsPlaylistId: 50,
+        railsSeriesId: null,
+        slug: "course-x",
+        completedAt: "2024-08-01T00:00:00.000Z",
+      },
+      {
+        railsPlaylistId: null,
+        railsSeriesId: 70,
+        slug: "course-z",
+        completedAt: "2024-08-03T00:00:00.000Z",
+      },
+    ],
+  },
+  {
+    railsUserId: 250,
+    email: "later@example.test",
+    lastActiveAt: "2024-10-01T00:00:00.000Z",
+    lessons: [{ railsLessonId: 1, slug: "lesson-a", completedAt: "2024-10-01T00:00:00.000Z" }],
+    series: [],
+  },
+];
 
 const RAILS_DAY = (day: number) => new Date(Date.UTC(2024, 0, day, 12, 0, 0));
 const CB_NEWER = new Date(Date.UTC(2026, 5, 1, 12, 0, 0));
@@ -260,6 +427,12 @@ async function seedFixture(db: mysql.Connection) {
     ],
     // No Rails id: reachable only by slug.
     ["lesson_c", "lesson", { title: "C", slug: "lesson-c", state: "published" }],
+    // A post-type course with no Rails playlist id: reachable only by slug.
+    [
+      "course_z",
+      "post",
+      { title: "Course Z", slug: "course-z", postType: "course", state: "published" },
+    ],
   ];
   await Promise.all(
     resources.map(([id, type, fields]) =>
@@ -949,22 +1122,286 @@ describe.skipIf(!testDatabaseUrl)("progress import against local MySQL", () => {
 
   it("refuses a session that is not UTC", async () => {
     const options = assertLocalTestDatabase(testDatabaseUrl ?? "");
-    const offset = await mysql.createConnection(options);
+    const before = await snapshot(db);
+    // A non-UTC server session, and separately a UTC server session read by a
+    // client that formats Dates in another zone.
+    const offsetServer = await mysql.createConnection({ ...options, timezone: "Z" });
+    const offsetClient = await mysql.createConnection({ ...options, timezone: "+05:00" });
     try {
-      await offset.query("SET time_zone = '+05:00'");
+      await offsetServer.query("SET time_zone = '+05:00'");
+      await offsetClient.query("SET time_zone = '+00:00'");
+      await [offsetServer, offsetClient].reduce<Promise<void>>(async (previous, offset) => {
+        await previous;
+        await expect(
+          runProgressImport({
+            db: offset,
+            source: memoryRailsProgressSource(bulkUsers),
+            apply: true,
+          }),
+        ).rejects.toThrow("UTC session");
+        await expect(
+          importProgressForUser("cb_delta", {
+            db: offset,
+            source: memoryRailsProgressSource(allUsers),
+            apply: true,
+          }),
+        ).rejects.toThrow("UTC session");
+        await expect(
+          rollbackProgressImport({ db: offset, runId: "any", apply: true }),
+        ).rejects.toThrow("UTC session");
+      }, Promise.resolve());
+    } finally {
+      await offsetServer.end();
+      await offsetClient.end();
+    }
+    expect(await snapshot(db)).toEqual(before);
+  });
+
+  it("relies on the (userId, resourceId) primary key and refuses a table without it", async () => {
+    const [keys] = await db.query<Array<RowDataPacket & { columnName: string }>>(`
+      SELECT COLUMN_NAME AS columnName FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'egghead_ResourceProgress'
+        AND INDEX_NAME = 'PRIMARY'
+      ORDER BY SEQ_IN_INDEX
+    `);
+    expect(keys.map((key) => key.columnName)).toEqual(["userId", "resourceId"]);
+
+    const before = await snapshot(db);
+    await db.query("ALTER TABLE egghead_ResourceProgress DROP PRIMARY KEY");
+    try {
+      await expect(
+        runProgressImport({ db, source: memoryRailsProgressSource(bulkUsers), apply: true }),
+      ).rejects.toThrow("not (userId, resourceId)");
       await expect(
         importProgressForUser("cb_delta", {
-          db: offset,
+          db,
           source: memoryRailsProgressSource(allUsers),
           apply: true,
         }),
-      ).rejects.toThrow("UTC session");
-      await expect(
-        rollbackProgressImport({ db: offset, runId: "any", apply: true }),
-      ).rejects.toThrow("UTC session");
+      ).rejects.toThrow("not (userId, resourceId)");
     } finally {
-      await offset.end();
+      await db.query("ALTER TABLE egghead_ResourceProgress ADD PRIMARY KEY (userId, resourceId)");
     }
+    expect(await snapshot(db)).toEqual(before);
+  });
+
+  it("skips and counts every planned row a learner changed before the write", async () => {
+    // Planned: insert alpha/lesson_a; update alpha/course_x, alpha/lesson_c and
+    // beta/lesson_b. Between planning and the write, each loses a race that
+    // only one guard catches.
+    let raced = false;
+    const receipt = await runProgressImport({
+      db,
+      source: memoryRailsProgressSource(bulkUsers),
+      apply: true,
+      runId: "run-race",
+      onBeforeWrite: async () => {
+        if (raced) return;
+        raced = true;
+        // The row now exists: the duplicate-key no-op.
+        await completeResourceForUser({
+          userId: "cb_alpha",
+          resourceId: "lesson_a",
+          source: "lesson_player_ended",
+        });
+        // A newer learner un-complete: only updatedAt moves.
+        await uncompleteResourceForUser({
+          userId: "cb_beta",
+          resourceId: "lesson_b",
+          source: "lesson_progress_control",
+        });
+        // Completed with updatedAt untouched: only completedAt differs.
+        await db.execute(
+          "UPDATE egghead_ResourceProgress SET completedAt = ? WHERE userId = 'cb_alpha' AND resourceId = 'course_x'",
+          [CB_NEWER],
+        );
+        // fields became a JSON array, updatedAt and completedAt untouched.
+        await db.execute(
+          "UPDATE egghead_ResourceProgress SET fields = JSON_ARRAY(1) WHERE userId = 'cb_alpha' AND resourceId = 'lesson_c'",
+        );
+      },
+    });
+    const keys: Array<[string, string]> = [
+      ["cb_alpha", "lesson_a"],
+      ["cb_alpha", "course_x"],
+      ["cb_alpha", "lesson_c"],
+      ["cb_beta", "lesson_b"],
+    ];
+    const learnerState = only(await snapshot(db), keys);
+
+    expect(receipt.rows).toMatchObject({
+      toInsert: 1,
+      toUpdate: 3,
+      inserted: 0,
+      updated: 0,
+      raceSkipped: 4,
+    });
+    expect(learnerState.map((row) => row.fields?.includes("railsImport") ?? false)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(
+      (await progressRows(db)).filter((row) =>
+        keys.some(([userId, resourceId]) => row.userId === userId && row.resourceId === resourceId),
+      ),
+    ).toEqual([
+      {
+        userId: "cb_alpha",
+        resourceId: "course_x",
+        completedAt: CB_NEWER.toISOString(),
+        source: "course_lessons_incomplete",
+      },
+      {
+        userId: "cb_alpha",
+        resourceId: "lesson_a",
+        completedAt: expect.any(String),
+        source: "lesson_player_ended",
+      },
+      { userId: "cb_alpha", resourceId: "lesson_c", completedAt: null, source: null },
+      {
+        userId: "cb_beta",
+        resourceId: "lesson_b",
+        completedAt: null,
+        source: "lesson_progress_control",
+      },
+    ]);
+
+    // Nothing carries the run's stamp, so its rollback has nothing to do.
+    const rollback = await rollbackProgressImport({ db, runId: "run-race", apply: true });
+    expect(rollback).toMatchObject({ insertedRows: 0, updatedRows: 0, deleted: 0, restored: 0 });
+    expect(only(await snapshot(db), keys)).toEqual(learnerState);
+  });
+
+  it("maps a Rails series to a CB course by slug only when no course has its playlist id", async () => {
+    const seriesOnly = railsUser(
+      105,
+      "delta@example.test",
+      [],
+      [
+        // Playlist id unknown to CB: falls back to the slug.
+        { railsPlaylistId: 53, railsSeriesId: null, slug: "course-z", completedAt: RAILS_DAY(3) },
+        // A Rails Series row has no playlist id at all.
+        { railsPlaylistId: null, railsSeriesId: 70, slug: " Course-Z ", completedAt: RAILS_DAY(4) },
+        // course-x carries Rails playlist 50, so playlist 54 never claims it by slug.
+        { railsPlaylistId: 54, railsSeriesId: null, slug: "course-x", completedAt: RAILS_DAY(5) },
+      ],
+    );
+    const receipt = await runProgressImport({
+      db,
+      source: memoryRailsProgressSource([seriesOnly]),
+      apply: true,
+    });
+
+    expect(receipt.series).toMatchObject({
+      seen: 3,
+      mappedByRailsPlaylistId: 0,
+      mappedBySlug: 2,
+      unmapped: 1,
+    });
+    expect(receipt.rows).toMatchObject({ collapsedDuplicates: 1, inserted: 1 });
+    expect((await progressRows(db)).filter((row) => row.userId === "cb_delta")).toEqual([
+      {
+        userId: "cb_delta",
+        resourceId: "course_z",
+        completedAt: RAILS_DAY(4).toISOString(),
+        source: imported,
+      },
+    ]);
+    expect(
+      await readResourceProgress({ userId: "cb_delta", resourceId: "course_z" }),
+    ).toMatchObject({ exists: true, completed: true });
+  });
+
+  describe.skipIf(!exportTestPgUrl)("Rails export SQL under psql", () => {
+    it("exports, chunks and counts the same rows, and imports them end to end", async () => {
+      const pgUrl = assertLocalPgTestUrl(exportTestPgUrl ?? "");
+      const dir = mkdtempSync(join(tmpdir(), "progress-export-"));
+      exportDirs.push(dir);
+      const fixturePath = join(dir, "rails-fixture.sql");
+      writeFileSync(fixturePath, RAILS_EXPORT_FIXTURE_SQL);
+      psql(pgUrl, ["-v", "ON_ERROR_STOP=1", "-q", "-f", fixturePath]);
+
+      const since = ["-v", "active_since=2024-06-01"];
+      const whole = psql(pgUrl, [...since, "-f", EXPORT_SQL]);
+      const chunked = [0, 100, 200]
+        .map((start) =>
+          psql(pgUrl, [
+            ...since,
+            "-v",
+            `after_user_id=${start}`,
+            "-v",
+            `through_user_id=${start + 100}`,
+            "-f",
+            EXPORT_SQL,
+          ]),
+        )
+        .join("");
+
+      // Only JSON lines: no psql chatter, BEGIN or ROLLBACK.
+      const lines = whole.split("\n").filter((line) => line.length > 0);
+      expect(chunked).toBe(whole);
+      expect(lines.map((line) => JSON.parse(line))).toEqual(EXPECTED_EXPORT);
+
+      const counts: unknown = JSON.parse(psql(pgUrl, [...since, "-f", COUNTS_SQL]));
+      expect(counts).toMatchObject({
+        cutoff: "2024-06-01T00:00:00.000Z",
+        active_users: 5,
+        exported_users: lines.length,
+        lesson_completion_rows: EXPECTED_EXPORT.flatMap((user) => user.lessons).length,
+        series_completion_rows: EXPECTED_EXPORT.flatMap((user) => user.series).length,
+        playlist_completion_rows: 1,
+        distinct_lessons: 2,
+      });
+
+      const exportPath = join(dir, "rails-progress.jsonl");
+      writeFileSync(exportPath, chunked);
+      const receipt = await runProgressImport({
+        db,
+        source: jsonlRailsProgressSource(exportPath),
+        apply: true,
+      });
+      expect(receipt).toMatchObject({ fullSource: true });
+      expect(receipt.users).toMatchObject({
+        seen: 4,
+        matchedByLegacyRailsUserId: 2,
+        matchedByEmail: 1,
+        unmatchedNoCbUser: 1,
+      });
+      expect(receipt.series).toMatchObject({ mappedByRailsPlaylistId: 1, mappedBySlug: 1 });
+      expect(receipt.rows).toMatchObject({ inserted: 3, updated: 1, raceSkipped: 0 });
+      const written = (await progressRows(db)).filter(
+        (row) =>
+          row.source === imported || (row.userId === "cb_beta" && row.resourceId === "lesson_b"),
+      );
+      expect(written).toEqual([
+        {
+          userId: "cb_alpha",
+          resourceId: "lesson_a",
+          completedAt: "2024-01-03T12:00:00.000Z",
+          source: imported,
+        },
+        {
+          userId: "cb_beta",
+          resourceId: "lesson_b",
+          completedAt: "2024-07-01T08:30:00.123Z",
+          source: "lesson_progress_control",
+        },
+        {
+          userId: "cb_delta",
+          resourceId: "course_x",
+          completedAt: "2024-08-01T00:00:00.000Z",
+          source: imported,
+        },
+        {
+          userId: "cb_delta",
+          resourceId: "course_z",
+          completedAt: "2024-08-03T00:00:00.000Z",
+          source: imported,
+        },
+      ]);
+    });
   });
 
   it("dry-run on-demand import plans without writing", async () => {
@@ -1042,9 +1479,15 @@ describe("write rules and guards", () => {
 
 describe("CLI files", () => {
   const sha = "a".repeat(64);
-  const dryRun = (overrides: Record<string, unknown>) =>
+  const betaTarget = progressImportTarget({
+    runtime: "beta",
+    host: "beta.example.test",
+    database: "egghead",
+  });
+  const dryRun = (overrides: Record<string, unknown>, target: unknown = betaTarget) =>
     JSON.stringify({
       sourceSha256: sha,
+      target,
       receipt: {
         mode: "dry_run",
         fullSource: true,
@@ -1054,15 +1497,93 @@ describe("CLI files", () => {
     });
 
   it("only accepts a finished full-file dry run of the same export for --apply", () => {
-    expect(() => assertDryRunReceiptMatches(dryRun({}), sha)).not.toThrow();
-    expect(() => assertDryRunReceiptMatches(dryRun({}), "b".repeat(64))).toThrow(
+    expect(() => assertDryRunReceiptMatches(dryRun({}), sha, betaTarget)).not.toThrow();
+    expect(() => assertDryRunReceiptMatches(dryRun({}), "b".repeat(64), betaTarget)).toThrow(
       "different export",
     );
-    expect(() => assertDryRunReceiptMatches(dryRun({ fullSource: false }), sha)).toThrow(
+    expect(() =>
+      assertDryRunReceiptMatches(dryRun({ fullSource: false }), sha, betaTarget),
+    ).toThrow("full-file");
+    expect(() => assertDryRunReceiptMatches(dryRun({ mode: "apply" }), sha, betaTarget)).toThrow(
       "full-file",
     );
-    expect(() => assertDryRunReceiptMatches(dryRun({ mode: "apply" }), sha)).toThrow("full-file");
-    expect(() => assertDryRunReceiptMatches("{nope", sha)).toThrow("not valid JSON");
+    expect(() => assertDryRunReceiptMatches("{nope", sha, betaTarget)).toThrow("not valid JSON");
+  });
+
+  it("refuses a dry-run receipt from another database, or one without a target", () => {
+    const local = progressImportTarget({
+      runtime: "local",
+      host: "127.0.0.1",
+      database: "egghead_test",
+    });
+    const otherBeta = progressImportTarget({
+      runtime: "beta",
+      host: "beta.example.test",
+      database: "egghead_branch",
+    });
+    expect(otherBeta.hostHash).not.toBe(betaTarget.hostHash);
+    expect(JSON.stringify(betaTarget)).not.toContain("example.test");
+    expect(() => assertDryRunReceiptMatches(dryRun({}, local), sha, betaTarget)).toThrow(
+      "another database",
+    );
+    expect(() => assertDryRunReceiptMatches(dryRun({}, otherBeta), sha, betaTarget)).toThrow(
+      "another database",
+    );
+    expect(() => assertDryRunReceiptMatches(dryRun({}, null), sha, betaTarget)).toThrow(
+      "with a target",
+    );
+  });
+
+  it("resumes an import only from a cursor for this export, and never with --after", () => {
+    const cursor = {
+      runId: "run-1",
+      lastRailsUserId: 7,
+      source: "jsonl:x",
+      sourceSha256: sha,
+      updatedAt: "2026-11-18T00:00:00Z",
+    };
+    expect(
+      resolveImportStart({ cursorGiven: true, cursor, after: undefined, sourceSha256: sha }),
+    ).toEqual({ runId: "run-1", afterRailsUserId: 7 });
+    expect(
+      resolveImportStart({ cursorGiven: true, cursor: null, after: undefined, sourceSha256: sha }),
+    ).toEqual({ runId: null, afterRailsUserId: 0 });
+    expect(
+      resolveImportStart({ cursorGiven: false, cursor: null, after: 40, sourceSha256: sha }),
+    ).toEqual({ runId: null, afterRailsUserId: 40 });
+    expect(() =>
+      resolveImportStart({ cursorGiven: true, cursor, after: undefined, sourceSha256: "b" }),
+    ).toThrow("different export");
+    expect(() =>
+      resolveImportStart({ cursorGiven: true, cursor: null, after: 3, sourceSha256: sha }),
+    ).toThrow("not both");
+  });
+
+  it("resumes a rollback only for its own run and mode", () => {
+    const cursor = parseRollbackCursor(
+      JSON.stringify({
+        runId: "run-1",
+        scope: "manifest",
+        lastUserId: "u2",
+        updatedAt: "2026-11-18T00:00:00Z",
+      }),
+    );
+    expect(() =>
+      assertRollbackCursorFits(cursor, { runId: "run-1", scope: "manifest" }),
+    ).not.toThrow();
+    expect(() => assertRollbackCursorFits(cursor, { runId: "run-2", scope: "manifest" })).toThrow(
+      "belongs to run run-1",
+    );
+    expect(() => assertRollbackCursorFits(cursor, { runId: "run-1", scope: "table_scan" })).toThrow(
+      "user orders differ",
+    );
+    // A cursor without its scope is refused rather than guessed.
+    expect(() =>
+      parseRollbackCursor(
+        JSON.stringify({ runId: "run-1", lastUserId: "u2", updatedAt: "2026-11-18T00:00:00Z" }),
+      ),
+    ).toThrow("not a progress rollback cursor");
+    expect(() => parseRollbackCursor("{")).toThrow("not valid JSON");
   });
 
   it("keeps the runId in the cursor and reads a run's manifest", () => {

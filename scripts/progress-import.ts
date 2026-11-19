@@ -5,8 +5,8 @@
  *
  *      pnpm progress:import --source rails-progress.jsonl --receipt dry-run.json
  *
- * 2. Apply. Needs that full-file dry-run receipt for the same file and a cursor
- *    file. The runId is printed to stderr at start and saved in the cursor; a
+ * 2. Apply. Needs that full-file dry-run receipt for the same file and the
+ *    same database (the receipt records its target), and a cursor file. The runId is printed to stderr at start and saved in the cursor; a
  *    resume with the same cursor reuses it, so one import has one runId. Before
  *    each write the CB user ids go to the manifest (`<cursor>.manifest.jsonl`),
  *    which `pnpm progress:import:rollback` uses to undo the run.
@@ -35,6 +35,7 @@ import {
   assertDryRunReceiptMatches,
   type ImportCursor,
   parseImportCursor,
+  resolveImportStart,
 } from "../apps/web/src/progress/import-cli";
 import { openProgressImportDatabase } from "../apps/web/src/progress/import-db";
 import { jsonlRailsProgressSource } from "../apps/web/src/progress/import-source";
@@ -78,22 +79,18 @@ async function main() {
 
   if (!values.source) throw new Error("--source <rails-progress.jsonl> is required");
   if (!existsSync(values.source)) throw new Error(`--source file not found: ${values.source}`);
-  if (values.cursor && values.after !== undefined) {
-    throw new Error(
-      "Use --cursor or --after, not both: the cursor already records where to resume.",
-    );
-  }
+  const after = nonNegativeIntegerOption("after", values.after);
 
   const source = jsonlRailsProgressSource(values.source);
   const sourceSha256 = await sha256File(values.source);
+  const expectDryRun = values["expect-dry-run"];
 
   if (values.apply) {
-    if (!values["expect-dry-run"]) {
+    if (!expectDryRun) {
       throw new Error(
         "--apply needs --expect-dry-run <receipt> from a finished dry run over this whole file.",
       );
     }
-    assertDryRunReceiptMatches(readFileSync(values["expect-dry-run"], "utf8"), sourceSha256);
     if (!values.user && !values.cursor) {
       throw new Error(
         "--apply needs --cursor <file> so the runId and resume point survive a crash.",
@@ -104,6 +101,11 @@ async function main() {
   const { db, target } = await openProgressImportDatabase({ apply: values.apply });
 
   try {
+    // Checked before any write: the receipt must be for this file and this database.
+    if (values.apply && expectDryRun) {
+      assertDryRunReceiptMatches(readFileSync(expectDryRun, "utf8"), sourceSha256, target);
+    }
+
     if (values.user) {
       const runId = newProgressImportRunId();
       console.error(`progress import runId ${runId}`);
@@ -123,15 +125,14 @@ async function main() {
       values.cursor && existsSync(values.cursor)
         ? parseImportCursor(readFileSync(values.cursor, "utf8"), `Cursor file ${values.cursor}`)
         : null;
-    if (cursor && cursor.sourceSha256 !== sourceSha256) {
-      throw new Error(
-        `Cursor ${values.cursor} belongs to a different export (sha256 ${cursor.sourceSha256.slice(0, 12)}…, this file ${sourceSha256.slice(0, 12)}…). Use a new cursor file per export.`,
-      );
-    }
-
-    const runId = cursor?.runId ?? newProgressImportRunId();
-    const afterRailsUserId =
-      nonNegativeIntegerOption("after", values.after) ?? cursor?.lastRailsUserId ?? 0;
+    const start = resolveImportStart({
+      cursorGiven: values.cursor !== undefined,
+      cursor,
+      after,
+      sourceSha256,
+    });
+    const runId = start.runId ?? newProgressImportRunId();
+    const { afterRailsUserId } = start;
     const maxUsers = nonNegativeIntegerOption("max-users", values["max-users"]);
     const manifestPath =
       values.manifest ?? (values.cursor ? `${values.cursor}.manifest.jsonl` : undefined);

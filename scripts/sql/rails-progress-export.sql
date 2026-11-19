@@ -3,7 +3,7 @@
 -- READ ONLY. Runs inside a READ ONLY transaction and writes nothing to Rails.
 -- Prefer a read replica. On a primary, use the chunked form below.
 --
---   psql "$RAILS_READONLY_DATABASE_URL" \
+--   psql -X "$RAILS_READONLY_DATABASE_URL" \
 --     -v active_window='24 months' \
 --     -f scripts/sql/rails-progress-export.sql \
 --     -o rails-progress.jsonl
@@ -22,15 +22,17 @@
 -- them in ascending order.
 -- Each chunk filters lesson_views by user_id, which is indexed:
 --
---   max=$(psql "$URL" -Atc 'select max(id) from users')
+--   max=$(psql -X "$URL" -Atc 'select max(id) from users')
 --   for start in $(seq 0 100000 "$max"); do
---     psql "$URL" -v active_since='2024-11-18' \
+--     psql -X "$URL" -v active_since='2024-11-18' \
 --       -v after_user_id=$start -v through_user_id=$((start + 100000)) \
 --       -f scripts/sql/rails-progress-export.sql >> rails-progress.jsonl
 --   done
 --
 -- Chunks must be appended in ascending order: the importer refuses an
--- unsorted file. Pass the same -v active_since='YYYY-MM-DD' to every chunk so
+-- unsorted file. -X skips ~/.psqlrc, whose settings (\timing, for one) would
+-- add lines the importer refuses. The counts file takes the same parameters
+-- and reports how many lines and entries to expect. Pass the same -v active_since='YYYY-MM-DD' to every chunk so
 -- they share one cutoff instead of each computing its own from now().
 --
 -- Output: JSONL, one line per active user with at least one completion, ordered
