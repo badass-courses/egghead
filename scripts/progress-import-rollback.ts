@@ -6,7 +6,8 @@
  *
  * The runId is printed at import start and saved in the import cursor. With
  * `--manifest` only the CB users the run wrote are touched; without it the
- * rollback walks the table by `userId`. `--cursor` makes an apply resumable.
+ * rollback walks the table by `userId`. `--cursor` makes an apply resumable;
+ * a cursor resumes only the same run and the same mode (manifest or walk).
  * Rows CB changed after the import are left alone (`changedSinceImport`).
  * Same database guards as the import: beta writes need
  * EGGHEAD_PROGRESS_IMPORT_APPLY_APPROVED=true.
@@ -14,7 +15,12 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
-import { manifestUserIds, parseRollbackCursor } from "../apps/web/src/progress/import-cli";
+import {
+  assertRollbackCursorFits,
+  manifestUserIds,
+  parseRollbackCursor,
+  type RollbackCursor,
+} from "../apps/web/src/progress/import-cli";
 import { openProgressImportDatabase } from "../apps/web/src/progress/import-db";
 import { rollbackProgressImport } from "../apps/web/src/progress/import-rollback";
 
@@ -39,11 +45,8 @@ async function main() {
     values.cursor && existsSync(values.cursor)
       ? parseRollbackCursor(readFileSync(values.cursor, "utf8"), `Rollback cursor ${values.cursor}`)
       : null;
-  if (cursor && cursor.runId !== runId) {
-    throw new Error(
-      `Rollback cursor ${values.cursor} belongs to run ${cursor.runId}, not ${runId}.`,
-    );
-  }
+  const scope = userIds ? "manifest" : "table_scan";
+  if (cursor) assertRollbackCursorFits(cursor, { runId, scope });
   const batchUsers =
     values["batch-users"] === undefined ? undefined : Number(values["batch-users"]);
 
@@ -58,11 +61,13 @@ async function main() {
       ...(batchUsers === undefined ? {} : { batchUsers }),
       onBatch: ({ lastUserId, receipt: progress }) => {
         if (values.apply && values.cursor) {
-          writeFileSync(
-            values.cursor,
-            `${JSON.stringify({ runId, lastUserId, updatedAt: new Date().toISOString() })}\n`,
-            "utf8",
-          );
+          const next: RollbackCursor = {
+            runId,
+            scope,
+            lastUserId,
+            updatedAt: new Date().toISOString(),
+          };
+          writeFileSync(values.cursor, `${JSON.stringify(next)}\n`, "utf8");
         }
         console.error(
           `rollback ${runId} batch ${progress.batches}: deleted ${progress.deleted}, restored ${progress.restored}, changed ${progress.changedSinceImport}`,

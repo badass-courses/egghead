@@ -12,11 +12,8 @@ import {
 } from "react";
 
 import { CourseCompletionReview } from "./course-completion-review";
-import {
-  setLessonCompletion,
-  type LessonProgressSource,
-  type SetLessonCompletionResult,
-} from "./lesson-progress-action";
+import { setLessonCompletion, type SetLessonCompletionResult } from "./lesson-progress-action";
+import type { LessonProgressSource } from "./lesson-progress-sources";
 
 export type LessonProgressFeedback =
   | { status: "idle"; message: null }

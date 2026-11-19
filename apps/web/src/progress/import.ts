@@ -9,6 +9,7 @@ import {
   positiveInteger,
 } from "./import-catalog";
 import { normalizeEmail, type RailsProgressSource, type RailsUserProgress } from "./import-source";
+import { LESSON_PROGRESS_SOURCES } from "./lesson-progress-sources";
 
 /**
  * Rails → CourseBuilder progress import.
@@ -52,15 +53,13 @@ export type ProgressImportDb = Pick<
 
 /**
  * Sources `uncompleteResourceForUser` stamps when a learner un-completes a
- * lesson (`setLessonCompletion`). They are the only writers that leave a lesson
- * row with a null `completedAt`. `syncCourseProgressForUser` also nulls course
- * rows, as `course_lessons_incomplete`, but that is an automatic recount, not a
- * learner decision, so it does not outrank a Rails completion.
+ * lesson (`setLessonCompletion`), taken from the list that action validates
+ * against. They are the only writers that leave a lesson row with a null
+ * `completedAt`. `syncCourseProgressForUser` also nulls course rows, as
+ * `course_lessons_incomplete`, but that is an automatic recount, not a learner
+ * decision, so it does not outrank a Rails completion.
  */
-export const EXPLICIT_UNCOMPLETE_SOURCES: readonly string[] = [
-  "lesson_progress_control",
-  "lesson_player_ended",
-];
+export const EXPLICIT_UNCOMPLETE_SOURCES: readonly string[] = LESSON_PROGRESS_SOURCES;
 
 export function newProgressImportRunId(now = new Date()) {
   return `rails-import-${now.toISOString()}-${randomUUID().slice(0, 8)}`;
@@ -88,6 +87,32 @@ export async function assertUtcSession(db: Pick<Connection, "query">) {
   if (!serverUtc || !clientUtc) {
     throw new Error(
       `Progress import needs a UTC session (server offset ${String(row?.offsetSeconds)}s, client UTC ${String(clientUtc)}). Open it with openUtcConnection.`,
+    );
+  }
+}
+
+type KeyColumnRow = RowDataPacket & { columnName: string };
+
+/**
+ * The insert relies on `ON DUPLICATE KEY` to leave a row that appeared after
+ * planning alone. That only holds while the primary key is exactly
+ * `(userId, resourceId)`, as in the CourseBuilder drizzle schema. A target
+ * whose key differs (for example one that includes `organizationMembershipId`)
+ * could take a duplicate row instead, so the import refuses it.
+ */
+export async function assertProgressPrimaryKey(db: Pick<Connection, "query">) {
+  const [rows] = await db.query<KeyColumnRow[]>(`
+    SELECT COLUMN_NAME AS columnName
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'egghead_ResourceProgress'
+      AND INDEX_NAME = 'PRIMARY'
+    ORDER BY SEQ_IN_INDEX
+  `);
+  const columns = rows.map((row) => row.columnName);
+  if (columns.join(",") !== "userId,resourceId") {
+    throw new Error(
+      `egghead_ResourceProgress primary key is (${columns.join(", ") || "none"}), not (userId, resourceId). The import's duplicate guard depends on that key; nothing was written.`,
     );
   }
 }
@@ -548,10 +573,13 @@ export function classifyProgressCandidate(
   return "update" as const;
 }
 
-function railsImportStamp(write: PlannedWrite, input: { runId: string; at: string }) {
+type WriteStamp = { runId: string; at: string; tx: string };
+
+function railsImportStamp(write: PlannedWrite, input: WriteStamp) {
   return JSON.stringify({
     runId: input.runId,
     at: input.at,
+    tx: input.tx,
     action: write.action,
     railsUserId: write.railsUserId,
     rails: write.railsRef,
@@ -578,9 +606,8 @@ async function runInOrder<T>(items: readonly T[], run: (item: T) => Promise<void
 async function writeInserts(
   db: ProgressImportDb,
   inserts: readonly PlannedWrite[],
-  stamp: { runId: string; at: string },
+  stamp: WriteStamp,
 ) {
-  const totals = { inserted: 0, raceSkipped: 0 };
   await runInOrder(chunks(inserts, WRITE_CHUNK_SIZE), async (chunk) => {
     const values = chunk
       .map(
@@ -589,8 +616,10 @@ async function writeInserts(
       )
       .join(", ");
     // A row that appeared after planning keeps its CB state: the no-op
-    // update leaves it untouched.
-    const [result] = await db.execute<ResultSetHeader>(
+    // update leaves it untouched. `affectedRows` cannot count those rows:
+    // mysql2 connects with CLIENT_FOUND_ROWS, which reports a duplicate left
+    // as it was as 1, like an insert. `countStampedRows` counts instead.
+    await db.execute<ResultSetHeader>(
       `
         INSERT INTO egghead_ResourceProgress
           (userId, resourceId, completedAt, fields, createdAt, updatedAt)
@@ -605,18 +634,14 @@ async function writeInserts(
         stamp.at,
       ]),
     );
-    totals.inserted += result.affectedRows;
-    totals.raceSkipped += chunk.length - result.affectedRows;
   });
-  return totals;
 }
 
 async function writeUpdates(
   db: ProgressImportDb,
   updates: readonly PlannedWrite[],
-  stamp: { runId: string; at: string },
+  stamp: WriteStamp,
 ) {
-  const totals = { updated: 0, raceSkipped: 0 };
   await runInOrder(chunks(updates, WRITE_CHUNK_SIZE), async (chunk) => {
     const incoming = chunk
       .map(
@@ -626,7 +651,7 @@ async function writeUpdates(
       .join(" UNION ALL ");
     // Optimistic guard: the row must still be exactly what planning read.
     // `prior.fields` is copied from the row itself, server-side.
-    const [result] = await db.execute<ResultSetHeader>(
+    await db.execute<ResultSetHeader>(
       `
         UPDATE egghead_ResourceProgress progress
         JOIN (${incoming}) incoming
@@ -660,10 +685,34 @@ async function writeUpdates(
         stamp.at,
       ],
     );
-    totals.updated += result.affectedRows;
-    totals.raceSkipped += chunk.length - result.affectedRows;
   });
-  return totals;
+}
+
+type StampCountRow = RowDataPacket & { action: string | null; count: number | string };
+
+/**
+ * Rows this transaction actually wrote, by action, read back inside the
+ * transaction from the stamp's unique `tx`. Planned rows that are missing were
+ * changed by CB between planning and the write and kept their CB state.
+ */
+async function countStampedRows(
+  db: ProgressImportDb,
+  writes: readonly PlannedWrite[],
+  stamp: WriteStamp,
+) {
+  const userIds = [...new Set(writes.map((write) => write.cbUserId))];
+  const [rows] = await db.execute<StampCountRow[]>(
+    `
+      SELECT JSON_UNQUOTE(JSON_EXTRACT(fields, '$.railsImport.action')) AS action, COUNT(*) AS count
+      FROM egghead_ResourceProgress
+      WHERE userId IN (${placeholders(userIds.length)})
+        AND JSON_UNQUOTE(JSON_EXTRACT(fields, '$.railsImport.tx')) = ?
+      GROUP BY action
+    `,
+    [...userIds, stamp.tx],
+  );
+  const count = (action: string) => Number(rows.find((row) => row.action === action)?.count ?? 0);
+  return { inserted: count("insert"), updated: count("update") };
 }
 
 /**
@@ -678,24 +727,29 @@ async function writePlannedRows(
   receipt: ProgressImportReceipt,
 ) {
   await runInOrder(chunks(writes, MAX_ROWS_PER_TRANSACTION), async (group) => {
-    const stamp = { runId: receipt.runId, at: mysqlUtcDateTime(new Date()) };
+    const stamp: WriteStamp = {
+      runId: receipt.runId,
+      at: mysqlUtcDateTime(new Date()),
+      tx: randomUUID(),
+    };
     await db.beginTransaction();
     try {
-      const inserted = await writeInserts(
+      await writeInserts(
         db,
         group.filter((write) => write.action === "insert"),
         stamp,
       );
-      const updated = await writeUpdates(
+      await writeUpdates(
         db,
         group.filter((write) => write.action === "update"),
         stamp,
       );
+      const written = await countStampedRows(db, group, stamp);
       await db.commit();
       receipt.transactions += 1;
-      receipt.rows.inserted += inserted.inserted;
-      receipt.rows.updated += updated.updated;
-      receipt.rows.raceSkipped += inserted.raceSkipped + updated.raceSkipped;
+      receipt.rows.inserted += written.inserted;
+      receipt.rows.updated += written.updated;
+      receipt.rows.raceSkipped += group.length - written.inserted - written.updated;
     } catch (error) {
       await db.rollback().catch(() => undefined);
       throw error;
@@ -841,6 +895,7 @@ export async function runProgressImport(input: {
   }) => Promise<void> | void;
 }): Promise<ProgressImportReceipt> {
   await assertUtcSession(input.db);
+  await assertProgressPrimaryKey(input.db);
   const now = input.now ?? new Date();
   const afterRailsUserId = input.afterRailsUserId ?? 0;
   const batchSize = Math.max(1, input.batchSize ?? DEFAULT_PROGRESS_IMPORT_BATCH_SIZE);
@@ -927,6 +982,7 @@ export async function importProgressForUser(
   },
 ): Promise<UserProgressImportResult> {
   await assertUtcSession(options.db);
+  await assertProgressPrimaryKey(options.db);
   const [userRows] = await options.db.execute<CbUserRow[]>(
     `
       SELECT id, email, legacyRailsUserId

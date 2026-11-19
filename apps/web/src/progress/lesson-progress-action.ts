@@ -9,14 +9,13 @@ import { getLessonById } from "../content/lesson";
 import { getCurrentUser } from "../coursebuilder/current-user";
 import { recordAnonymousLessonCompletion } from "./anonymous-lesson-progress";
 import { syncCourseProgressForUser } from "./course-progress";
+import { LESSON_PROGRESS_SOURCES } from "./lesson-progress-sources";
 import { completeResourceForUser, uncompleteResourceForUser } from "./resource-progress";
-
-export type LessonProgressSource = "lesson_player_ended" | "lesson_progress_control";
 
 const setLessonCompletionInputSchema = z.object({
   resourceId: z.string().min(1).max(255),
   completed: z.boolean(),
-  source: z.enum(["lesson_player_ended", "lesson_progress_control"]),
+  source: z.enum(LESSON_PROGRESS_SOURCES),
   courseSlug: z.string().min(1).max(255).optional(),
 });
 
