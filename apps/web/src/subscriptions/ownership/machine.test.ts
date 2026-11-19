@@ -298,6 +298,23 @@ describe("stale and out-of-order sightings (7)", () => {
     }
   });
 
+  it("compares Stripe time with Stripe time only, whatever CB's clock says (6)", () => {
+    const pending = handoverPending();
+    // CB's clock runs five minutes ahead, and the read is processed late on top of that.
+    const SKEW = 300;
+    const read = step(pending, observe(ABSENT, NOW + 20 + SKEW + 60, "live_read", NOW + 20));
+    expect(read.record.lastObservedAt).toBe(NOW + 20);
+    // The commit event was created on Stripe after the read, so it applies.
+    const committed = step(
+      read.record,
+      observe(pendingMarker(pending), NOW + 41 + SKEW, "event", NOW + 40),
+    );
+    expect(committed.record).toMatchObject({ state: "cb_owned", lastObservedAt: NOW + 40 });
+    // A CB clock behind Stripe's does not make old snapshots look fresh either.
+    const behind = step(committed.record, observe(ABSENT, NOW - 600, "event", NOW + 39));
+    expect(behind.record).toBe(committed.record);
+  });
+
   it("treats a redelivered commit event as a no-op", () => {
     const owned = cbRecord();
     const redelivered = step(
@@ -683,13 +700,35 @@ describe("cancelling never rewrites routable history (9)", () => {
     });
   });
 
-  it("a deadline whose write did land is a conflict, not a fence", () => {
+  it("a deadline whose write did land commits, with no conflict and no fence (5)", () => {
     const landed = step(pending, deadline(DEADLINE, pendingMarker(pending)));
-    expect(landed.record).toMatchObject({
-      state: "conflict",
-      conflict: { reason: "landed_before_cancel" },
-    });
-    expect(writes(landed.effects)).toEqual([]);
+    expect(landed.record).toMatchObject({ state: "cb_owned", generation: 1, fence: null });
+    expect(landed.effects).toEqual([
+      { type: "sync_cb_from_stripe", customerId: CUS, notBefore: FLIP },
+    ]);
+  });
+
+  it("exhaustion or a 4xx whose write did land commits too (5, 15)", () => {
+    const landed = factsWith(pendingMarker(pending));
+    expect(step(pending, failure(1, "client_error", NOW + 10, landed)).record.state).toBe(
+      "cb_owned",
+    );
+    const exhausted = withAttempts(pending, policy.maxMarkerWriteAttempts);
+    const result = step(exhausted, failure(1, "timeout", NOW + 10, landed));
+    expect(result.record.state).toBe("cb_owned");
+    expect(writes(result.effects)).toEqual([]);
+  });
+
+  it("Stripe's successful write response, fed back as a live read, commits after the deadline", () => {
+    const late = step(pending, observe(pendingMarker(pending), DEADLINE + 5, "live_read"));
+    expect(late.record.state).toBe("cb_owned");
+  });
+
+  it("a live read past the deadline that shows nothing landed settles back", () => {
+    expect(step(pending, observe(ABSENT, DEADLINE - 1)).record.state).toBe("handover_pending");
+    const settled = step(pending, observe(ABSENT, DEADLINE + 1));
+    expect(settled.record).toMatchObject({ state: "rails_owned", fence: null });
+    expect(writes(settled.effects)).toEqual([]);
   });
 
   it("an abort before the deadline fences a landed write, bounded by the deadline", () => {
@@ -717,10 +756,8 @@ describe("cancelling never rewrites routable history (9)", () => {
   });
 
   it("restore_confirmed is the one deliberate rewrite, and says so", () => {
-    const conflict = step(
-      step(pending, deadline(DEADLINE, pendingMarker(pending))).record,
-      observe(pendingMarker(pending), DEADLINE + 5),
-    ).record;
+    const conflict = step(pending, abort(DEADLINE + 10, pendingMarker(pending))).record;
+    expect(conflict.state).toBe("conflict");
     const restored = step(conflict, {
       type: "CONFLICT_RESOLVED",
       at: FLIP + 5,
@@ -856,7 +893,41 @@ describe("fencing (2.2)", () => {
     expect(expired.record).toMatchObject({
       state: "conflict",
       conflict: { reason: "fence_write_failed" },
+      fence: null,
     });
+  });
+
+  it("a write dropped at its deadline asks for a live read, which commits or settles (7)", () => {
+    const dropped = step(pending, { type: "WRITE_DROPPED", generation: 1, at: DEADLINE });
+    expect(dropped.record).toBe(pending);
+    expect(dropped.effects).toEqual([expect.objectContaining({ type: "read_live_marker" })]);
+    expect(step(pending, observe(pendingMarker(pending), DEADLINE + 2)).record.state).toBe(
+      "cb_owned",
+    );
+    expect(step(pending, observe(ABSENT, DEADLINE + 2)).record.state).toBe("rails_owned");
+  });
+
+  it("a dropped fence clears and triggers a live read, so it can never stick (7)", () => {
+    const optional = step(aborted.record, { type: "WRITE_DROPPED", generation: 2, at: DEADLINE });
+    expect(optional.record).toMatchObject({ state: "rails_owned", fence: null });
+    expect(optional.effects).toEqual([expect.objectContaining({ type: "read_live_marker" })]);
+    expect(
+      step(optional.record, request(optional.record, "HANDOVER_REQUESTED", DEADLINE + 1, "b2"))
+        .outcome,
+    ).toBe("transitioned");
+
+    const required = step(pending, abort(NOW + 60, pendingMarker(pending))).record;
+    const cleared = step(required, { type: "WRITE_DROPPED", generation: 2, at: DEADLINE });
+    expect(cleared.record.fence).toBeNull();
+    expect(alertCodes(cleared.effects)).toEqual(["fence_write_failed"]);
+    // The cancelled entry is still live: the live read turns it into a conflict.
+    const read = step(cleared.record, observe(pendingMarker(pending), DEADLINE + 2));
+    expect(read.record).toMatchObject({
+      state: "conflict",
+      conflict: { reason: "fenced_write_landed" },
+    });
+    // A drop for a generation nobody is writing changes nothing.
+    expect(step(cbRecord(), { type: "WRITE_DROPPED", generation: 9, at: NOW }).effects).toEqual([]);
   });
 
   it("an unknown newer generation is an external write and freezes automation", () => {
@@ -910,6 +981,7 @@ describe("state x event matrix", () => {
     handback: (record) => request(record, "HANDBACK_REQUESTED", FLIP + 200, "matrix"),
     observe_same: (record) => observe(confirmedMarker(record), FLIP + 200),
     write_failed_stale: () => failure(99, "timeout", FLIP + 200, null),
+    write_dropped_stale: () => ({ type: "WRITE_DROPPED", generation: 99, at: FLIP + 200 }),
     deadline: (record) => deadline(FLIP + 200, confirmedMarker(record)),
     abort: (record) => abort(FLIP + 200, confirmedMarker(record)),
     resolve: () => ({
@@ -927,6 +999,7 @@ describe("state x event matrix", () => {
       handback: ["unchanged", "rails_owned"],
       observe_same: ["unchanged", "rails_owned"],
       write_failed_stale: ["unchanged", "rails_owned"],
+      write_dropped_stale: ["unchanged", "rails_owned"],
       deadline: ["unchanged", "rails_owned"],
       abort: ["rejected", "rails_owned"],
       resolve: ["rejected", "rails_owned"],
@@ -934,8 +1007,10 @@ describe("state x event matrix", () => {
     handover_pending: {
       handover: ["rejected", "handover_pending"],
       handback: ["rejected", "handover_pending"],
-      observe_same: ["unchanged", "handover_pending"],
+      // A live read past the deadline showing nothing landed settles the flip.
+      observe_same: ["transitioned", "rails_owned"],
       write_failed_stale: ["unchanged", "handover_pending"],
+      write_dropped_stale: ["unchanged", "handover_pending"],
       deadline: ["transitioned", "rails_owned"],
       abort: ["rejected", "handover_pending"],
       resolve: ["rejected", "handover_pending"],
@@ -945,6 +1020,7 @@ describe("state x event matrix", () => {
       handback: ["transitioned", "handback_pending"],
       observe_same: ["unchanged", "cb_owned"],
       write_failed_stale: ["unchanged", "cb_owned"],
+      write_dropped_stale: ["unchanged", "cb_owned"],
       deadline: ["unchanged", "cb_owned"],
       abort: ["rejected", "cb_owned"],
       resolve: ["rejected", "cb_owned"],
@@ -954,6 +1030,7 @@ describe("state x event matrix", () => {
       handback: ["rejected", "handback_pending"],
       observe_same: ["unchanged", "handback_pending"],
       write_failed_stale: ["unchanged", "handback_pending"],
+      write_dropped_stale: ["unchanged", "handback_pending"],
       deadline: ["unchanged", "handback_pending"],
       abort: ["transitioned", "cb_owned"],
       resolve: ["rejected", "handback_pending"],
@@ -963,6 +1040,7 @@ describe("state x event matrix", () => {
       handback: ["rejected", "conflict"],
       observe_same: ["unchanged", "conflict"],
       write_failed_stale: ["unchanged", "conflict"],
+      write_dropped_stale: ["unchanged", "conflict"],
       deadline: ["unchanged", "conflict"],
       abort: ["rejected", "conflict"],
       resolve: ["transitioned", "rails_owned"],
@@ -1022,24 +1100,43 @@ function checkpoints(a: OwnerTimeline, b: OwnerTimeline, limit: number): number[
 
 describe("randomized sequences through transition", () => {
   type Write = Extract<OwnershipEffect, { type: "write_marker" }>;
+  const FAILURES: readonly MarkerWriteFailure[] = [
+    "server_error",
+    "timeout",
+    "rate_limited",
+    "key_in_use",
+    "client_error",
+  ];
+  /** The drain must settle every flip and clear every fence within this many steps. */
+  const DRAIN_LIMIT = 60;
 
+  /**
+   * One customer, one Stripe account, one CB runner. `t` is Stripe's clock; CB's clock
+   * is `t + skew`, with the skew fixed per seed in [-60, 60] seconds. Every `at` the
+   * machine sees is CB time; every `landedAt` is Stripe time.
+   */
   function run(
     seed: number,
     steps: number,
     runner: { readonly honourNotAfter: boolean } = { honourNotAfter: true },
   ) {
     const random = prng(seed);
+    const skew = random.int(121) - 60;
     let t = NOW;
+    const cb = () => t + skew;
     let liveMetadata: Record<string, string> = {};
     const liveHistory: { at: number; marker: OwnerMarker }[] = [{ at: NOW - DAY, marker: ABSENT }];
     let record = createOwnershipRecord({ customerId: CUS, marker: ABSENT, at: NOW - DAY }).record;
-    const queue: Write[] = [];
+    let queue: Write[] = [];
+    let reads = 0;
+    const deliveries: { at: number; marker: OwnerMarker }[] = [];
     const cancelled = new Set<number>();
     const routeChanges: string[] = [];
     const coverage = new Set<string>();
     let lastEventAt = NOW - DAY;
 
     const live = () => readOwnerMarker(liveMetadata);
+    const liveRead = (): OwnershipEvent => observe(live(), cb(), "live_read", t);
     const facts = (): TransitionFacts =>
       factsWith(live(), {
         subscriptions: [{ ...subscription, paidThroughAt: t + 40 * DAY }],
@@ -1060,21 +1157,83 @@ describe("randomized sequences through transition", () => {
         }
       }
       liveHistory.push({ at: t, marker: after });
+      // Stripe usually delivers customer.updated, late and out of order.
+      if (random.chance(0.7)) deliveries.push({ at: t, marker: after });
       coverage.add("landed");
       lastEventAt = t;
     };
 
+    /** The runner sends one queued write: dropped at notAfter, failed, or landed. */
+    const send = (allowFailure: boolean): OwnershipEvent | null => {
+      const write = queue.shift();
+      if (write === undefined) return null;
+      if (runner.honourNotAfter && write.notAfter !== null && cb() >= write.notAfter) {
+        coverage.add("dropped");
+        return { type: "WRITE_DROPPED", generation: write.generation, at: cb() };
+      }
+      if (allowFailure && random.chance(0.3)) {
+        const kind = FAILURES[random.int(FAILURES.length)] ?? "timeout";
+        return failure(write.generation, kind, cb(), facts());
+      }
+      land(write);
+      // Stripe's response holds the updated customer: the runner feeds it back as a
+      // live read. A lost response is a timeout, retried under the same key.
+      if (allowFailure && random.chance(0.2)) {
+        return failure(write.generation, "timeout", cb(), facts());
+      }
+      return liveRead();
+    };
+
+    const apply = (event: OwnershipEvent, label: string) => {
+      const previous = record;
+      const result = transition(record, event, policy);
+      record = result.record;
+      if (record.state !== previous.state) {
+        coverage.add(`${previous.state}->${record.state}`);
+      }
+
+      // Invariant 2: generations never decrease.
+      expect(record.generation, label).toBeGreaterThanOrEqual(previous.generation);
+      expect(record.issuedGeneration, label).toBeGreaterThanOrEqual(previous.issuedGeneration);
+
+      // A flip that left pending without committing is cancelled for good.
+      if (
+        (previous.state === "handover_pending" || previous.state === "handback_pending") &&
+        record.state !== previous.state &&
+        record.generation !== previous.pending.generation
+      ) {
+        const gone = previous.pending.generation;
+        cancelled.add(gone);
+        coverage.add("cancelled");
+        // Runner contract: a cancel or conflict purges queued writes for the
+        // generation. Half the time the request is already in flight and can't be.
+        if (random.chance(0.5)) queue = queue.filter((write) => write.generation !== gone);
+      }
+
+      for (const effect of result.effects) {
+        if (effect.type === "read_live_marker") reads += 1;
+        if (effect.type !== "write_marker") continue;
+        // Invariant 3: a fenced (cancelled) generation is never written again.
+        expect(
+          cancelled.has(effect.generation),
+          `${label} wrote cancelled ${effect.generation}`,
+        ).toBe(false);
+        // Every automated write is bounded by its flip's deadline.
+        expect(effect.notAfter, label).not.toBeNull();
+        queue.push(effect);
+      }
+    };
+
     for (let i = 0; i < steps; i++) {
       t += random.int(400);
-      const previous = record;
       let event: OwnershipEvent | null = null;
 
-      switch (random.int(8)) {
+      switch (random.int(10)) {
         case 0:
           event = request(
             record,
             "HANDOVER_REQUESTED",
-            t,
+            cb(),
             random.chance(0.5) ? "b1" : "b2",
             facts(),
           );
@@ -1083,101 +1242,82 @@ describe("randomized sequences through transition", () => {
           event = request(
             record,
             "HANDBACK_REQUESTED",
-            t,
+            cb(),
             random.chance(0.5) ? "b1" : "b2",
             facts(),
           );
           break;
-        case 2: {
-          const write = queue.shift();
-          if (write === undefined) break;
-          // The runner never sends at or after notAfter.
-          if (runner.honourNotAfter && write.notAfter !== null && t >= write.notAfter) break;
-          if (random.chance(0.3)) {
-            const kinds: MarkerWriteFailure[] = [
-              "server_error",
-              "timeout",
-              "rate_limited",
-              "key_in_use",
-              "client_error",
-            ];
-            event = failure(
-              write.generation,
-              kinds[random.int(kinds.length)] ?? "timeout",
-              t,
-              facts(),
-            );
-          } else {
-            land(write);
-            if (random.chance(0.7)) event = observe(live(), t + 1, "event", t);
-          }
-          break;
-        }
+        case 2:
         case 3:
-          event = observe(live(), t);
+          event = send(true);
           break;
         case 4: {
-          // Replay an old customer.updated snapshot, possibly out of order.
-          const old = liveHistory[random.int(liveHistory.length)];
-          if (old !== undefined) event = observe(old.marker, t, "event", old.at);
+          // Deliver a pending customer.updated, in any order.
+          const index = random.int(deliveries.length);
+          const [delivery] = deliveries.splice(index, 1);
+          if (delivery !== undefined) event = observe(delivery.marker, cb(), "event", delivery.at);
           break;
         }
-        case 5:
-          if (record.state === "handover_pending" || record.state === "handback_pending") {
-            t = Math.max(t, record.pending.deadline);
-            event = deadline(t, live());
+        case 5: {
+          // Replay an old snapshot, as a dashboard resend would.
+          const old = liveHistory[random.int(liveHistory.length)];
+          if (old !== undefined) event = observe(old.marker, cb(), "event", old.at);
+          break;
+        }
+        case 6:
+          if (reads > 0) {
+            reads -= 1;
+            event = liveRead();
           }
           break;
-        case 6:
-          event = abort(t, live());
+        case 7:
+          if (record.state === "handover_pending" || record.state === "handback_pending") {
+            t = Math.max(t, record.pending.deadline - skew);
+            event = deadline(cb(), live());
+          }
+          break;
+        case 8:
+          event = abort(cb(), live());
           break;
         default:
           if (record.state === "conflict") {
             event = {
               type: "CONFLICT_RESOLVED",
-              at: t,
+              at: cb(),
               decision: "adopt_live",
               liveMarker: live(),
               operator: "sim",
             };
           }
       }
-      if (event === null) continue;
-      const result = transition(record, event, policy);
-      record = result.record;
-      if (record.state !== previous.state) {
-        coverage.add(`${previous.state}->${record.state}`);
-      }
+      if (event !== null) apply(event, `seed ${seed} step ${i}`);
+    }
 
-      // Invariant 2: generations never decrease.
-      expect(record.generation, `seed ${seed} step ${i}`).toBeGreaterThanOrEqual(
-        previous.generation,
-      );
-      expect(record.issuedGeneration, `seed ${seed} step ${i}`).toBeGreaterThanOrEqual(
-        previous.issuedGeneration,
-      );
-
-      // A flip that left pending without committing is cancelled for good.
-      if (
-        (previous.state === "handover_pending" || previous.state === "handback_pending") &&
-        record.state !== previous.state &&
-        !(record.generation === previous.pending.generation)
-      ) {
-        cancelled.add(previous.pending.generation);
-        coverage.add("cancelled");
+    // Liveness: with no new requests, a runner that keeps its contract (answer reads,
+    // send or drop queued writes, fire deadline timers) settles every flip and clears
+    // every fence within DRAIN_LIMIT steps.
+    let drained = false;
+    for (let i = 0; i < DRAIN_LIMIT; i++) {
+      t += 5;
+      let event: OwnershipEvent | null = null;
+      if (reads > 0) {
+        reads -= 1;
+        event = liveRead();
+      } else if (queue.length > 0) {
+        event = send(false);
+      } else if (record.state === "handover_pending" || record.state === "handback_pending") {
+        t = Math.max(t, record.pending.deadline - skew);
+        event = deadline(cb(), live());
+      } else {
+        drained = true;
+        break;
       }
-
-      for (const effect of result.effects) {
-        if (effect.type !== "write_marker") continue;
-        // Invariant 3: a fenced (cancelled) generation is never written again.
-        expect(
-          cancelled.has(effect.generation),
-          `seed ${seed} step ${i} wrote cancelled ${effect.generation}`,
-        ).toBe(false);
-        // Every automated write is bounded by its flip's deadline.
-        expect(effect.notAfter, `seed ${seed} step ${i}`).not.toBeNull();
-        queue.push(effect);
-      }
+      if (event !== null) apply(event, `seed ${seed} drain ${i}`);
+    }
+    if (runner.honourNotAfter) {
+      expect(drained, `seed ${seed}: drain did not finish`).toBe(true);
+      expect(record.fence, `seed ${seed}: fence stuck`).toBeNull();
+      expect(record.state, `seed ${seed}: flip stuck`).not.toMatch(/_pending$/);
     }
     return { routeChanges, coverage };
   }
@@ -1190,7 +1330,7 @@ describe("randomized sequences through transition", () => {
     expect(violations).toBeGreaterThan(0);
   });
 
-  it("holds the invariants after every step across 200 seeded runs", () => {
+  it("holds the invariants after every step, and settles, across 200 seeded runs", () => {
     const seen = new Set<string>();
     for (let seed = 1; seed <= 200; seed++) {
       const { routeChanges, coverage } = run(seed, 150);
@@ -1200,6 +1340,7 @@ describe("randomized sequences through transition", () => {
     // The runs must reach the paths the invariants are about.
     for (const required of [
       "landed",
+      "dropped",
       "cancelled",
       "rails_owned->handover_pending",
       "handover_pending->cb_owned",

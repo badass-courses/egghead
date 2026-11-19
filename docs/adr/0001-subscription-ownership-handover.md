@@ -2,7 +2,7 @@
 
 > **Series note.** This is the first ADR in this app repo's own series (`docs/adr/`). It is separate from the migration ADRs in `migrate-egghead/.brain/resources/decisions/`, and it cites two of them: ADR-0006 (lenient status access) and ADR-0008 (strict paid-through access).
 
-- Status: proposed, revision 3 (2026-11-18). Revision 2 answered the review of `1bf70d7b`; this revision answers the review of `ec7041e`.
+- Status: proposed, revision 4 (2026-11-18). Revision 2 answered the review of `1bf70d7b`, revision 3 the review of `ec7041e`, and this revision the review of `7838bfc`.
 - Lane: `cb-ownership` (Rails-off)
 - Code: `apps/web/src/subscriptions/ownership/`:
   - `marker.ts`, `routing.ts`, `machine.ts`, `access-rule.ts`;
@@ -67,7 +67,7 @@ Both apps classify each event into exactly one subject (`EventSubject` in `routi
    - CB uses its ownership record.
    - Rails uses the timeline it stores from the `customer.deleted` payload, which still carries the metadata.
 
-   Residual gap: if Rails never saw that `customer.deleted`, it routes to Rails while CB routes by its record.
+   Residual gap: if Rails never saw that `customer.deleted`, it routes to Rails while CB routes by its record. The agreed fix, routing both apps by the `customer.deleted` payload, is item L2 for the lifecycle and patch lanes (section 14).
 
 4. **No customer.** Guest charges and payment intents route by the **PaymentIntent's** `metadata.egghead_owner == "cb"`, read from:
    - the object itself, for `payment_intent.*`;
@@ -94,10 +94,12 @@ A write that lands by `flipAt − TTL` only changes the owner of events created 
 Two tests check this:
 
 - `routing.test.ts`, "the double-act window, modelled";
-- `machine.test.ts`, "randomized sequences through transition". It runs 200 seeded runs of 150 random steps each: requests, write landings and failures, live reads, replayed old snapshots, deadlines, aborts and conflict resolutions. After every step it checks three things:
+- `machine.test.ts`, "randomized sequences through transition". It runs 200 seeded runs of 150 random steps each. Each seed fixes a skew between CB's clock and Stripe's, from −60 to +60 seconds. The steps are requests, write landings and failures, writes dropped at `notAfter`, Stripe's write responses fed back as live reads, `customer.updated` deliveries in any order, replayed old snapshots, live reads, deadlines, aborts and conflict resolutions. Half of all cancels purge the queued writes; the other half model a request already in flight. After every step it checks three things:
   1. no landed write changes the owner of an event created at or before its landing time plus the TTL;
   2. generations never decrease;
   3. a cancelled generation is never written again.
+
+  Each run then drains: the runner answers reads, sends or drops queued writes and fires deadline timers, with no new requests. Within 60 steps every flip must settle and every fence must clear.
 
   A control run, whose runner ignores `notAfter`, does produce violations, so the check is not vacuous.
 
@@ -145,9 +147,10 @@ stateDiagram-v2
   rails_owned --> handover_pending: HANDOVER_REQUESTED [guards] / write cb@flipAt, notAfter deadline
   handover_pending --> cb_owned: write observed / sync at flipAt; alert if late
   handover_pending --> handover_pending: WRITE_FAILED + fresh facts / retry
+  handover_pending --> cb_owned: deadline, exhaustion or 4xx, live read shows the write landed
   handover_pending --> rails_owned: cancel, live read shows write not landed / fence before deadline only
-  handover_pending --> rails_owned: cancel before deadline, write landed / required fence
-  handover_pending --> conflict: cancel after deadline with write landed, or live marker changed
+  handover_pending --> rails_owned: abort before deadline, write landed / required fence
+  handover_pending --> conflict: abort after deadline with write landed, or live marker changed
   cb_owned --> handback_pending: HANDBACK_REQUESTED [same guards]
   handback_pending --> rails_owned: write observed
   handback_pending --> cb_owned: cancel paths (mirror of handover)
@@ -157,7 +160,7 @@ stateDiagram-v2
   conflict --> cb_owned: CONFLICT_RESOLVED
 ```
 
-`machine.test.ts` asserts the full 5-state × 7-event matrix.
+`machine.test.ts` asserts the full 5-state × 8-event matrix.
 
 "In sync" compares **timelines only**: two markers with the same timeline route identically, whatever their generation. Generations never decrease. A new write uses `max(live generation, highest issued) + 1`, and an adopted lower live generation never lowers the record.
 
@@ -169,24 +172,26 @@ Stripe metadata has no compare-and-set. **Every cancel decision takes a fresh li
 - `DEADLINE_REACHED.liveMarker`;
 - `MARKER_WRITE_FAILED.facts`, which is required for a pending flip.
 
-`cancelPending` then has three outcomes.
+**A flip that runs out of time or attempts commits if its write landed (5).** At the deadline, at retry exhaustion and on a `client_error`, a live read that matches the pending marker commits the flip, with `sync_cb_from_stripe` for a handover. It never conflicts or fences. Only an operator's abort tries to undo a landed write. The same holds for Stripe's successful write response, which the runner feeds back as a `live_read` (runner contract, open question 3). So a handover whose `customer.updated` is delayed past the deadline still commits.
+
+Otherwise the flip is cancelled, and `cancelPending` has three outcomes.
 
 | Live marker at cancel time                           | Before the deadline                                                                                                | At or after the deadline                                                                                                         |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | Still the confirmed timeline: the write never landed | Settle back. Send an **optional** fence: the confirmed timeline at `max(live, issued) + 1`, `notAfter` = deadline. | Settle back with **no write**. A late landing of the cancelled generation then raises `fenced_write_landed`.                     |
-| The flip's write has landed                          | A **required** fence rewrites it, bounded by the deadline. Nothing can have routed by the entry yet.               | **Conflict** (`landed_before_cancel`). Removing the entry now could change the owner of routable events, so an operator decides. |
+| The flip's write has landed (abort only)             | A **required** fence rewrites it, bounded by the deadline. Nothing can have routed by the entry yet.               | **Conflict** (`landed_before_cancel`). Removing the entry now could change the owner of routable events, so an operator decides. |
 | Anything else: a different timeline, or unrecognized | **Conflict**. CB does not fence over a write it doesn't understand.                                                | Conflict                                                                                                                         |
 
 A retry or re-drive whose fresh facts show the live marker out of sync or unrecognized also goes to **conflict, not cancel**. So all cancel paths agree.
 
 Fence write failures:
 
-| Fence    | Repeated failure, a 4xx, or passing `notAfter`           |
-| -------- | -------------------------------------------------------- |
-| Optional | Dropped, with an alert. The live marker already matched. |
-| Required | Conflict (`fence_write_failed`).                         |
+| Fence    | Repeated failure, a 4xx, or a failure reported at or after `notAfter` | `WRITE_DROPPED`: the runner dropped it unsent at `notAfter` (7)                                                                                 |
+| -------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Optional | Cleared, with an alert. The live marker already matched.              | Cleared, and a live read requested.                                                                                                             |
+| Required | Cleared, and conflict (`fence_write_failed`).                         | Cleared with an alert, and a live read requested. If the read shows the cancelled entry still live, that is a conflict (`fenced_write_landed`). |
 
-While any fence is outstanding, no new flip starts (`fence_outstanding`). A cancelled generation is never written again.
+Every path clears the fence, so a fence can't stick. While a fence is outstanding, no new flip starts (`fence_outstanding`). A `WRITE_DROPPED` for a pending flip's generation also requests a live read. A live read at or after the deadline then commits the flip if the write landed, or settles it back if it didn't, even if no deadline timer fired. A cancelled generation is never written again.
 
 **Unexpected live timelines are conflicts, not adoptions.** A generation CB issued and then cancelled gives `fenced_write_landed`. A generation CB never issued gives `external_write`. An operator sends `CONFLICT_RESOLVED` with one of two decisions:
 
@@ -198,7 +203,9 @@ While any fence is outstanding, no new flip starts (`fence_outstanding`). A canc
 `MARKER_OBSERVED` says where the marker came from:
 
 - `source: "event"`: a `customer.updated` payload, which is a snapshot. `landedAt` is the event's `created`.
-- `source: "live_read"`: CB retrieved the customer just now. Authoritative; `landedAt` is the read time.
+- `source: "live_read"`: CB retrieved the customer, or a marker write succeeded and Stripe returned the updated customer. Authoritative. `landedAt` is the `Date` header of Stripe's response.
+
+**One clock (6).** `landedAt` and `lastObservedAt` are always Stripe time. CB's clock (`at`) drives deadlines and timestamps only, and never enters the stale check. A skewed CB clock, or a read processed late, therefore can't make a newer event look stale. The Stripe customer object has no `updated` field, so the response `Date` header is the read's Stripe time. A test covers a CB clock five minutes ahead plus a late-processed read.
 
 Before any conflict detection:
 
@@ -225,7 +232,7 @@ Keys have the form `egghead-owner:{customerId}:{generation}:{nonce}`.
 | Transport timeout                   | same key                                                                                             |
 | 429 (`rate_limited`)                | same key                                                                                             |
 | 409 key still in use (`key_in_use`) | same key, later                                                                                      |
-| Any other 4xx (`client_error`)      | none. Cancel (section 7).                                                                            |
+| Any other 4xx (`client_error`)      | none. Commit if the live read shows the write landed, else cancel (section 7).                       |
 
 Every retry and every re-drive:
 
@@ -233,7 +240,7 @@ Every retry and every re-drive:
 - re-runs every guard against the original `flipAt`;
 - cancels when a guard fails.
 
-A re-drive also takes a new nonce. Pending flips expire at the deadline.
+A re-drive also takes a new nonce. Pending flips expire at the deadline. Guards are not re-checked between a landed write and `flipAt`; see item L1 (section 14).
 
 ### 10. Guards (handover and handback share them)
 
@@ -273,13 +280,23 @@ A `charge.refunded` created after a flip routes to the new owner, even when the 
 
 Alerts fire on state transitions. `marker_unrecognized` is deduplicated through `lastUnrecognizedAlertAt` and `alertCooldownSeconds` (suggested: 1 day).
 
+### 14. Items for the lifecycle and patch lanes (review of `7838bfc`, 9–12)
+
+These are design items, not code in this lane. Each names its owner.
+
+- **L1 (9). Re-check the guards just before the flip.** Lifecycle lane. A landed write is followed by up to 15 minutes in which a seat change, a renewal invoice or a CB checkout can happen. The runner schedules a guard check at `flipAt − landingMarginSeconds` with fresh `TransitionFacts`. A failing guard sends `ABORT_REQUESTED`. Before the deadline, that fences the entry. After the deadline, it becomes a `landed_before_cancel` conflict for an operator, because removing the entry could change routable events. `checkoutCustomerDecision` already refuses a customer with a scheduled flip away from CB.
+- **L2 (10). Deleted customers route by the live payload in both apps.** Lifecycle and patch lanes. Both apps store the timeline from the `customer.deleted` payload, not CB's confirmed record, because the record differs from the live timeline while a flip is pending or in conflict. An event for a deleted customer that arrives before its `customer.deleted` returns non-2xx, so Stripe retries it, instead of stamping `rails` for good. Stripe doesn't guarantee delivery order. After the 3-day retry window, the event falls back to `rails` with an alert.
+- **L3 (11). More `TransitionFacts`.** Lifecycle lane. Add open invoices, pending invoice items, subscription schedules, open disputes and in-flight refunds, and refuse a flip while any exist. Pending invoice items matter most, because Rails' `StripeReconciler#process_invoice_item` creates and pays invoices. Today the 10-minute `recent_stripe_activity` check is the only proxy.
+- **L4 (12). CB must own the whole lifecycle before any batch moves.** Hard prerequisite on the lifecycle lane. By section 2, CB acts today only on `customer.subscription.updated`, `checkout.session.completed` and `invoice.payment_succeeded`. After a handover, `invoice.payment_failed`, `customer.subscription.deleted`, `charge.refunded` and `charge.dispute.*` route to CB, so without handlers nobody handles dunning, deletion, refunds or disputes. No batch runs, canaries included, until CB handles each of those event types for CB-owned customers and has tests for them.
+
 ## Deploy order
 
 1. **Stamp every CB-born customer with `cb@0` before either side's guard turns on.** This is a check that should find none. The desk confirmed CB checkout has never run live: of the last 1,000 live checkout sessions, none came from CB, and beta has `commerceWritesAllowed=false`. Run it anyway, list the Stripe customers whose `metadata.userId` maps to a CB user created by CB checkout, and expect zero.
 2. Ship the Rails patch and verify it against the shared vectors.
 3. Ship CB routing. The lifecycle lane owns that seam.
 4. Meet the checkout prerequisites (section 11), then open CB checkout.
-5. Run the batches: first customers with no live subscription, then canaries, then the rest.
+5. Meet L4 (section 14): CB handles dunning, deletion, refunds and disputes.
+6. Run the batches: first customers with no live subscription, then canaries, then the rest.
 
 ## XState
 
@@ -437,7 +454,11 @@ On `MarkerUnavailable`, these workers raise so Sidekiq retries.
    - serialize per customer;
    - never send at or after `notAfter`;
    - classify failures as `MarkerWriteFailure`. A 409 `idempotency_key_in_use` is `key_in_use`, not `client_error`;
-   - read the live customer for every `DEADLINE_REACHED`, `ABORT_REQUESTED` and `read_live_marker`.
+   - read the live customer for every `DEADLINE_REACHED`, `ABORT_REQUESTED` and `read_live_marker`;
+   - feed every successful marker write back as a `MARKER_OBSERVED` with `source: "live_read"`, using the customer in Stripe's response and the response's `Date` header as `landedAt` (5, 6);
+   - when it drops an unsent write at `notAfter`, send `WRITE_DROPPED` with that generation (7);
+   - **cancelling a flip or entering conflict purges every queued, unsent write for that generation** (8). A request already in flight can't be purged; its landing is handled as a zombie;
+   - fire a deadline timer for every pending flip, sending `DEADLINE_REACHED` at the deadline.
 4. **(1) The Rails code** is specified above, not written. The patch lane owns it, and the shared vectors are its first spec.
 5. **(3) The two cache TTLs** are hand-synced constants. Recommendation: CB's runner and Rails both read the TTL from one documented value (60 seconds), and the Rails spec asserts it.
 6. **Storage.** The lifecycle lane owns two tables:

@@ -97,7 +97,11 @@ interface RecordBase {
   /** Highest generation CB has ever issued, landed or not. Never reused. */
   readonly issuedGeneration: number;
   readonly fence: FenceWrite | null;
-  /** Time of the newest marker sighting applied (event `created` or live read time). */
+  /**
+   * Stripe-clock time of the newest marker sighting applied: an event's `created`, or a
+   * live read's Stripe response time. Never CB's clock, so the stale check compares
+   * Stripe time with Stripe time only.
+   */
   readonly lastObservedAt: number | null;
   readonly lastUnrecognizedAlertAt: number | null;
   readonly updatedAt: number;
@@ -190,13 +194,27 @@ export type OwnershipEvent =
       readonly type: "MARKER_OBSERVED";
       /**
        * `event`: the marker in a `customer.updated` payload, a snapshot that may be stale
-       * or out of order. `live_read`: CB just retrieved the customer; authoritative.
+       * or out of order. `live_read`: CB just retrieved the customer, or a marker write
+       * succeeded and Stripe returned the updated customer; authoritative.
        */
       readonly source: "event" | "live_read";
       readonly marker: OwnerMarker;
+      /** CB's processing time. Drives deadlines and record timestamps only. */
       readonly at: number;
-      /** Stripe `created` of the carrying event; for a live read, the read time. */
+      /**
+       * Stripe's clock: the carrying event's `created`, or for a live read the `Date`
+       * header of Stripe's response. Never CB's clock.
+       */
       readonly landedAt: number;
+    }
+  | {
+      /**
+       * The runner dropped an unsent write for `generation` because `notAfter` passed.
+       * An earlier attempt may still be in flight, so the machine asks for a live read.
+       */
+      readonly type: "WRITE_DROPPED";
+      readonly generation: number;
+      readonly at: number;
     }
   | {
       readonly type: "MARKER_WRITE_FAILED";
@@ -601,9 +619,30 @@ function conflictFromLive(
 }
 
 /**
+ * End a pending flip that ran out of time or attempts. A live marker that already
+ * holds the flip's write means the flip happened: commit it. Only an explicit abort
+ * may try to undo a landed write (`cancelPending`).
+ */
+function expirePending(
+  record: PendingRecord,
+  live: OwnerMarker,
+  at: number,
+  policy: OwnershipPolicy,
+  code: AlertCode,
+  detail: string,
+): TransitionResult {
+  if (markerMatches(live, record.pending.generation, record.pending.timeline)) {
+    // `at` (CB's clock) bounds the landing from above; the late alert may over-report.
+    return commitPending(record, at, at, policy);
+  }
+  return cancelPending(record, live, at, code, detail);
+}
+
+/**
  * Cancel a pending flip. `live` was read just now. Three outcomes:
- * - the flip's write has landed: fence it before the deadline, or past the deadline
- *   hand it to an operator, because removing it then would rewrite routable history;
+ * - the flip's write has landed (only an operator abort gets here; expiry commits):
+ *   fence it before the deadline, or past the deadline hand it to an operator, because
+ *   removing it then would rewrite routable history;
  * - the live marker is still the confirmed one: settle back, and bump the generation
  *   with a harmless fence write only while it can still land before the deadline;
  * - anything else: conflict.
@@ -748,6 +787,7 @@ function retryPending(
   }
   if (!markerInSync(live, record)) return conflictFromLive(record, live, at, "retry");
   if (at >= pending.deadline) {
+    // The live marker does not hold the flip's write (checked above).
     return cancelPending(
       record,
       live,
@@ -872,8 +912,9 @@ function observeMarker(
   event: Extract<OwnershipEvent, { type: "MARKER_OBSERVED" }>,
   policy: OwnershipPolicy,
 ): TransitionResult {
-  const { marker, at } = event;
-  const seenAt = event.source === "live_read" ? at : event.landedAt;
+  const { marker } = event;
+  // Stripe's clock for both sources: CB's clock never enters the stale check.
+  const seenAt = event.landedAt;
 
   // Stale or out-of-order sightings are dropped before any conflict detection.
   if (record.lastObservedAt !== null && seenAt < record.lastObservedAt) return unchanged(record);
@@ -954,6 +995,23 @@ function observeFresh(
     return unchanged(settle(base, at));
   }
 
+  if (
+    (record.state === "handover_pending" || record.state === "handback_pending") &&
+    event.source === "live_read" &&
+    at >= record.pending.deadline &&
+    markerInSync(marker, record)
+  ) {
+    // A live read past the deadline that shows the flip never landed settles it, even
+    // when no deadline timer fired (for example after a dropped write).
+    return cancelPending(
+      record,
+      marker,
+      at,
+      "flip_deadline_missed",
+      `live read at ${at} shows generation ${record.pending.generation} not landed`,
+    );
+  }
+
   if (markerInSync(marker, record)) {
     if (marker.generation <= record.generation) return unchanged(record);
     return unchanged({ ...record, generation: marker.generation, updatedAt: at });
@@ -993,13 +1051,14 @@ function markerWriteFailed(
     if (event.facts === null) return rejected(record, ["fresh_facts_required"]);
     const live = event.facts.liveMarker;
     if (event.failure === "client_error") {
-      return cancelPending(record, live, event.at, "marker_write_rejected", event.error);
+      return expirePending(record, live, event.at, policy, "marker_write_rejected", event.error);
     }
     if (pending.attempts >= policy.maxMarkerWriteAttempts) {
-      return cancelPending(
+      return expirePending(
         record,
         live,
         event.at,
+        policy,
         "marker_write_retries_exhausted",
         `${pending.attempts} attempts: ${event.error}`,
       );
@@ -1020,7 +1079,8 @@ function markerWriteFailed(
     ) {
       const detail = `fence generation ${fence.generation}: ${event.error}`;
       if (fence.required) {
-        return enterConflict(record, "fence_write_failed", null, event.at, [
+        // The fence is given up, so it cannot stick inside the conflict either.
+        return enterConflict({ ...record, fence: null }, "fence_write_failed", null, event.at, [
           alert(
             record.customerId,
             "fence_write_failed",
@@ -1051,6 +1111,45 @@ function markerWriteFailed(
   }
 
   // A failure for a generation that is no longer being written changes nothing.
+  return unchanged(record);
+}
+
+function writeDropped(
+  record: OwnershipRecord,
+  event: Extract<OwnershipEvent, { type: "WRITE_DROPPED" }>,
+): TransitionResult {
+  const readLive = (reason: string): OwnershipEffect => ({
+    type: "read_live_marker",
+    customerId: record.customerId,
+    reason,
+  });
+  if (
+    (record.state === "handover_pending" || record.state === "handback_pending") &&
+    event.generation === record.pending.generation
+  ) {
+    // The live read decides: commit if an earlier attempt landed, else settle back.
+    return unchanged(record, [
+      readLive(`write for generation ${event.generation} dropped at its deadline`),
+    ]);
+  }
+  const { fence } = record;
+  if (fence !== null && event.generation === fence.generation) {
+    // A fence can never stick: clear it, and let the live read show whether the
+    // cancelled entry is still live (then it is a conflict) or not.
+    const effects: OwnershipEffect[] = [
+      readLive(`fence generation ${fence.generation} dropped at notAfter`),
+    ];
+    if (fence.required) {
+      effects.unshift(
+        alert(
+          record.customerId,
+          "fence_write_failed",
+          `fence generation ${fence.generation} dropped unsent at notAfter; reading the live marker`,
+        ),
+      );
+    }
+    return unchanged({ ...record, fence: null, updatedAt: event.at }, effects);
+  }
   return unchanged(record);
 }
 
@@ -1132,10 +1231,11 @@ export function transition(
         (record.state === "handover_pending" || record.state === "handback_pending") &&
         event.at >= record.pending.deadline
       ) {
-        return cancelPending(
+        return expirePending(
           record,
           event.liveMarker,
           event.at,
+          policy,
           "flip_deadline_missed",
           `write not confirmed by ${record.pending.deadline}`,
         );
@@ -1147,6 +1247,8 @@ export function transition(
       }
       if (event.at >= record.pending.flipAt) return rejected(record, ["flip_time_passed"]);
       return cancelPending(record, event.liveMarker, event.at, "transition_aborted", event.reason);
+    case "WRITE_DROPPED":
+      return writeDropped(record, event);
     case "CONFLICT_RESOLVED":
       return resolveConflict(record, event);
     default:
