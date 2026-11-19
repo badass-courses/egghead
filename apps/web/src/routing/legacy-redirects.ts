@@ -16,6 +16,10 @@ export type LegacyRedirect = {
   readonly id: string;
   readonly source: string;
   readonly destination: string;
+  // A placeholder mapping that a later lane may replace with a real page.
+  // It answers 307, which browsers do not cache forever; every other rule
+  // answers 308.
+  readonly temporary?: true;
 };
 
 export type RetiredRouteKind = "api" | "page";
@@ -42,12 +46,14 @@ export const LEGACY_REDIRECTS = [
   { id: "workshop-thanks", source: "/workshop/:id/thanks", destination: "/workshops/:id/thanks" },
   { id: "workshop", source: "/workshop/:id", destination: "/workshops/:id" },
   {
-    // Any other /workshop/* path. Invoices and power-user reference pages are
-    // build rows and stay free for their lanes.
+    // Any other /workshop/<id>/* path keeps its workshop id. Invoices,
+    // power-user reference pages and their keyframe images are build rows and
+    // stay free for their lanes.
     id: "workshop-fallback",
     source:
-      "/workshop/:rest((?!invoice/|[^/]+/invoice/|[^/]+/power-user-reference(?:/|$))[^/]+/.+)",
-    destination: "/workshops",
+      "/workshop/:id((?!invoice(?:/|$))[^/]+)/:rest((?!invoice/|power-user(?:-reference)?(?:/|$)).+)",
+    destination: "/workshops/:id",
+    temporary: true,
   },
 
   // Account surfaces collapse into /profile and /team.
@@ -82,17 +88,20 @@ export const LEGACY_REDIRECTS = [
   { id: "site-directory-tag", source: "/site-directory/:tag", destination: "/q/:tag" },
   { id: "browse-tag", source: "/browse/:context/:tag", destination: "/q/:tag" },
   { id: "browse", source: "/browse/:all*", destination: "/q" },
-  { id: "instructors", source: "/instructors", destination: "/q" },
+  // Instructor pages are search placeholders until an instructor page exists.
+  { id: "instructors", source: "/instructors", destination: "/q", temporary: true },
   {
     id: "instructor",
     source: "/instructors/:instructor",
     destination: "/q?instructor=:instructor",
+    temporary: true,
   },
   {
     // /instructors/:id/feed is left for the feeds lane.
     id: "instructor-rails-subpage",
     source: "/instructors/:instructor/:rest((?!feed(?:$|[./])).+)",
     destination: "/q?instructor=:instructor",
+    temporary: true,
   },
   {
     id: "search-resources-by-instructor",
@@ -177,8 +186,14 @@ export const LEGACY_REDIRECTS = [
     destination: "/manage-reactive-state-with-solid-js-signals~7gwxg",
   },
   // The other /learn pages were tag hubs and topic primers; search covers them.
-  { id: "learn-topic", source: "/learn/:topic", destination: "/q/:topic" },
-  { id: "learn-topic-page", source: "/learn/:topic/:rest+", destination: "/q/:topic" },
+  // Topic primers are search placeholders until topic pages exist.
+  { id: "learn-topic", source: "/learn/:topic", destination: "/q/:topic", temporary: true },
+  {
+    id: "learn-topic-page",
+    source: "/learn/:topic/:rest+",
+    destination: "/q/:topic",
+    temporary: true,
+  },
 
   // Old project landing pages became courses.
   {
@@ -394,6 +409,20 @@ export const RETIRED_ROUTES = [
     reason: NEXT_INTERNAL,
   },
   { id: "next-og-default", source: "/api/og/og-default", kind: "api", reason: NEXT_INTERNAL },
+  {
+    // egghead-next public/tags-sitemap-<n>.xml listed /q tag pages. The
+    // CourseBuilder /sitemap.xml replaces them; a 410 tells crawlers to drop them.
+    id: "next-tags-sitemap",
+    source: "/tags-sitemap-:n(\\d+).xml",
+    kind: "page",
+    reason: "egghead-next tag sitemap; CourseBuilder publishes /sitemap.xml.",
+  },
+  {
+    id: "next-bitmovin-assets",
+    source: "/bitmovin/:file+",
+    kind: "page",
+    reason: "egghead-next Bitmovin player UI assets; CourseBuilder uses Mux.",
+  },
   { id: "next-sign-s3", source: "/api/aws/sign-s3", kind: "api", reason: NEXT_INTERNAL },
   {
     id: "next-progress",
@@ -433,16 +462,16 @@ export function retiredRouteDestination(id: string) {
 // Part 2 sits above part 3 so catch-all rules never see a trailing slash.
 export const TRAILING_SLASH_REDIRECT = { source: "/:path+/", destination: "/:path+" } as const;
 
-function permanentRule(source: string, destination: string) {
-  return { source, destination, permanent: true };
+function nextRule(source: string, destination: string, temporary?: true) {
+  return { source, destination, permanent: temporary !== true };
 }
 
 export function legacyRedirectsForNextConfig() {
-  const rule = permanentRule;
+  const rules: readonly LegacyRedirect[] = LEGACY_REDIRECTS;
   return [
-    ...LEGACY_REDIRECTS.map(({ source, destination }) => rule(`${source}/`, destination)),
-    rule(TRAILING_SLASH_REDIRECT.source, TRAILING_SLASH_REDIRECT.destination),
-    ...LEGACY_REDIRECTS.map(({ source, destination }) => rule(source, destination)),
+    ...rules.map((rule) => nextRule(`${rule.source}/`, rule.destination, rule.temporary)),
+    nextRule(TRAILING_SLASH_REDIRECT.source, TRAILING_SLASH_REDIRECT.destination),
+    ...rules.map((rule) => nextRule(rule.source, rule.destination, rule.temporary)),
   ];
 }
 

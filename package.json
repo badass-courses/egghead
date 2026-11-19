@@ -49,7 +49,8 @@
     "workshops:preview:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/workshop-preview-contract.ts",
     "workshops:checkout:contract": "tsx --tsconfig apps/web/tsconfig.json scripts/workshop-checkout-contract.ts",
     "search:pagination:contract": "node --experimental-test-module-mocks --import tsx --test scripts/search-pagination.test.ts scripts/search-readers.test.ts scripts/readiness-regression/search-fallback.test.ts",
-    "search:pagination:smoke": "tsx --tsconfig apps/web/tsconfig.json scripts/search-pagination-smoke.ts"
+    "search:pagination:smoke": "tsx --tsconfig apps/web/tsconfig.json scripts/search-pagination-smoke.ts",
+    "routing:redirect-targets": "tsx --tsconfig apps/web/tsconfig.json scripts/redirect-targets-check.ts"
   },
   "dependencies": {
     "@coursebuilder/adapter-drizzle": "3.1.3",
