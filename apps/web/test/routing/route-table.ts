@@ -116,8 +116,16 @@ export function matchesPattern(source: string, url: string) {
   );
 }
 
+// The incoming query merges into the destination query the way the Next
+// server does it; a destination param wins over an incoming one.
 export function firstMatch(rules: readonly Rule[], url: string): RuleHit | undefined {
-  const pathname = pathnameOf(url);
+  const incoming = new URL(url, "https://egghead.io");
+  const pathname = incoming.pathname;
+  const query: Record<string, string | string[]> = {};
+  for (const key of new Set(incoming.searchParams.keys())) {
+    const values = incoming.searchParams.getAll(key);
+    query[key] = values.length === 1 ? (values[0] ?? "") : values;
+  }
   for (const rule of rules) {
     const params = getPathMatch(rule.source, { removeUnnamedParams: true, strict: true })(pathname);
     if (params === false) continue;
@@ -125,18 +133,21 @@ export function firstMatch(rules: readonly Rule[], url: string): RuleHit | undef
       appendParamsToQuery: false,
       destination: rule.destination,
       params,
-      query: {},
+      query,
     });
     const search = new URLSearchParams();
     for (const [key, value] of Object.entries(parsedDestination.query)) {
       for (const item of [value ?? []].flat()) search.append(key, item);
     }
-    const query = search.size > 0 ? `?${search}` : "";
-    return { rule, destination: `${parsedDestination.pathname}${query}` };
+    const suffix = search.size > 0 ? `?${search}` : "";
+    return { rule, destination: `${parsedDestination.pathname}${suffix}` };
   }
   return undefined;
 }
 
+// A trailing-slash twin reports the id of the rule it mirrors.
 export function redirectIdFor(rule: Rule) {
-  return LEGACY_REDIRECTS.find((candidate) => candidate.source === rule.source)?.id;
+  return LEGACY_REDIRECTS.find(
+    (candidate) => candidate.source === rule.source || `${candidate.source}/` === rule.source,
+  )?.id;
 }

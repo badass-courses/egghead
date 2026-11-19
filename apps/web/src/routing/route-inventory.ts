@@ -142,6 +142,22 @@ export const ROUTE_INVENTORY: readonly RouteInventoryRow[] = [
     disposition: redirect("workshop-thanks", "/workshops/claude-code/thanks"),
     note: "Destination resolves to app route /workshops/[id]/thanks.",
   },
+  {
+    legacy: "/workshop/:id/:rest+",
+    origin: "coursebuilder",
+    sourceFile: "apps/web/next.config.ts (pre-parity /workshop/:path*)",
+    sample: "/workshop/claude-code/old-page",
+    disposition: redirect("workshop-fallback", "/workshops"),
+    note: "Untabled workshop subpages. Invoice and power-user reference rows stay build rows.",
+  },
+  {
+    legacy: "/articles",
+    origin: "coursebuilder",
+    sourceFile:
+      "egghead-next next.config legacyRoutes (/articles/:all* also matches bare /articles)",
+    sample: "/articles",
+    disposition: redirect("rails-article-index", "/blog"),
+  },
 
   // egghead-next middleware search canonicalization (src/server/search-query-canonicalization.ts).
   {

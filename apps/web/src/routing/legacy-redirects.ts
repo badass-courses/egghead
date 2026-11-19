@@ -41,6 +41,14 @@ export const LEGACY_REDIRECTS = [
   },
   { id: "workshop-thanks", source: "/workshop/:id/thanks", destination: "/workshops/:id/thanks" },
   { id: "workshop", source: "/workshop/:id", destination: "/workshops/:id" },
+  {
+    // Any other /workshop/* path. Invoices and power-user reference pages are
+    // build rows and stay free for their lanes.
+    id: "workshop-fallback",
+    source:
+      "/workshop/:rest((?!invoice/|[^/]+/invoice/|[^/]+/power-user-reference(?:/|$))[^/]+/.+)",
+    destination: "/workshops",
+  },
 
   // Account surfaces collapse into /profile and /team.
   { id: "user", source: "/user", destination: "/profile" },
@@ -83,7 +91,7 @@ export const LEGACY_REDIRECTS = [
   {
     // /instructors/:id/feed is left for the feeds lane.
     id: "instructor-rails-subpage",
-    source: "/instructors/:instructor/:rest((?!feed$).+)",
+    source: "/instructors/:instructor/:rest((?!feed(?:$|[./])).+)",
     destination: "/q?instructor=:instructor",
   },
   {
@@ -205,7 +213,9 @@ export const LEGACY_REDIRECTS = [
   // /playlists/new is retired below, so the alias skips it.
   { id: "playlist", source: "/playlists/:slug((?!new$)[^/]+)", destination: "/courses/:slug" },
   { id: "collection", source: "/collections/:slug", destination: "/courses/:slug" },
-  { id: "rails-article", source: "/articles/:slug", destination: "/blog/:slug" },
+  { id: "rails-article-index", source: "/articles", destination: "/blog" },
+  // /articles/<slug> and any Rails subpage under it (edit, versions, ...).
+  { id: "rails-article", source: "/articles/:slug/:rest*", destination: "/blog/:slug" },
 
   { id: "sitemap-gz", source: "/sitemap.xml.gz", destination: "/sitemap.xml" },
 ] as const satisfies readonly LegacyRedirect[];
@@ -303,9 +313,9 @@ export const RETIRED_ROUTES = [
   },
   { id: "rails-playlists-new", source: "/playlists/new", kind: "page", reason: RAILS_TOOLING },
   {
-    // /playlists/:id/playlist_feed is left for the feeds lane.
+    // /playlists/:id/playlist_feed (and .rss/.xml variants) is left for the feeds lane.
     id: "rails-playlist-subpage",
-    source: "/playlists/:title/:rest((?!playlist_feed$).+)",
+    source: "/playlists/:title/:rest((?!playlist_feed(?:$|[./])).+)",
     kind: "page",
     reason: RAILS_TOOLING,
   },
@@ -414,12 +424,26 @@ export function retiredRouteDestination(id: string) {
   return `${RETIRED_ROUTE_HANDLER_PREFIX}/${id}`;
 }
 
+// Next's own trailing-slash redirect runs before every custom redirect, so
+// /topics/ would take two hops (/topics/ -> /topics -> /q). next.config.ts
+// sets skipTrailingSlashRedirect and this list puts it back in three parts:
+// 1. each legacy rule with a trailing slash, so /topics/ -> /q in one hop;
+// 2. Next's generic rule (/:path+/ -> /:path+), unchanged, for everything else;
+// 3. the legacy rules themselves.
+// Part 2 sits above part 3 so catch-all rules never see a trailing slash.
+export const TRAILING_SLASH_REDIRECT = { source: "/:path+/", destination: "/:path+" } as const;
+
+function permanentRule(source: string, destination: string) {
+  return { source, destination, permanent: true };
+}
+
 export function legacyRedirectsForNextConfig() {
-  return LEGACY_REDIRECTS.map(({ source, destination }) => ({
-    source,
-    destination,
-    permanent: true,
-  }));
+  const rule = permanentRule;
+  return [
+    ...LEGACY_REDIRECTS.map(({ source, destination }) => rule(`${source}/`, destination)),
+    rule(TRAILING_SLASH_REDIRECT.source, TRAILING_SLASH_REDIRECT.destination),
+    ...LEGACY_REDIRECTS.map(({ source, destination }) => rule(source, destination)),
+  ];
 }
 
 export function retiredRouteRewritesForNextConfig() {

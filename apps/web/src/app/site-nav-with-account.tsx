@@ -1,11 +1,12 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ANONYMOUS_NAV_ACCOUNT,
   parseNavAccountState,
+  shouldRefreshNavAccount,
   type NavAccountState,
 } from "../coursebuilder/nav-account";
 import { SiteNavView } from "./site-nav";
@@ -20,27 +21,35 @@ async function readNavAccount(signal: AbortSignal): Promise<NavAccountState> {
 // the server; see src/coursebuilder/nav-account.ts for why. Until it arrives
 // the nav shows the same "unknown" state as the old streamed Suspense
 // fallback. A failed or malformed response falls back to the anonymous nav,
-// so the nav never sits on "Account" forever. It refetches on navigation and
-// when the window regains focus (for example after signing out in another
-// tab).
+// so the nav never sits on "Account" forever.
+//
+// It loads once per document, then refreshes on navigation or window focus
+// at most once every NAV_ACCOUNT_REFRESH_MS (one minute). Sign-in and
+// sign-out are full page loads, so they always start fresh.
 export function SiteNavWithAccount() {
   const pathname = usePathname();
   const [state, setState] = useState<NavAccountState | null>(null);
+  const lastStartedAt = useRef<number | null>(null);
 
   useEffect(() => {
-    let controller = new AbortController();
+    let inFlight: AbortController | null = null;
 
     const load = () => {
-      controller.abort();
-      controller = new AbortController();
-      const { signal } = controller;
-      readNavAccount(signal)
+      const now = Date.now();
+      if (inFlight || !shouldRefreshNavAccount(lastStartedAt.current, now)) return;
+      lastStartedAt.current = now;
+      const current = new AbortController();
+      inFlight = current;
+      readNavAccount(current.signal)
         .then((account) => {
-          if (!signal.aborted) setState(account);
+          if (!current.signal.aborted) setState(account);
           return account;
         })
         .catch(() => {
-          if (!signal.aborted) setState(ANONYMOUS_NAV_ACCOUNT);
+          if (!current.signal.aborted) setState(ANONYMOUS_NAV_ACCOUNT);
+        })
+        .finally(() => {
+          if (inFlight === current) inFlight = null;
         });
     };
 
@@ -48,7 +57,12 @@ export function SiteNavWithAccount() {
     window.addEventListener("focus", load);
     return () => {
       window.removeEventListener("focus", load);
-      controller.abort();
+      if (inFlight) {
+        // An unfinished load does not count, so the next effect retries.
+        inFlight.abort();
+        inFlight = null;
+        lastStartedAt.current = null;
+      }
     };
   }, [pathname]);
 

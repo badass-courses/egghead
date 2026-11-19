@@ -9,7 +9,8 @@
 // scripts/not-found-status-smoke.ts.
 
 import assert from "node:assert/strict";
-import { access, readdir, readFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -17,8 +18,10 @@ import { fileURLToPath } from "node:url";
 import {
   ANONYMOUS_NAV_ACCOUNT,
   navAccountResponse,
+  NAV_ACCOUNT_REFRESH_MS,
   navAccountState,
   parseNavAccountState,
+  shouldRefreshNavAccount,
 } from "../../src/coursebuilder/nav-account";
 
 const webRoot = fileURLToPath(new URL("../..", import.meta.url));
@@ -126,10 +129,21 @@ const SESSION_MODULES = new Set([
 ]);
 const SESSION_PACKAGES = new Set(["next/headers", "next-auth", "next-auth/react"]);
 
-void describe("layout module trees stay free of server session reads", () => {
-  void test("no layout reaches next/headers, next-auth, auth.ts or current-user.ts", async () => {
-    const layouts = (await walk(appDir)).filter((file) => path.basename(file) === "layout.tsx");
-    assert.ok(layouts.length > 0);
+// Every file that renders around a notFound(): layouts, templates, and the
+// not-found and error boundaries themselves.
+const SHELL_FILES = new Set([
+  "layout.tsx",
+  "template.tsx",
+  "not-found.tsx",
+  "error.tsx",
+  "global-error.tsx",
+]);
+
+void describe("shell module trees stay free of server session reads", () => {
+  void test("no layout, template, not-found or error file reaches a session read", async () => {
+    const layouts = (await walk(appDir)).filter((file) => SHELL_FILES.has(path.basename(file)));
+    assert.ok(layouts.some((file) => path.basename(file) === "layout.tsx"));
+    assert.ok(layouts.some((file) => path.basename(file) === "not-found.tsx"));
     const offenders = (
       await Promise.all(
         layouts.map(async (layout) => {
@@ -182,50 +196,92 @@ const KNOWN_SOFT_404_PAGES = [
   "workshops/[id]/thanks/page.tsx",
 ];
 
+const ancestors = (root: string, page: string) => {
+  const dirs: string[] = [];
+  for (let dir = path.dirname(page); dir.startsWith(root); dir = path.dirname(dir)) {
+    dirs.push(dir);
+  }
+  return dirs;
+};
+
+// A page "calls notFound()" when its own source does, or when a module it
+// imports directly (relative, @/ or @egghead/*) does. One level deep: helpers
+// such as slugParamOrNotFound count; deeper chains are not followed.
+async function callsNotFound(page: string, source: string) {
+  if (source.includes("notFound(")) return true;
+  const specifiers = [...source.matchAll(IMPORT_SPECIFIER)].flatMap((m) =>
+    [m[1], m[2], m[3]].filter((value): value is string => Boolean(value)),
+  );
+  const helpers = await Promise.all(
+    specifiers.map(async (specifier) => {
+      const resolved = await resolveImport(page, specifier);
+      return resolved ? (await readFile(resolved, "utf8")).includes("notFound(") : false;
+    }),
+  );
+  return helpers.some(Boolean);
+}
+
+// Streaming boundaries that would let a 200 shell go out before a notFound().
+async function softNotFoundFindings(root: string) {
+  const files = await walk(root);
+  const pages = files.filter((file) => file.endsWith("/page.tsx"));
+  const layouts = files.filter((file) => path.basename(file) === "layout.tsx");
+  const pageFindings = await Promise.all(
+    pages.map(async (page) => {
+      const source = await readFile(page, "utf8");
+      if (!(await callsNotFound(page, source))) return [];
+      const relative = path.relative(root, page);
+      const loadingDirs = (
+        await Promise.all(
+          ancestors(root, page).map(async (dir) =>
+            (await exists(path.join(dir, "loading.tsx"))) ? [dir] : [],
+          ),
+        )
+      ).flat();
+      return loadingDirs
+        .map((dir) => `${relative}: loading.tsx in ${path.relative(root, dir) || "app"}`)
+        .concat(source.includes("<Suspense") ? [`${relative}: <Suspense> in page`] : []);
+    }),
+  );
+  // A layout that wraps {children} in <Suspense> streams before any page.
+  const layoutFindings = await Promise.all(
+    layouts.map(async (layout) => {
+      const source = await readFile(layout, "utf8");
+      const suspended = [...source.matchAll(/<Suspense[\s\S]*?<\/Suspense>/g)].some((block) =>
+        block[0].includes("{children}"),
+      );
+      return suspended ? [`${path.relative(root, layout)}: {children} inside <Suspense>`] : [];
+    }),
+  );
+  return [...pageFindings, ...layoutFindings].flat().toSorted();
+}
+
 void describe("no streaming boundary sits above a notFound()", () => {
   void test("every notFound() page answers a real status", async () => {
-    const files = await walk(appDir);
-    const pages = files.filter((file) => file.endsWith("/page.tsx"));
-    const layouts = files.filter((file) => path.basename(file) === "layout.tsx");
-    const ancestors = (page: string) => {
-      const dirs: string[] = [];
-      for (let dir = path.dirname(page); dir.startsWith(appDir); dir = path.dirname(dir)) {
-        dirs.push(dir);
-      }
-      return dirs;
-    };
-    const pageFindings = await Promise.all(
-      pages.map(async (page) => {
-        const source = await readFile(page, "utf8");
-        if (!source.includes("notFound(")) return [];
-        const relative = path.relative(appDir, page);
-        const loadingDirs = (
-          await Promise.all(
-            ancestors(page).map(async (dir) =>
-              (await exists(path.join(dir, "loading.tsx"))) ? [dir] : [],
-            ),
-          )
-        ).flat();
-        return loadingDirs
-          .map((dir) => `${relative}: loading.tsx in ${path.relative(appDir, dir) || "app"}`)
-          .concat(source.includes("<Suspense") ? [`${relative}: <Suspense> in page`] : []);
-      }),
-    );
-    // A layout that wraps {children} in <Suspense> streams before any page.
-    const layoutFindings = await Promise.all(
-      layouts.map(async (layout) => {
-        const source = await readFile(layout, "utf8");
-        const suspended = [...source.matchAll(/<Suspense[\s\S]*?<\/Suspense>/g)].some((block) =>
-          block[0].includes("{children}"),
-        );
-        return suspended ? [`${path.relative(appDir, layout)}: {children} inside <Suspense>`] : [];
-      }),
-    );
-    const soft = [...pageFindings, ...layoutFindings].flat();
     assert.deepEqual(
-      soft.toSorted(),
+      await softNotFoundFindings(appDir),
       KNOWN_SOFT_404_PAGES.map((page) => `${page}: <Suspense> in page`).toSorted(),
     );
+  });
+
+  void test("a notFound() inside an imported helper still counts", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "not-found-guard-"));
+    await mkdir(path.join(root, "things", "[id]"), { recursive: true });
+    await writeFile(
+      path.join(root, "lookup.ts"),
+      'import { notFound } from "next/navigation";\nexport function find() { notFound(); }\n',
+    );
+    await writeFile(
+      path.join(root, "things", "[id]", "page.tsx"),
+      'import { find } from "../../lookup";\nexport default function Page() { find(); return null; }\n',
+    );
+    await writeFile(
+      path.join(root, "things", "loading.tsx"),
+      "export default function L() { return null; }\n",
+    );
+    assert.deepEqual(await softNotFoundFindings(root), [
+      "things/[id]/page.tsx: loading.tsx in things",
+    ]);
   });
 
   void test("no middleware or proxy sits outside the route model", async () => {
@@ -255,6 +311,13 @@ void describe("nav account state", () => {
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "private, no-store");
     assert.deepEqual(await response.json(), { displayName: "Ada", hasProSubscription: true });
+  });
+
+  void test("the nav refreshes at most once a minute", () => {
+    assert.equal(shouldRefreshNavAccount(null, 0), true);
+    assert.equal(shouldRefreshNavAccount(1_000, 1_000 + NAV_ACCOUNT_REFRESH_MS - 1), false);
+    assert.equal(shouldRefreshNavAccount(1_000, 1_000 + NAV_ACCOUNT_REFRESH_MS), true);
+    assert.equal(NAV_ACCOUNT_REFRESH_MS, 60_000);
   });
 
   void test("the client parser accepts both shapes and rejects anything else", () => {

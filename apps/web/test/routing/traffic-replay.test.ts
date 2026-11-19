@@ -1,12 +1,13 @@
-// Traffic replay: real egghead.io GET paths (fixtures/egghead-top-paths.txt,
-// query strings stripped, highest traffic first, from a 7-day Vercel log pull
-// on 2026-11-19) walked through the rule table and the app route tree.
+// Traffic replay: the most requested egghead.io GET paths over seven days,
+// from egghead.io request logs on 2026-11-19 (fixtures/egghead-top-paths.txt,
+// query strings stripped, sorted alphabetically so the file carries no
+// traffic order), walked through the rule table and the app route tree.
 //
 // Every path must be redirected, retired, owned by a build row, or answered by
 // an app route. The test prints the class of each path family and the paths
-// owned by build rows, in traffic order. It cannot see whether content exists
-// behind a dynamic route; the report checks the top paths against the beta
-// sitemap.
+// owned by build rows. It cannot see whether content exists behind a dynamic
+// route: /[slug] and /[slug]/[entry] answer almost any one- or two-segment
+// path, so "served" means "reaches a route", not "has content".
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -67,16 +68,12 @@ function classify(pathname: string): Outcome {
   return route ? { kind: "served", route } : { kind: "unrouted" };
 }
 
-const outcomes = paths.map((pathname, rank) => ({
-  pathname,
-  rank: rank + 1,
-  ...classify(pathname),
-}));
+const outcomes = paths.map((pathname) => ({ pathname, ...classify(pathname) }));
 
 void test("every replayed path is routed on purpose", () => {
   const unrouted = outcomes.filter((outcome) => outcome.kind === "unrouted");
   assert.deepEqual(
-    unrouted.map(({ rank, pathname }) => `#${rank} ${pathname}`),
+    unrouted.map(({ pathname }) => pathname),
     [],
   );
 });
@@ -84,7 +81,7 @@ void test("every replayed path is routed on purpose", () => {
 void test("redirected paths land on an app route", () => {
   const dead = outcomes.flatMap((outcome) =>
     outcome.kind === "redirect" && !resolveAppRoute(outcome.destination)
-      ? [`#${outcome.rank} ${outcome.pathname} -> ${outcome.destination}`]
+      ? [`${outcome.pathname} -> ${outcome.destination}`]
       : [],
   );
   assert.deepEqual(dead, []);
@@ -109,8 +106,7 @@ void test("summary", () => {
   }
   const buildOwned = outcomes
     .filter((outcome) => outcome.kind === "build")
-    .slice(0, 25)
-    .map(({ rank, pathname }) => `#${rank} ${pathname}`);
+    .map(({ pathname }) => pathname);
   console.log(
     JSON.stringify({
       trafficReplay: {

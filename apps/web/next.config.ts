@@ -7,6 +7,9 @@ import {
 
 const nextConfig: NextConfig = {
   cacheComponents: true,
+  // legacyRedirectsForNextConfig() puts Next's trailing-slash redirect back
+  // after one-hop trailing-slash twins of the legacy rules.
+  skipTrailingSlashRedirect: true,
   // Legacy egghead.io URL table: src/routing/legacy-redirects.ts.
   // Inventory and contract test: src/routing/route-inventory.ts,
   // test/routing/route-parity.test.ts.

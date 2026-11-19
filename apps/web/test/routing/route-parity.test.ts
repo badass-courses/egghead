@@ -19,13 +19,17 @@ import { describe, test } from "node:test";
 import {
   DELETE as retiredDelete,
   GET as retiredGet,
+  OPTIONS as retiredOptions,
   PATCH as retiredPatch,
+  POST as retiredPost,
   PUT as retiredPut,
 } from "../../src/app/api/retired/[rule]/route";
 import { instructorMatchKey } from "../../src/content/encoding";
 import { instructorFromSearchParams, searchTermFromRoute } from "../../src/content/search-route";
+import { escapeLike, uniqueSlug } from "../../src/routing/article-alias";
 import {
   LEGACY_REDIRECTS,
+  legacyRedirectsForNextConfig,
   RETIRED_ROUTE_HANDLER_PREFIX,
   RETIRED_ROUTES,
   retiredRouteDestination,
@@ -35,6 +39,7 @@ import {
   routeInventoryCounts,
   type RouteInventoryRow,
 } from "../../src/routing/route-inventory";
+import { decodeSlugParam } from "../../src/routing/slug-param";
 import { headingAnchor } from "../../src/static-pages/heading-anchor";
 import {
   beforeFilesRewrites,
@@ -171,7 +176,7 @@ void describe("retire rows answer 410 for every method, without the reason", () 
       const reason = RETIRED_ROUTES.find(({ id }) => id === disposition.rule)?.reason ?? "";
       assert.ok(reason && !body.includes(reason), "the internal reason leaks into the body");
       const others = await Promise.all(
-        [retiredPut, retiredPatch, retiredDelete].map((handler) =>
+        [retiredPost, retiredPut, retiredPatch, retiredDelete, retiredOptions].map((handler) =>
           handler(new Request(`https://egghead.io${row.sample}`), {
             params: Promise.resolve({ rule: disposition.rule }),
           }),
@@ -179,7 +184,14 @@ void describe("retire rows answer 410 for every method, without the reason", () 
       );
       assert.deepEqual(
         others.map((other) => other.status),
-        [410, 410, 410],
+        [410, 410, 410, 410, 410],
+      );
+      // OPTIONS is a 410 with no CORS headers; see the handler for why.
+      const options = others.at(-1);
+      assert.ok(options);
+      assert.deepEqual(
+        [...options.headers.keys()].filter((key) => key.startsWith("access-control-")),
+        [],
       );
     });
   }
@@ -204,7 +216,7 @@ void describe("rule table", () => {
   void test("Next loads exactly the table, in order", () => {
     assert.deepEqual(
       redirects.map(({ source, destination }) => ({ source, destination })),
-      LEGACY_REDIRECTS.map(({ source, destination }) => ({ source, destination })),
+      legacyRedirectsForNextConfig().map(({ source, destination }) => ({ source, destination })),
     );
     assert.deepEqual(
       beforeFilesRewrites.map(({ source }) => source),
@@ -258,5 +270,101 @@ void describe("static policy pages", () => {
       id: "pay-invoice",
     });
     assert.deepEqual(headingAnchor("Plain heading"), { text: "Plain heading", id: undefined });
+  });
+});
+
+// Paths outside the inventory samples that the review asked about. Each is
+// [path, expected outcome]: a redirect destination, "retire:<id>", "free"
+// (no rule; the app tree or a build lane owns it).
+const EDGE_CASES: readonly (readonly [string, string])[] = [
+  // /articles: bare, one segment, and Rails subpages.
+  ["/articles", "/blog"],
+  ["/articles/some-article", "/blog/some-article"],
+  ["/articles/some-article/edit", "/blog/some-article"],
+  // Unknown /workshop/* paths go to /workshops; build subpaths stay free.
+  ["/workshop/claude-code/old-page", "/workshops"],
+  ["/workshop/claude-code/a/b", "/workshops"],
+  ["/workshop/claude-code/invoice/abc123", "free"],
+  ["/workshop/invoice/abc123", "free"],
+  ["/workshop/codex/power-user-reference", "free"],
+  ["/workshop/codex/power-user-reference/some-topic", "free"],
+  // Feed variants stay free for the feeds lane.
+  ["/playlists/some-course/playlist_feed", "free"],
+  ["/playlists/some-course/playlist_feed.rss", "free"],
+  ["/playlists/some-course/playlist_feed.xml", "free"],
+  ["/playlists/some-course/edit", "retire:rails-playlist-subpage"],
+  ["/courses/some-course/course_feed", "free"],
+  ["/courses/some-course/course_feed.rss", "free"],
+  ["/instructors/kent-c-dodds/feed", "free"],
+  ["/instructors/kent-c-dodds/feed.rss", "free"],
+  ["/instructors/kent-c-dodds/courses", "/q?instructor=kent-c-dodds"],
+  // Trailing slashes take one hop to the final destination.
+  ["/topics/", "/q"],
+  ["/articles/some-article/", "/blog/some-article"],
+  ["/instructors/kent-c-dodds/", "/q?instructor=kent-c-dodds"],
+  ["/workshop/claude-code/", "/workshops/claude-code"],
+  ["/instructors/kent-c-dodds/feed/", "/instructors/kent-c-dodds/feed"],
+  ["/courses/some-course/", "/courses/some-course"],
+  // An incoming query merges into the destination query; the rule's own
+  // param wins on a clash.
+  ["/topics?utm_source=x", "/q?utm_source=x"],
+  ["/instructors/kent-c-dodds?utm_source=x", "/q?utm_source=x&instructor=kent-c-dodds"],
+  ["/instructors/kent-c-dodds?instructor=evil", "/q?instructor=kent-c-dodds"],
+];
+
+void describe("edge cases", () => {
+  for (const [url, expected] of EDGE_CASES) {
+    void test(`${url} -> ${expected}`, () => {
+      const redirect = firstMatch(redirects, url);
+      if (expected.startsWith("/")) {
+        assert.ok(redirect, "no redirect matches");
+        assert.equal(redirect.destination, expected);
+        assert.equal(firstMatch(redirects, redirect.destination), undefined, "takes two hops");
+        return;
+      }
+      assert.equal(redirect?.destination, undefined, "a redirect captures it");
+      const retired = firstMatch(beforeFilesRewrites, url);
+      if (expected === "free") {
+        assert.equal(retired, undefined, "a retire rule captures it");
+      } else {
+        assert.equal(
+          retired?.destination,
+          retiredRouteDestination(expected.slice("retire:".length)),
+        );
+      }
+    });
+  }
+});
+
+void describe("blog alias helpers", () => {
+  void test("escapeLike escapes LIKE wildcards with '!' (no backslashes)", () => {
+    assert.equal(escapeLike("plain-slug"), "plain-slug");
+    assert.equal(escapeLike("100%_done!"), "100!%!_done!!");
+    assert.ok(!escapeLike("a\\b%").includes("\\%"));
+  });
+
+  void test("only a single suffixed match resolves; none or two is a 404", () => {
+    assert.equal(uniqueSlug([{ slug: "seed~abc12" }]), "seed~abc12");
+    assert.equal(uniqueSlug([]), null);
+    assert.equal(uniqueSlug([{ slug: "seed~aaaaa" }, { slug: "seed~bbbbb" }]), null);
+  });
+
+  void test("malformed percent-encoding decodes to null, not a throw", () => {
+    assert.equal(decodeSlugParam("caf%C3%A9"), "café");
+    assert.equal(decodeSlugParam("%E0%A4%A"), null);
+    assert.equal(decodeSlugParam("%"), null);
+  });
+
+  void test("the alias lookup uses the same DB connector as public content", async () => {
+    const connectorImport =
+      /import \{[^}]*\b(create\w*MysqlConnection)\b[^}]*\} from "\.\.\/db\/local-docker"/;
+    const [alias, content] = await Promise.all(
+      ["../../src/routing/article-alias.ts", "../../src/content/public-resource.ts"].map((file) =>
+        readFile(new URL(file, import.meta.url), "utf8"),
+      ),
+    );
+    const aliasConnector = connectorImport.exec(alias ?? "")?.[1];
+    assert.ok(aliasConnector);
+    assert.equal(aliasConnector, connectorImport.exec(content ?? "")?.[1]);
   });
 });

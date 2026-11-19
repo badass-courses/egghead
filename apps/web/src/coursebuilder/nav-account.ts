@@ -38,3 +38,10 @@ export function parseNavAccountState(value: unknown): NavAccountState | null {
   if (typeof hasProSubscription !== "boolean") return null;
   return { displayName, hasProSubscription };
 }
+
+// The nav refreshes on navigation or window focus at most once a minute.
+export const NAV_ACCOUNT_REFRESH_MS = 60_000;
+
+export function shouldRefreshNavAccount(lastStartedAt: number | null, now: number): boolean {
+  return lastStartedAt === null || now - lastStartedAt >= NAV_ACCOUNT_REFRESH_MS;
+}

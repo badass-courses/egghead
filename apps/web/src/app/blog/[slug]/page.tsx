@@ -2,6 +2,7 @@ import { notFound, permanentRedirect } from "next/navigation";
 
 import { getPublicContentStaticParams } from "../../../content/public-resource";
 import { articleCanonicalPathForLegacySlug } from "../../../routing/article-alias";
+import { slugParamOrNotFound } from "../../../routing/slug-param";
 
 type BlogPostRedirectPageProps = {
   params: Promise<{
@@ -18,7 +19,7 @@ export function generateStaticParams() {
 // is a real 404, never a redirect into a dead end.
 export default async function BlogPostRedirectPage({ params }: BlogPostRedirectPageProps) {
   const { slug } = await params;
-  const canonicalPath = await articleCanonicalPathForLegacySlug(decodeURIComponent(slug));
+  const canonicalPath = await articleCanonicalPathForLegacySlug(slugParamOrNotFound(slug));
   if (!canonicalPath) notFound();
 
   permanentRedirect(canonicalPath);
