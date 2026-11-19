@@ -23,7 +23,11 @@
 
 import { parseArgs } from "node:util";
 
-import { RETIRED_ROUTES } from "../apps/web/src/routing/legacy-redirects";
+import {
+  LEGACY_REDIRECTS,
+  type LegacyRedirect,
+  RETIRED_ROUTES,
+} from "../apps/web/src/routing/legacy-redirects";
 import { ROUTE_INVENTORY } from "../apps/web/src/routing/route-inventory";
 
 const { values } = parseArgs({
@@ -49,6 +53,8 @@ const UNKNOWN_PATHS = [
   `/case-studies/${MISSING}`,
   `/success-stories/${MISSING}`,
   `/campaigns/${MISSING}`,
+  // egghead.io 404s this today too; egghead has no Android app links file.
+  "/.well-known/assetlinks.json",
   // Percent-encoded slugs are ordinary 404s.
   "/blog/caf%C3%A9-zz",
   "/zz%20missing",
@@ -95,6 +101,23 @@ type Result = Check & {
   ok: boolean;
 };
 
+// egghead-next public/ files copied into apps/web/public.
+const PUBLIC_FILES = [
+  "/site.webmanifest",
+  "/opensearch.xml",
+  "/apple-touch-icon.png",
+  "/android-chrome-512x512.png",
+  "/images/eggo.svg",
+  "/emojis/nerd@2x.png",
+];
+
+// Placeholder mappings answer 307; every other legacy redirect answers 308.
+const legacyRules: readonly LegacyRedirect[] = LEGACY_REDIRECTS;
+const temporaryRules: ReadonlySet<string> = new Set(
+  legacyRules.flatMap((rule) => (rule.temporary ? [rule.id] : [])),
+);
+const redirectStatus = (rule: string) => (temporaryRules.has(rule) ? 307 : 308);
+
 const retiredKinds: ReadonlyMap<string, string> = new Map(
   RETIRED_ROUTES.map((route) => [route.id, route.kind]),
 );
@@ -119,6 +142,7 @@ const checks: Check[] = [
     expectLocation: to,
   })),
   ...SEARCH_PATHS.map((path) => ({ name: "search page 200", path, expectStatus: 200 })),
+  ...PUBLIC_FILES.map((path) => ({ name: "public file 200", path, expectStatus: 200 })),
   ...KNOWN_SOFT_404_PATHS.map((path) => ({
     name: "known soft 404 (follow-up)",
     path,
@@ -131,16 +155,27 @@ const checks: Check[] = [
       ["/topics/", "/q"],
       ["/articles/some-article/", "/blog/some-article"],
       ["/courses/some-course/", "/courses/some-course"],
+      ["/workshop/claude-code/old-page", "/workshops/claude-code"],
+    ] as const
+  ).map(([path, expectLocation]) => ({
+    name: "redirect edge",
+    path,
+    expectStatus: path.startsWith("/workshop/") ? 307 : 308,
+    expectLocation,
+  })),
+  ...(
+    [
       [
         "/instructors/kent-c-dodds?utm_source=route-parity",
         "/q?instructor=kent-c-dodds&utm_source=route-parity",
       ],
       ["/instructors/kent-c-dodds?instructor=evil", "/q?instructor=kent-c-dodds"],
+      ["/instructors/kent-c-dodds/", "/q?instructor=kent-c-dodds"],
     ] as const
   ).map(([path, expectLocation]) => ({
-    name: "redirect edge",
+    name: "redirect edge (placeholder)",
     path,
-    expectStatus: 308,
+    expectStatus: 307,
     expectLocation,
   })),
   {
@@ -170,7 +205,7 @@ for (const row of ROUTE_INVENTORY) {
     checks.push({
       name: `redirect ${disposition.rule}`,
       path: row.sample,
-      expectStatus: 308,
+      expectStatus: redirectStatus(disposition.rule),
       expectLocation: disposition.destination,
     });
   }

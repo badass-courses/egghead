@@ -25,7 +25,7 @@ import { LEGACY_REDIRECTS } from "../../src/routing/legacy-redirects";
 export const webRoot = fileURLToPath(new URL("../..", import.meta.url));
 export const appDir = path.join(webRoot, "src", "app");
 
-export type Rule = { source: string; destination: string };
+export type Rule = { source: string; destination: string; permanent?: boolean | undefined };
 export type RuleHit = { rule: Rule; destination: string };
 
 // page.{js,jsx,ts,tsx,md,mdx} and route.{js,ts,...} define URLs.
@@ -75,7 +75,12 @@ loadConfig(${JSON.stringify(PHASE_PRODUCTION_BUILD)}, process.cwd())
 
 const customRoutesSchema = z.object({
   redirects: z.array(
-    z.object({ source: z.string(), destination: z.string(), internal: z.boolean().optional() }),
+    z.object({
+      source: z.string(),
+      destination: z.string(),
+      permanent: z.boolean().optional(),
+      internal: z.boolean().optional(),
+    }),
   ),
   rewrites: z.object({
     beforeFiles: z.array(z.object({ source: z.string(), destination: z.string() })),
@@ -95,6 +100,11 @@ async function loadNextCustomRoutes() {
 
 const customRoutes = await loadNextCustomRoutes();
 export const redirects: Rule[] = customRoutes.redirects.filter((route) => route.internal !== true);
+// Redirects Next adds itself, such as its trailing-slash rule. Empty while
+// next.config.ts sets skipTrailingSlashRedirect.
+export const internalRedirects: Rule[] = customRoutes.redirects.filter(
+  (route) => route.internal === true,
+);
 export const beforeFilesRewrites: Rule[] = customRoutes.rewrites.beforeFiles;
 export const routeTable = getSortedRoutes(await appRoutePaths(appDir)).map((route) => ({
   route,
@@ -105,9 +115,37 @@ export function pathnameOf(url: string) {
   return new URL(url, "https://egghead.io").pathname;
 }
 
+// Files in apps/web/public, served at their path before any dynamic route.
+async function publicFilePaths(dir: string, prefix = ""): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map((entry) =>
+      entry.isDirectory()
+        ? publicFilePaths(path.join(dir, entry.name), `${prefix}/${entry.name}`)
+        : Promise.resolve([`${prefix}/${entry.name}`]),
+    ),
+  );
+  return nested.flat();
+}
+
+export const PUBLIC_FILE = "public";
+export const publicFiles: ReadonlySet<string> = new Set(
+  await publicFilePaths(path.join(webRoot, "public")),
+);
+
+// The app route that answers a path, or PUBLIC_FILE for a file in public/.
 export function resolveAppRoute(url: string) {
   const pathname = pathnameOf(url);
+  if (publicFiles.has(decodeURI(pathname))) return PUBLIC_FILE;
   return routeTable.find(({ re }) => re.test(pathname))?.route;
+}
+
+// A path that names a file (an extension on its last segment) or a dot
+// directory such as /.well-known. A dynamic page such as /[slug]/[entry]
+// matches these paths but never answers them with the file.
+export function isFileLikePath(url: string) {
+  const pathname = pathnameOf(url);
+  return /\/\./.test(pathname) || /\.[A-Za-z0-9]+$/.test(pathname);
 }
 
 export function matchesPattern(source: string, url: string) {
@@ -150,4 +188,13 @@ export function redirectIdFor(rule: Rule) {
   return LEGACY_REDIRECTS.find(
     (candidate) => candidate.source === rule.source || `${candidate.source}/` === rule.source,
   )?.id;
+}
+
+// Build rows carry an egghead-next pattern such as /i/[slug]/rss.xml or
+// /courses/:id/course_feed; normalize to a path-to-regexp source.
+export function buildRowSource(legacy: string) {
+  return legacy
+    .replaceAll(/\[\[\.\.\.([^\]]+)\]\]/g, ":$1*")
+    .replaceAll(/\[\.\.\.([^\]]+)\]/g, ":$1+")
+    .replaceAll(/\[([^\]]+)\]/g, ":$1");
 }

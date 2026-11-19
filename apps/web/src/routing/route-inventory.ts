@@ -5,7 +5,8 @@
 // 992ec9a1 (2026-11-01). Each row says what the CourseBuilder app does with
 // that URL:
 //
-// - served:   a CourseBuilder route answers the same path.
+// - served:   a CourseBuilder route answers the same path ("public" means a
+//             file in apps/web/public, copied from egghead-next public/).
 // - redirect: a rule in legacy-redirects.ts moves it to a CourseBuilder URL.
 // - retire:   a rule in legacy-redirects.ts answers 410; the reason stays in the table.
 // - build:    nothing answers yet; a follow-up lane owns it.
@@ -21,7 +22,14 @@ export const ROUTE_INVENTORY_SOURCE = {
   committedAt: "2026-11-01",
 } as const;
 
-export type RouteOrigin = "page" | "app" | "api" | "next-redirect" | "middleware" | "coursebuilder";
+export type RouteOrigin =
+  | "page"
+  | "app"
+  | "api"
+  | "next-redirect"
+  | "middleware"
+  | "coursebuilder"
+  | "public";
 
 export type FollowUpLane =
   | "feeds"
@@ -96,6 +104,18 @@ function api(
   return { legacy, origin: "api", sourceFile: `src/${file}`, sample, disposition, ...extra };
 }
 
+// A file in egghead-next public/. The full list is
+// test/routing/fixtures/egghead-next-public-files.txt; the parity test fails
+// when one of them has no row.
+function publicFile(
+  legacy: string,
+  sample: string,
+  disposition: Disposition,
+  extra: Partial<Pick<RouteInventoryRow, "note">> = {},
+): RouteInventoryRow {
+  return { legacy, origin: "public", sourceFile: `public${legacy}`, sample, disposition, ...extra };
+}
+
 function nextRedirect(
   legacy: string,
   group: string,
@@ -147,8 +167,8 @@ export const ROUTE_INVENTORY: readonly RouteInventoryRow[] = [
     origin: "coursebuilder",
     sourceFile: "apps/web/next.config.ts (pre-parity /workshop/:path*)",
     sample: "/workshop/claude-code/old-page",
-    disposition: redirect("workshop-fallback", "/workshops"),
-    note: "Untabled workshop subpages. Invoice and power-user reference rows stay build rows.",
+    disposition: redirect("workshop-fallback", "/workshops/claude-code"),
+    note: "Untabled workshop subpages keep the workshop id (307). Invoice and power-user reference rows stay build rows.",
   },
   {
     legacy: "/articles",
@@ -1199,6 +1219,39 @@ export const ROUTE_INVENTORY: readonly RouteInventoryRow[] = [
     `/playlists/${COURSE}/playlist_feed`,
     build("feeds", FEEDS),
   ),
+  // egghead-next public/ files.
+  publicFile("/robots.txt", "/robots.txt", served("/robots.txt"), {
+    note: "CourseBuilder app/robots.ts answers it with its own rules.",
+  }),
+  publicFile("/sitemap.xml", "/sitemap.xml", served("/sitemap.xml"), {
+    note: "CourseBuilder app/sitemap.ts answers it.",
+  }),
+  publicFile("/favicon.ico", "/favicon.ico", served("/favicon.ico")),
+  publicFile("/[icon].png", "/android-chrome-192x192.png", served("public"), {
+    note: "Favicons, touch icons and the hero and partner images. egghead-next public/ file, copied verbatim into apps/web/public.",
+  }),
+  publicFile("/site.webmanifest", "/site.webmanifest", served("public"), {
+    note: "egghead-next public/ file, copied verbatim into apps/web/public.",
+  }),
+  publicFile("/opensearch.xml", "/opensearch.xml", served("public"), {
+    note: "Browser search integration; its template points at /q. egghead-next public/ file, copied verbatim into apps/web/public.",
+  }),
+  publicFile("/zeit.svg", "/zeit.svg", served("public"), {
+    note: "egghead-next public/ file, copied verbatim into apps/web/public.",
+  }),
+  publicFile("/images/[file]", "/images/eggo.svg", served("public"), {
+    note: "Old emails and embeds reference these. egghead-next public/ file, copied verbatim into apps/web/public.",
+  }),
+  publicFile("/emojis/[file]", "/emojis/nerd@2x.png", served("public"), {
+    note: "egghead-next public/ file, copied verbatim into apps/web/public.",
+  }),
+  publicFile("/tags-sitemap-[n].xml", "/tags-sitemap-0.xml", retire("next-tags-sitemap")),
+  publicFile("/bitmovin/[file]", "/bitmovin/bitmovinplayer-ui.js", retire("next-bitmovin-assets")),
+  publicFile(
+    "/workshop/codex/power-user/keyframes/[file]",
+    "/workshop/codex/power-user/keyframes/00-00-33-zsh-wrapper.jpg",
+    build("workshop-reference", "Keyframe images for the Codex power-user reference pages."),
+  ),
 ];
 
 export function routeInventoryCounts(rows: readonly RouteInventoryRow[] = ROUTE_INVENTORY) {
@@ -1210,6 +1263,7 @@ export function routeInventoryCounts(rows: readonly RouteInventoryRow[] = ROUTE_
     "next-redirect": 0,
     middleware: 0,
     coursebuilder: 0,
+    public: 0,
   };
   for (const row of rows) {
     byClass[row.disposition.class] += 1;

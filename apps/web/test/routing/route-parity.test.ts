@@ -26,7 +26,12 @@ import {
 } from "../../src/app/api/retired/[rule]/route";
 import { instructorMatchKey } from "../../src/content/encoding";
 import { instructorFromSearchParams, searchTermFromRoute } from "../../src/content/search-route";
-import { escapeLike, uniqueSlug } from "../../src/routing/article-alias";
+import {
+  escapeLike,
+  isLookupableSlug,
+  MAX_LEGACY_SLUG_LENGTH,
+  uniqueSlug,
+} from "../../src/routing/article-alias";
 import {
   LEGACY_REDIRECTS,
   legacyRedirectsForNextConfig,
@@ -43,7 +48,11 @@ import { decodeSlugParam } from "../../src/routing/slug-param";
 import { headingAnchor } from "../../src/static-pages/heading-anchor";
 import {
   beforeFilesRewrites,
+  buildRowSource,
   firstMatch,
+  internalRedirects,
+  matchesPattern,
+  PUBLIC_FILE,
   redirectIdFor,
   redirects,
   resolveAppRoute,
@@ -215,13 +224,42 @@ void describe("build rows stay free for their follow-up lanes", () => {
 void describe("rule table", () => {
   void test("Next loads exactly the table, in order", () => {
     assert.deepEqual(
-      redirects.map(({ source, destination }) => ({ source, destination })),
-      legacyRedirectsForNextConfig().map(({ source, destination }) => ({ source, destination })),
+      redirects.map(({ source, destination, permanent }) => ({ source, destination, permanent })),
+      legacyRedirectsForNextConfig(),
     );
     assert.deepEqual(
       beforeFilesRewrites.map(({ source }) => source),
       RETIRED_ROUTES.map(({ source }) => source),
     );
+  });
+
+  void test("Next adds no redirect of its own, so trailing slashes take one hop", () => {
+    // Fails when next.config.ts loses skipTrailingSlashRedirect: Next then
+    // puts its own /:path+/ redirect in front of every legacy rule.
+    assert.deepEqual(
+      internalRedirects.map(({ source }) => source),
+      [],
+      "next.config.ts must set skipTrailingSlashRedirect",
+    );
+  });
+
+  void test("placeholder mappings answer 307, everything else 308", () => {
+    const temporary: string[] = LEGACY_REDIRECTS.flatMap((rule) =>
+      "temporary" in rule && rule.temporary ? [rule.id] : [],
+    );
+    assert.deepEqual(temporary.toSorted(), [
+      "instructor",
+      "instructor-rails-subpage",
+      "instructors",
+      "learn-topic",
+      "learn-topic-page",
+      "workshop-fallback",
+    ]);
+    for (const rule of redirects) {
+      const id = redirectIdFor(rule);
+      const expected = !(id && temporary.includes(id));
+      assert.equal(rule.permanent, expected, `${rule.source} permanent`);
+    }
   });
 
   void test("every redirect is explained by an inventory row", () => {
@@ -282,8 +320,14 @@ const EDGE_CASES: readonly (readonly [string, string])[] = [
   ["/articles/some-article", "/blog/some-article"],
   ["/articles/some-article/edit", "/blog/some-article"],
   // Unknown /workshop/* paths go to /workshops; build subpaths stay free.
-  ["/workshop/claude-code/old-page", "/workshops"],
-  ["/workshop/claude-code/a/b", "/workshops"],
+  ["/workshop/claude-code/old-page", "/workshops/claude-code"],
+  ["/workshop/claude-code/a/b", "/workshops/claude-code"],
+  ["/workshop/codex/power-user/keyframes/00-00-33-zsh-wrapper.jpg", "free"],
+  ["/workshop/invoice", "/workshops/invoice"],
+  // egghead-next public/ files.
+  ["/tags-sitemap-12.xml", "retire:next-tags-sitemap"],
+  ["/bitmovin/receiver.css", "retire:next-bitmovin-assets"],
+  ["/.well-known/assetlinks.json", "free"],
   ["/workshop/claude-code/invoice/abc123", "free"],
   ["/workshop/invoice/abc123", "free"],
   ["/workshop/codex/power-user-reference", "free"],
@@ -343,6 +387,14 @@ void describe("blog alias helpers", () => {
     assert.ok(!escapeLike("a\\b%").includes("\\%"));
   });
 
+  void test("only short, single-segment slugs reach the database", () => {
+    assert.equal(isLookupableSlug("manage-reactive-state-with-solid-js-signals"), true);
+    assert.equal(isLookupableSlug("a".repeat(MAX_LEGACY_SLUG_LENGTH)), true);
+    assert.equal(isLookupableSlug("a".repeat(MAX_LEGACY_SLUG_LENGTH + 1)), false);
+    assert.equal(isLookupableSlug(""), false);
+    assert.equal(isLookupableSlug("a/b"), false);
+  });
+
   void test("only a single suffixed match resolves; none or two is a 404", () => {
     assert.equal(uniqueSlug([{ slug: "seed~abc12" }]), "seed~abc12");
     assert.equal(uniqueSlug([]), null);
@@ -366,5 +418,26 @@ void describe("blog alias helpers", () => {
     const aliasConnector = connectorImport.exec(alias ?? "")?.[1];
     assert.ok(aliasConnector);
     assert.equal(aliasConnector, connectorImport.exec(content ?? "")?.[1]);
+  });
+});
+
+void describe("egghead-next public files", () => {
+  void test("every egghead-next public/ file is served, redirected, retired or owned", async () => {
+    const files = (
+      await readFile(new URL("./fixtures/egghead-next-public-files.txt", import.meta.url), "utf8")
+    )
+      .split("\n")
+      .filter(Boolean);
+    assert.ok(files.length > 0);
+    const buildSources = ROUTE_INVENTORY.flatMap((row) =>
+      row.disposition.class === "build" ? [buildRowSource(row.legacy)] : [],
+    );
+    const fixed = new Set(["/robots.txt", "/sitemap.xml", "/favicon.ico", PUBLIC_FILE]);
+    const orphans = files.filter((file) => {
+      if (firstMatch(redirects, file) || firstMatch(beforeFilesRewrites, file)) return false;
+      if (buildSources.some((source) => matchesPattern(source, file))) return false;
+      return !fixed.has(resolveAppRoute(file) ?? "");
+    });
+    assert.deepEqual(orphans, []);
   });
 });

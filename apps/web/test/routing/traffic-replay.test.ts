@@ -16,7 +16,9 @@ import { test } from "node:test";
 import { ROUTE_INVENTORY } from "../../src/routing/route-inventory";
 import {
   beforeFilesRewrites,
+  buildRowSource,
   firstMatch,
+  isFileLikePath,
   matchesPattern,
   redirectIdFor,
   redirects,
@@ -28,15 +30,6 @@ const fixture = await readFile(
   "utf8",
 );
 const paths = fixture.split("\n").filter(Boolean);
-
-// Build rows carry an egghead-next pattern such as /i/[slug]/rss.xml or
-// /courses/:id/course_feed; normalize to a path-to-regexp source.
-function buildRowSource(legacy: string) {
-  return legacy
-    .replaceAll(/\[\[\.\.\.([^\]]+)\]\]/g, ":$1*")
-    .replaceAll(/\[\.\.\.([^\]]+)\]/g, ":$1+")
-    .replaceAll(/\[([^\]]+)\]/g, ":$1");
-}
 
 const buildPatterns = ROUTE_INVENTORY.flatMap((row) =>
   row.disposition.class === "build"
@@ -65,13 +58,22 @@ function classify(pathname: string): Outcome {
   const owner = buildPatterns.find(({ source }) => matchesPattern(source, pathname));
   if (owner) return { kind: "build", lane: owner.lane };
   const route = resolveAppRoute(pathname);
+  // A file path that only a dynamic page matches is not served: the page
+  // never answers with the file.
+  if (route && isFileLikePath(pathname) && route.includes("[")) return { kind: "unrouted" };
   return route ? { kind: "served", route } : { kind: "unrouted" };
 }
 
 const outcomes = paths.map((pathname) => ({ pathname, ...classify(pathname) }));
 
+// Files egghead.io itself answers with a 404 today. Parity is a 404.
+// /.well-known/assetlinks.json: egghead has no Android app links file.
+const ABSENT_ON_EGGHEAD_IO = new Set(["/.well-known/assetlinks.json"]);
+
 void test("every replayed path is routed on purpose", () => {
-  const unrouted = outcomes.filter((outcome) => outcome.kind === "unrouted");
+  const unrouted = outcomes.filter(
+    (outcome) => outcome.kind === "unrouted" && !ABSENT_ON_EGGHEAD_IO.has(outcome.pathname),
+  );
   assert.deepEqual(
     unrouted.map(({ pathname }) => pathname),
     [],
