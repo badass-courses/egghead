@@ -193,6 +193,7 @@ It holds no emails or names. It contains:
 - the target as runtime, database name and a sha256 of the host;
 - the gate inputs (`gateInputs`), as `plan.json` records them;
 - identity conflicts, identity-op counts and collisions, and the Rails pro-holder cross-check (every held bare `pro` id with the list's sha256 and a spread sample, the granted bare-active ids, sign-in buckets, and up to 20 ids the other way);
+- `staleLegacyReconciliation`: every user with a pro-eligible stale legacy subscription in exactly one bucket (`held`, `grantedInWindow`, `orphan`, `grantedAnotherWay` split by reason, `other`, which should be 0), and `grantedAnotherWayWithoutAllAccess`, which must be 0;
 - granted rows per gated source type, backing without `pro`, growth against `--previous-receipt`, held legacy subscriptions and orphans (each with its sha256), held seat flags with rulings, accepted over-grants by `keep` and by hold, and `afterIdentityPass` on an identity pass;
 - policy counts: bulk, country-restricted, members without the role, purchases without a sellable, held revokes and held seat flags;
 - 20 sample ops spread across classes;
@@ -232,6 +233,7 @@ The pure suite covers:
 - backing for a user without `pro` (counted, not granted) and for a `basic` user (granted);
 - first-run acceptance by exact count, and `--previous-receipt` replacing it;
 - a stale and an undated legacy subscription held by sha, a wider window granting it, and an earlier run's row kept with its over-grant excused;
+- the stale legacy reconciliation with a user in every bucket;
 - a stale-only holder inside the sign-in window granted `rails_bare_pro_active`, one list per person, stale and bare sign-in buckets kept apart, and an earlier bare-active row kept outside the window;
 - bare `pro` granted inside the sign-in window, held outside it, dormant holders never touched, sign-in buckets, and an earlier row kept while `pro` stays and revoked when it goes;
 - `basic` holders and membership purchasers off the bare list;

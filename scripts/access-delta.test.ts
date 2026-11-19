@@ -1182,6 +1182,13 @@ function linkOp(userId: string, railsUserId: string): DeltaOp {
   return { kind: "user_link", key: `user_link:${userId}:${railsUserId}`, userId, railsUserId };
 }
 
+/** A legacy subscription long past its period end. */
+function staleLegacyLine(id: string, user: string) {
+  return JSON.stringify(
+    backingGrant("legacy_subscription", id, user, { currentPeriodEnd: "2025-01-01" }),
+  );
+}
+
 /** No op of any kind names this row or membership id. */
 function noOpNames(ops: readonly DeltaOp[], id: string) {
   return !ops.some((op) => op.key.endsWith(`:${id}`));
@@ -1321,6 +1328,39 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
       seatedReceipt.heldLegacySubscriptions.subscriptions.map((held) => held.railsSourceId),
       ["7704"],
     );
+  });
+
+  void test("r6: staleLegacyReconciliation puts every stale-subscription user in exactly one bucket", () => {
+    const mixed = exportWith([
+      staleLegacyLine("7706", "101"), // seat
+      staleLegacyLine("7707", "108"), // lifetime role (also a pro holder in this test)
+      proLine("108", "2026-10-01"),
+      staleLegacyLine("7708", "114"), // basic, no pro_holder line
+      JSON.stringify(railsUser("130")),
+      proLine("130", "2026-10-01"),
+      staleLegacyLine("7709", "130"), // stale-only, signed in recently
+      proLine("134", "2026-10-01"),
+      staleLegacyLine("7710", "134"), // no user line: orphan
+    ]);
+    const result = analyze(mixed, julySnapshot(), NOW_MS);
+    const receipt = buildReceipt(mixed, result, CTX);
+    const recon = receipt.staleLegacyReconciliation;
+    assert.equal(recon.users, 6, "123, 101, 108, 114, 130, 134");
+    assert.equal(recon.held, 1);
+    assert.equal(recon.grantedInWindow, 1);
+    assert.equal(recon.orphan, 1);
+    assert.equal(recon.grantedAnotherWay, 3);
+    assert.equal(recon.other, 0);
+    assert.equal(
+      recon.held + recon.grantedInWindow + recon.orphan + recon.grantedAnotherWay + recon.other,
+      recon.users,
+    );
+    assert.equal(recon.grantedAnotherWayByFirstReason["role"], 1);
+    assert.equal(recon.grantedAnotherWayByFirstReason["basic"], 1);
+    assert.equal(recon.grantedAnotherWayByFirstReason["seat"], 1);
+    assert.equal(recon.grantedAnotherWaySignedInWithinWindow, 1, "108 signed in recently");
+    assert.equal(recon.grantedAnotherWayWithoutProLine, 1, "114");
+    assert.equal(recon.grantedAnotherWayWithoutAllAccess, 0);
   });
 
   void test("r6: a stale-only holder's bare-active row from an earlier run stays outside the window", () => {

@@ -1390,6 +1390,8 @@ export interface DeltaPlan {
   readonly projectedExport: RailsAccessExport;
   /** Legacy subscriptions held as stale: granted nothing, existing rows kept. */
   readonly heldLegacySubscriptions: readonly HeldLegacySubscription[];
+  /** Every pro-eligible stale legacy subscription, before the one-list rule (for reconciliation). */
+  readonly staleLegacyAll: readonly HeldLegacySubscription[];
   /** Existing rows kept for a stale legacy subscription or an orphan Rails user. */
   readonly revokeHeldForStaleLegacy: number;
   readonly revokeHeldForOrphan: number;
@@ -1756,6 +1758,7 @@ export function computeDeltaPlan(
     barePro,
     projectedExport,
     heldLegacySubscriptions: heldLegacy,
+    staleLegacyAll: backing.held,
     revokeHeldForStaleLegacy,
     revokeHeldForOrphan,
     heldEntitlementIds,
