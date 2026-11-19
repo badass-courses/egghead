@@ -26,6 +26,7 @@ import {
   type CbSnapshot,
   type CbUser,
   type DeltaOp,
+  assertHeldNotOrphaned,
 } from "../apps/web/src/access/rails-access-delta";
 import {
   gateInputsDiff,
@@ -64,6 +65,7 @@ import {
   emailMoveCollisions,
   parseDurationMs,
   previousReceiptProblems,
+  databaseUserProblem,
   RECEIPT_FORMAT,
   railsIdListSha256,
   revokesOnHeldUsers,
@@ -1239,8 +1241,15 @@ function staleLegacyLine(id: string, user: string) {
 }
 
 /** The two fields --previous-receipt checks. */
-function receiptStub(format: unknown, exportedAt: unknown) {
-  return { format, export: { exportedAt } };
+function receiptStub(
+  format: unknown,
+  exportedAt: unknown,
+  overrides: { target?: unknown; gate?: unknown } = {},
+) {
+  return Object.assign(
+    { format, export: { exportedAt }, target: CTX.target, gate: { pass: true } },
+    overrides,
+  );
 }
 
 /** No op of any kind names this row or membership id. */
@@ -1436,7 +1445,13 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     assert.ok(result.plan.heldEntitlementIds.has(ids.seatEntitlement("9002", "8002")));
     assert.ok(result.plan.heldEntitlementIds.has(ids.subOrgEntitlement("9002", "7002")));
     const receipt = buildReceipt(held, result, CTX);
-    assert.deepEqual(receipt.revokesOnHeldUsers, { heldUsers: 2, ops: 0, users: 0, byKind: {} });
+    assert.deepEqual(receipt.revokesOnHeldUsers, {
+      heldUsers: 2,
+      ops: 0,
+      users: 0,
+      byKind: {},
+      missingTargets: 0,
+    });
     assert.doesNotMatch(receipt.gate.failures.join(), /over-granted|held users/);
     assert.match(receipt.gate.failures.join(), /1 bare pro holders/);
     // Without the hold, the same seat is revoked: the receipt join catches it.
@@ -1573,23 +1588,225 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     assert.equal(result.plan.barePro.active[0]?.lastSignInOn, "2026-10-01");
   });
 
-  void test("r7: --previous-receipt must be this receipt format and not from a newer export", () => {
+  void test("r8: --previous-receipt needs this format, a strictly earlier export, the same target and a passing gate", () => {
     const at = railsExport.manifest.exportedAt;
-    assert.deepEqual(previousReceiptProblems(receiptStub(RECEIPT_FORMAT, at), at), []);
-    assert.deepEqual(
-      previousReceiptProblems(receiptStub(RECEIPT_FORMAT, "2026-11-01T00:00:00.000Z"), at),
-      [],
+    const earlier = "2026-11-01T00:00:00.000Z";
+    const problems = (json: unknown) => previousReceiptProblems(json, at, CTX.target).join();
+    assert.equal(problems(receiptStub(RECEIPT_FORMAT, earlier)), "");
+    assert.match(problems(receiptStub(RECEIPT_FORMAT, at)), /not earlier than this one/);
+    assert.match(problems(receiptStub(RECEIPT_FORMAT, "2026-11-20T00:00:00.000Z")), /not earlier/);
+    assert.match(problems(receiptStub("egghead-access-delta-receipt/v0", earlier)), /format/);
+    assert.match(
+      problems(
+        receiptStub(RECEIPT_FORMAT, earlier, {
+          target: Object.assign({}, CTX.target, { databaseUserSha256: "other" }),
+        }),
+      ),
+      /another target/,
     );
     assert.match(
-      previousReceiptProblems(receiptStub("egghead-access-delta-receipt/v0", at), at).join(),
-      /format/,
+      problems(receiptStub(RECEIPT_FORMAT, earlier, { gate: { pass: false } })),
+      /gate did not pass/,
     );
+    assert.match(problems({ format: RECEIPT_FORMAT }), /no export/);
+    assert.equal(previousReceiptProblems(null, at, CTX.target).length, 4);
+  });
+
+  void test("r8 D3: a non-local URL without a database user is refused", () => {
+    assert.match(databaseUserProblem("production", "") ?? "", /no user name/);
+    assert.match(databaseUserProblem("beta", "") ?? "", /no user name/);
+    assert.equal(databaseUserProblem("local", ""), null);
+    assert.equal(databaseUserProblem("production", "main-user"), null);
+  });
+
+  void test("r8 D3: --resume refuses a plan reviewed as another database user", () => {
+    const sha = planSha256(analysis.plan.ops);
+    const refusals = applyRefusals({
+      expectPlan: sha,
+      reviewedPlan: {
+        planSha256: sha,
+        exportSha256: railsExport.sha256,
+        database: "egghead",
+        hostSha256: "h",
+        databaseUserSha256: databaseUserSha256("branch-user"),
+      },
+      exportSha256: railsExport.sha256,
+      database: "egghead",
+      hostSha256: "h",
+      databaseUserSha256: databaseUserSha256("main-user"),
+      exportedAtMs: NOW_MS,
+      nowMs: NOW_MS,
+      maxExportAgeMs: 3_600_000,
+      freshPlanSha256: "anything: resume compares ops, not the sha",
+      resume: { freshOpsOutsidePlan: 0 },
+      gate: { pass: true, failures: [] },
+    });
+    assert.equal(refusals.length, 1);
+    assert.match(refusals.join(), /different database user/);
+  });
+
+  void test("r8 G1: co-members kept only by a held member's org row are counted and gate by sha", () => {
+    // 102 (held bare) holds a granting seat in 7002; 140 holds a native seat there
+    // and Rails grants 140 nothing, so the held org row over-grants 140.
+    const snapshot = julySnapshot();
+    const seat = snapshot.memberships.find((row) => row.id === ids.membership("8002"));
+    assert.ok(seat);
+    const shared: CbSnapshot = {
+      ...snapshot,
+      users: [
+        ...snapshot.users.filter((user) => user.id !== ids.user("102")),
+        {
+          id: ids.user("102"),
+          email: "u102@example.test",
+          legacyRailsUserId: "102",
+          matchedExportEmails: [],
+        },
+        {
+          id: ids.user("140"),
+          email: "u140@example.test",
+          legacyRailsUserId: "140",
+          matchedExportEmails: [],
+        },
+      ],
+      memberships: [
+        ...snapshot.memberships,
+        // A CourseBuilder-native seat: the delta never revokes it.
+        Object.assign({}, seat, {
+          id: "eh_orgmem_140_on_7002",
+          userId: ids.user("140"),
+          fields: { source: "coursebuilder_invite", hasAccountMemberRole: true },
+        }),
+      ],
+    };
+    const held = exportWith([proLine("102", null), JSON.stringify(railsUser("140"))]);
+    const result = analyze(held, shared, NOW_MS);
+    const orgRow = ids.subOrgEntitlement("9002", "7002");
+    assert.ok(result.plan.heldForMemberEntitlementIds.has(orgRow));
+    const receipt = buildReceipt(held, result, CTX);
+    assert.deepEqual(receipt.heldOrganizationReach.ids, ["140"]);
     assert.match(
-      previousReceiptProblems(receiptStub(RECEIPT_FORMAT, "2026-11-20T00:00:00.000Z"), at).join(),
-      /newer than this one/,
+      receipt.gate.failures.join(),
+      /1 users keep all access only through an organization row/,
     );
-    assert.match(previousReceiptProblems({ format: RECEIPT_FORMAT }, at).join(), /no export/);
-    assert.equal(previousReceiptProblems(null, at).length, 2);
+    const accepted = buildReceipt(
+      held,
+      result,
+      ctx({ acceptHeldOrgReach: receipt.heldOrganizationReach.sha256 }),
+    );
+    assert.doesNotMatch(accepted.gate.failures.join(), /organization row held/);
+    // Without a co-member the list is empty.
+    assert.equal(
+      buildReceipt(held, analyze(held, julySnapshot(), NOW_MS), CTX).heldOrganizationReach.count,
+      0,
+    );
+  });
+
+  void test("r8 G2: an id both held and orphaned refuses to plan", () => {
+    // A pro holder with a grant line and no user line is an orphan; nothing holds orphans.
+    const orphanPro = exportWith([proLine("150", null), staleLegacyLine("7798", "150")]);
+    assert.deepEqual(orphanPro.orphanRailsUserIds, ["150"]);
+    const result = analyze(orphanPro, julySnapshot(), NOW_MS);
+    assert.ok(!result.plan.barePro.held.some((holder) => holder.railsUserId === "150"));
+    assert.ok(!result.plan.heldLegacySubscriptions.some((entry) => entry.railsUserId === "150"));
+    assert.doesNotThrow(() => assertHeldNotOrphaned(new Set(["102"]), new Set(["150"])));
+    assert.throws(
+      () => assertHeldNotOrphaned(new Set(["102", "150"]), new Set(["150"])),
+      /both held and orphaned: 150/,
+    );
+  });
+
+  void test("r8 D2/R2: the join fails on a missing target and catches moves and earlier expiries", () => {
+    const held = exportWith([proLine("102", null)]);
+    const result = analyze(held, julySnapshot(), NOW_MS);
+    const scope = {
+      barePro: result.plan.barePro,
+      heldLegacySubscriptions: result.plan.heldLegacySubscriptions,
+    };
+    const seatRow = julySnapshot().entitlements.find(
+      (row) => row.id === ids.seatEntitlement("9002", "8002"),
+    );
+    assert.ok(seatRow);
+    const missing: DeltaOp = {
+      kind: "entitlement_revoke",
+      key: "6:entitlement_revoke:eh_ent_gone",
+      entitlementId: "eh_ent_gone",
+    };
+    const join = (ops: DeltaOp[]) => revokesOnHeldUsers({ ...scope, ops }, julySnapshot());
+    assert.equal(join([missing]).missingTargets, 1);
+    const leaky = buildReceipt(held, { ...result, plan: { ...result.plan, ops: [missing] } }, CTX);
+    assert.match(leaky.gate.failures.join(), /1 ops target rows not in the CourseBuilder snapshot/);
+    // Typed shells from the plan's own expected rows, retargeted at 102's seat.
+    const expectedRow = [...result.plan.expected.entitlements.values()][0];
+    const expectedSeat = [...result.plan.expected.memberships.values()][0];
+    assert.ok(expectedRow && expectedSeat);
+    const update = (change: {
+      userId?: string;
+      expiresAt?: string;
+      metadata?: Record<string, string>;
+    }): DeltaOp => ({
+      kind: "entitlement_update",
+      key: `6:entitlement_update:${seatRow.id}`,
+      entitlement: Object.assign(
+        {},
+        expectedRow,
+        {
+          id: seatRow.id,
+          userId: seatRow.userId,
+          organizationId: seatRow.organizationId,
+          expiresAt: seatRow.expiresAt,
+        },
+        change,
+      ),
+      reasons: ["test"],
+    });
+    assert.equal(join([update({ userId: ids.user("101") })]).users, 1, "moved to another user");
+    assert.equal(
+      join([update({ expiresAt: "2026-01-01T00:00:00.000Z" })]).users,
+      1,
+      "expiry brought forward",
+    );
+    assert.equal(join([update({ metadata: { note: "only metadata" } })]).ops, 0);
+    const seat = julySnapshot().memberships.find((row) => row.id === ids.membership("8002"));
+    assert.ok(seat);
+    const moveSeat: DeltaOp = {
+      kind: "membership_update",
+      key: `3:membership_update:${seat.id}`,
+      membership: Object.assign({}, expectedSeat, {
+        id: seat.id,
+        userId: seat.userId,
+        organizationId: ids.org("7001"),
+        role: seat.role,
+        fields: seat.fields,
+      }),
+      reasons: ["organization_changed"],
+    };
+    assert.equal(join([moveSeat]).users, 1, "a seat moved to another organization");
+  });
+
+  void test("r8 D1: a held seat flag keeps the flag and its role but applies other field changes", () => {
+    // 105 loses account_member and gains owner while still held bare.
+    const lines = novemberData().map((value) =>
+      value.includes('"railsAccountSubscriptionId":"9004"')
+        ? value.replace(
+            '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":true,"hasOwnerRole":false',
+            '"railsAccountUserId":"8005","railsUserId":"105","hasMemberRole":false,"hasOwnerRole":true',
+          )
+        : value,
+    );
+    const changed = parseRailsAccessExport(exportText(lines));
+    const result = analyze(changed, julySnapshot(), NOW_MS);
+    assert.ok(result.plan.barePro.held.some((holder) => holder.railsUserId === "105"));
+    const update = opFor(result.plan.ops, "membership_update", ids.membership("8005"));
+    assert.ok(
+      update && update.kind === "membership_update",
+      JSON.stringify(result.plan.ops.filter((op) => op.key.includes("8005"))),
+    );
+    assert.equal(update.membership.fields["hasAccountMemberRole"], true);
+    assert.equal(update.membership.role, "member");
+    assert.equal(update.membership.fields["hasAccountOwnerRole"], true);
+    assert.equal(buildReceipt(changed, result, CTX).revokesOnHeldUsers.ops, 0);
+    const simulated = simulateApply(julySnapshot(), result.plan.ops, NOW_ISO);
+    assert.deepEqual(analyze(changed, simulated, NOW_MS).plan.ops, []);
   });
 
   void test("r6: a stale-only holder's bare-active row from an earlier run stays outside the window", () => {
@@ -1833,7 +2050,13 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     assert.deepEqual(receipt.orphanGrants.railsUserIds, ["101"]);
     assert.equal(receipt.orphanGrants.count, 1);
     assert.ok(receipt.orphanGrants.rowsRevoked >= 2, String(receipt.orphanGrants.rowsRevoked));
-    assert.doesNotMatch(receipt.gate.failures.join(), /orphan|no user line/);
+    assert.match(receipt.gate.failures.join(), /1 Rails users have grant lines but no user line/);
+    const accepted = buildReceipt(
+      orphaned,
+      result,
+      ctx({ acceptOrphanGrants: railsIdListSha256(["101"]) }),
+    );
+    assert.doesNotMatch(accepted.gate.failures.join(), /no user line/);
   });
 
   void test("#2.3: keep accepts only the kept seat's over-grant, not the same user's other held seat", () => {
@@ -2938,11 +3161,23 @@ void describe(
         assert.match(missing.stderr, /acceptStaleLegacy, acceptFirstBacking/);
 
         // --previous-receipt replaces the first-run acceptance and is bound by its sha.
+        // It must come from a strictly earlier export: a later one stands in for the next run.
         const second = path.join(dir, "second");
         const receiptFile = path.join(first, "receipt.json");
-        const withPrevious = await cliRaw([
+        const later = await writeExportIn(dir, "later.jsonl", novemberData(), 30_000);
+        const sameExport = await cliRaw([
           "--export",
           file,
+          "--out",
+          path.join(dir, "same"),
+          "--previous-receipt",
+          receiptFile,
+        ]);
+        assert.equal(sameExport.code, 64);
+        assert.match(sameExport.stderr, /not earlier than this one/);
+        const withPrevious = await cliRaw([
+          "--export",
+          later,
           "--out",
           second,
           "--previous-receipt",
@@ -2973,6 +3208,14 @@ void describe(
         );
         assert.equal((await stat(path.dirname(receiptPath))).mode & 0o777, 0o700);
 
+        // A non-local URL with no user name is refused before anything connects.
+        const noUser = await cliRaw(["--export", file], {
+          EGGHEAD_RUNTIME: "production",
+          DATABASE_URL: "mysql://example.connect.psdb.cloud/egghead",
+        });
+        assert.equal(noUser.code, 64);
+        assert.match(noUser.stderr, /has no user name/);
+
         // --now is for dry runs only.
         const nowApply = await cli([
           "--export",
@@ -2998,7 +3241,7 @@ void describe(
           receiptFile,
         ]);
         assert.equal(backwards.code, 64);
-        assert.match(backwards.stderr, /is newer than this one/);
+        assert.match(backwards.stderr, /not earlier than this one/);
 
         // Writes need an explicit --out; malformed flags are usage errors.
         const noOut = await cliRaw(["--export", file, "--apply", "--confirm-database", database]);

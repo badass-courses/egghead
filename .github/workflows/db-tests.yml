@@ -88,7 +88,8 @@ jobs:
     timeout-minutes: 15
     services:
       mysql:
-        image: mysql:8.0
+        # The version the suite is run against locally.
+        image: mysql:8.0.37
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: access_delta_test

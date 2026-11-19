@@ -1337,10 +1337,38 @@ function classifyEntitlement(
   return { kind: extended && onlyExtension ? "entitlement_extend" : "entitlement_update", reasons };
 }
 
+/**
+ * G2: a held user keeps everything and an orphan loses everything, so one id
+ * must never be both. Holding excludes orphans by construction; this refuses
+ * to plan if that ever breaks.
+ */
+export function assertHeldNotOrphaned(
+  held: ReadonlySet<string>,
+  orphans: ReadonlySet<string>,
+): void {
+  const both = [...held].filter((id) => orphans.has(id)).toSorted();
+  if (both.length > 0) {
+    throw new Error(`Rails ids both held and orphaned: ${both.join(", ")}; refusing to plan`);
+  }
+}
+
 /** The seat flag that grants through organization-level entitlements. */
 export function membershipGrants(membership: Pick<CbMembership, "fields">) {
   const flag = membership.fields["hasAccountMemberRole"];
   return flag === true || flag === "true";
+}
+
+/**
+ * A held seat flag: keep the flag and the role it implies as they are, and
+ * still apply every other change Rails made to the membership.
+ */
+function keepSeatFlag(expected: ExpectedMembership, existing: CbMembership): ExpectedMembership {
+  return Object.assign({}, expected, {
+    role: existing.role,
+    fields: Object.assign({}, expected.fields, {
+      hasAccountMemberRole: existing.fields["hasAccountMemberRole"],
+    }),
+  });
 }
 
 function membershipReasons(expected: ExpectedMembership, existing: CbMembership) {
@@ -1403,6 +1431,8 @@ export interface DeltaPlan {
   readonly membershipRevokeHeldForHeldUser: number;
   /** Revokes and expiries of rows and seats for orphan Rails users (deleted in Rails). */
   readonly orphanRowsRevoked: number;
+  /** Organization rows kept only because a held member's seat holds them (a subset of `heldEntitlementIds`). */
+  readonly heldForMemberEntitlementIds: ReadonlySet<string>;
   /** Entitlement and membership ids kept by a hold; their over-grants are the hold's. */
   readonly heldEntitlementIds: ReadonlySet<string>;
   readonly heldMembershipIds: ReadonlySet<string>;
@@ -1598,6 +1628,8 @@ export function computeDeltaPlan(
   );
   let revokeHeldForHeldUser = 0;
   let membershipRevokeHeldForHeldUser = 0;
+  const heldForMemberEntitlementIds = new Set<string>();
+  assertHeldNotOrphaned(heldRailsUserIds, orphanRailsUserIds);
   // Organizations that also carry live grants this delta does not own (for
   // example a CourseBuilder Stripe team subscription). Their seat flags gate
   // those grants too, so the delta never clears them.
@@ -1679,26 +1711,26 @@ export function computeDeltaPlan(
       });
       continue;
     }
-    const reasons = membershipReasons(membership, existing);
     const clearsFlag = membershipGrants(existing) && !membershipGrants(membership);
+    let target = membership;
     if (clearsFlag && isHeldUser(existing.userId, existing.fields["legacyRailsUserId"])) {
       membershipRevokeHeldForHeldUser++;
       heldMembershipIds.add(existing.id);
-      continue;
-    }
-    if (
+      target = keepSeatFlag(membership, existing);
+    } else if (
       clearsFlag &&
       existing.organizationId &&
       nativeOrganizations.has(existing.organizationId) &&
       !holdSeatFlag(existing)
     ) {
-      continue;
+      target = keepSeatFlag(membership, existing);
     }
+    const reasons = membershipReasons(target, existing);
     if (reasons.length > 0) {
       ops.push({
         kind: "membership_update",
         key: opKey("membership_update", membership.id),
-        membership,
+        membership: target,
         reasons,
       });
     }
@@ -1769,12 +1801,16 @@ export function computeDeltaPlan(
       continue;
     }
     const railsUserId = row.metadata["railsUserId"];
-    if (
-      isHeldUser(row.userId, railsUserId) ||
-      (row.organizationId !== null && heldOrganizations.has(row.organizationId))
-    ) {
+    if (isHeldUser(row.userId, railsUserId)) {
       revokeHeldForHeldUser++;
       heldEntitlementIds.add(row.id);
+      continue;
+    }
+    if (row.organizationId !== null && heldOrganizations.has(row.organizationId)) {
+      // Kept for a held member's seat; every other member keeps it too.
+      revokeHeldForHeldUser++;
+      heldEntitlementIds.add(row.id);
+      heldForMemberEntitlementIds.add(row.id);
       continue;
     }
     if (typeof railsUserId === "string" && unresolvedRailsUserIds.has(railsUserId)) {
@@ -1819,6 +1855,7 @@ export function computeDeltaPlan(
     orphanRowsRevoked,
     heldEntitlementIds,
     heldMembershipIds,
+    heldForMemberEntitlementIds,
   };
 }
 
