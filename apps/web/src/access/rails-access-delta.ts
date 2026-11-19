@@ -1,0 +1,1249 @@
+// Paid-access delta between a Rails access export and CourseBuilder's projection.
+//
+// Pure: no database, no clock, no filesystem. `rails-access-delta-store.ts` reads
+// and writes CourseBuilder; `scripts/access-delta.ts` is the CLI.
+//
+// Law (ADR-0006, lenient at the flip): anyone Rails grants today keeps access.
+// A subscription in trialing/active/past_due grants regardless of its period end.
+// The expected rows reproduce the July 2026 projection (migrate-egghead
+// tools/me.ts `collectAuthProjectionSource`) byte for byte in ids and keys, so
+// rows written in July compare as unchanged and nothing is duplicated.
+
+import { createHash } from "node:crypto";
+
+import { z } from "zod";
+
+export const RAILS_ACCESS_EXPORT_FORMAT = "egghead-rails-access-export/v1";
+export const ACCESS_DELTA_LAW = "adr-0006-lenient-status";
+
+const SUBSCRIPTION_SOURCE_TYPE = "rails_account_subscription";
+const SUBSCRIPTION_ACCESS_LAW = "lenient_status_v1";
+const ROLE_SOURCE_TYPE = "rails_user_role";
+const PURCHASE_SOURCE_TYPE = "rails_sellable_purchase";
+const BASIC_SOURCE_TYPE = "rails_legacy_basic_role";
+const BASIC_ENTITLEMENT_TYPE = "egghead_basic_legacy_access";
+const BASIC_ACCESS_LAW = "adr_0007_legacy_basic_role_access_projection";
+const ALL_ACCESS_TYPE = "egghead_all_access_subscription";
+const LIFETIME_TYPE = "egghead_lifetime_access";
+const STAFF_TYPE = "egghead_staff_special_access";
+const MEMBERSHIP_ACCESS_TYPE = "egghead_membership_access";
+const PLAYLIST_ACCESS_TYPE = "egghead_playlist_access";
+
+/**
+ * Source types this delta owns. Rows with any other source type (CourseBuilder
+ * Stripe writes, legacy-pro quarantine rows) are never touched or revoked.
+ */
+export const DELTA_OWNED_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  ROLE_SOURCE_TYPE,
+  SUBSCRIPTION_SOURCE_TYPE,
+  PURCHASE_SOURCE_TYPE,
+  BASIC_SOURCE_TYPE,
+]);
+
+const RAILS_MEMBERSHIP_SOURCES: ReadonlySet<string> = new Set([
+  "rails_account_user",
+  "rails_scoped_account_role",
+]);
+
+// ---------------------------------------------------------------------------
+// Export format
+
+const nullableText = z.string().nullable();
+const count = z.number().int().nonnegative();
+
+const userLine = z.object({
+  kind: z.literal("user"),
+  railsUserId: z.string().min(1),
+  email: nullableText,
+  firstName: nullableText,
+  lastName: nullableText,
+  avatarUrl: nullableText,
+  confirmedAt: nullableText,
+  createdAt: nullableText,
+  isBanned: z.boolean(),
+  signInCount: z.number().int(),
+  hasAuthenticationToken: z.boolean(),
+});
+
+const roleGrantLine = z.object({
+  kind: z.literal("role_grant"),
+  railsUserId: z.string().min(1),
+  roleName: z.string().min(1),
+});
+
+const basicGrantLine = z.object({
+  kind: z.literal("basic_grant"),
+  railsUserId: z.string().min(1),
+});
+
+const subscriptionMember = z.object({
+  railsAccountUserId: nullableText,
+  railsUserId: z.string().min(1),
+  hasMemberRole: z.boolean(),
+  hasOwnerRole: z.boolean(),
+  createdAt: nullableText,
+});
+
+const subscriptionLine = z.object({
+  kind: z.literal("subscription"),
+  railsAccountSubscriptionId: z.string().min(1),
+  railsAccountId: nullableText,
+  accountName: nullableText,
+  accountSlug: nullableText,
+  accountGuid: nullableText,
+  status: z.string(),
+  quantity: z.number().int(),
+  currentPeriodStart: nullableText,
+  currentPeriodEnd: nullableText,
+  cancelAtPeriodEnd: z.boolean(),
+  createdAt: nullableText,
+  stripeCustomerIdPresent: z.boolean(),
+  stripeSubscriptionIdPresent: z.boolean(),
+  members: z.array(subscriptionMember),
+});
+
+const purchaseLine = z.object({
+  kind: z.literal("purchase"),
+  railsSellablePurchaseId: z.string().min(1),
+  railsUserId: z.string().min(1),
+  sellableType: nullableText,
+  sellableId: nullableText,
+  purchaseState: nullableText,
+  bulk: z.boolean(),
+  restrictedToCountry: nullableText,
+  expiresAt: nullableText,
+  createdAt: nullableText,
+});
+
+const manifestCounts = z.object({
+  user: count,
+  role_grant: count,
+  basic_grant: count,
+  subscription: count,
+  purchase: count,
+});
+
+const manifestLine = z.object({
+  kind: z.literal("manifest"),
+  format: z.literal(RAILS_ACCESS_EXPORT_FORMAT),
+  exportedAt: z.string(),
+  counts: manifestCounts,
+});
+
+const exportLine = z.discriminatedUnion("kind", [
+  userLine,
+  roleGrantLine,
+  basicGrantLine,
+  subscriptionLine,
+  purchaseLine,
+  manifestLine,
+]);
+
+export type RailsUser = z.infer<typeof userLine>;
+export type RailsRoleGrant = z.infer<typeof roleGrantLine>;
+export type RailsBasicGrant = z.infer<typeof basicGrantLine>;
+export type RailsSubscription = z.infer<typeof subscriptionLine>;
+export type RailsSubscriptionMember = z.infer<typeof subscriptionMember>;
+export type RailsPurchase = z.infer<typeof purchaseLine>;
+export type RailsExportManifest = z.infer<typeof manifestLine>;
+
+export interface RailsAccessExport {
+  readonly sha256: string;
+  readonly manifest: RailsExportManifest;
+  readonly users: readonly RailsUser[];
+  readonly roleGrants: readonly RailsRoleGrant[];
+  readonly basicGrants: readonly RailsBasicGrant[];
+  readonly subscriptions: readonly RailsSubscription[];
+  readonly purchases: readonly RailsPurchase[];
+}
+
+export class RailsExportError extends Error {
+  override readonly name = "RailsExportError";
+}
+
+/**
+ * Parse and verify a Rails access export. Throws unless the manifest is the last
+ * line and its counts match the lines read, so a truncated or partial export can
+ * never turn into mass revocation.
+ */
+export function parseRailsAccessExport(text: string): RailsAccessExport {
+  const sha256 = createHash("sha256").update(text).digest("hex");
+  const users: RailsUser[] = [];
+  const roleGrants: RailsRoleGrant[] = [];
+  const basicGrants: RailsBasicGrant[] = [];
+  const subscriptions: RailsSubscription[] = [];
+  const purchases: RailsPurchase[] = [];
+  let manifest: RailsExportManifest | null = null;
+  const lines = text.split("\n");
+
+  for (const [index, raw] of lines.entries()) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    if (manifest) {
+      throw new RailsExportError(`line ${index + 1}: data after the manifest line`);
+    }
+
+    let json: unknown;
+    try {
+      json = JSON.parse(trimmed);
+    } catch {
+      throw new RailsExportError(`line ${index + 1}: not valid JSON`);
+    }
+    const parsed = exportLine.safeParse(json);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const where = issue ? `${issue.path.join(".") || "(root)"}: ${issue.message}` : "invalid";
+      throw new RailsExportError(`line ${index + 1}: ${where}`);
+    }
+
+    const line = parsed.data;
+    switch (line.kind) {
+      case "user":
+        users.push(line);
+        break;
+      case "role_grant":
+        roleGrants.push(line);
+        break;
+      case "basic_grant":
+        basicGrants.push(line);
+        break;
+      case "subscription":
+        subscriptions.push(line);
+        break;
+      case "purchase":
+        purchases.push(line);
+        break;
+      case "manifest":
+        manifest = line;
+        break;
+    }
+  }
+
+  if (!manifest) {
+    throw new RailsExportError("no manifest line: the export is incomplete or truncated");
+  }
+
+  const read = {
+    user: users.length,
+    role_grant: roleGrants.length,
+    basic_grant: basicGrants.length,
+    subscription: subscriptions.length,
+    purchase: purchases.length,
+  };
+  const kinds = ["user", "role_grant", "basic_grant", "subscription", "purchase"] as const;
+  for (const kind of kinds) {
+    if (read[kind] !== manifest.counts[kind]) {
+      throw new RailsExportError(
+        `manifest says ${manifest.counts[kind]} ${kind} lines but the file has ${read[kind]}`,
+      );
+    }
+  }
+
+  const userIds = new Set<string>();
+  for (const user of users) {
+    if (userIds.has(user.railsUserId)) {
+      throw new RailsExportError(`duplicate user line for Rails user ${user.railsUserId}`);
+    }
+    userIds.add(user.railsUserId);
+  }
+  const referenced = [
+    ...roleGrants.map((grant) => grant.railsUserId),
+    ...basicGrants.map((grant) => grant.railsUserId),
+    ...purchases.map((purchase) => purchase.railsUserId),
+    ...subscriptions.flatMap((sub) => sub.members.map((member) => member.railsUserId)),
+  ];
+  for (const railsUserId of referenced) {
+    if (!userIds.has(railsUserId)) {
+      throw new RailsExportError(`Rails user ${railsUserId} is referenced but has no user line`);
+    }
+  }
+
+  return { sha256, manifest, users, roleGrants, basicGrants, subscriptions, purchases };
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic ids (identical to the July projection)
+
+function authId(prefix: string, ...parts: Array<string | number>) {
+  const input = parts.map((part) => String(part)).join(":");
+  return `${prefix}_${createHash("sha1").update(input).digest("hex").slice(0, 32)}`;
+}
+
+export const projectionIds = {
+  user: (railsUserId: string) => authId("eh_user", railsUserId),
+  organization: (railsAccountId: string) => authId("eh_org", railsAccountId),
+  membership: (railsAccountUserId: string) => authId("eh_orgmem", railsAccountUserId),
+  roleMembership: (railsAccountId: string, railsUserId: string) =>
+    authId("eh_orgmem", `role:${railsAccountId}:${railsUserId}`),
+  product: (sellableType: string, sellableId: string) =>
+    authId("eh_product", sellableType, sellableId),
+  entitlement: (idempotencyKey: string) => authId("eh_entitlement", idempotencyKey),
+};
+
+export function normalizeEmail(value: string | null | undefined) {
+  return (value ?? "").trim();
+}
+
+/** Mirrors the July projection's uniqueness key (MySQL `utf8mb4_0900_ai_ci`-like). */
+export function emailUniquenessKey(value: string | null | undefined) {
+  return normalizeEmail(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+/** Rails `timestamp without time zone` columns hold UTC; json_build_object omits the offset. */
+export function railsTimestampToIso(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const hasZone = /(?:z|[+-]\d{2}(?::?\d{2})?)$/i.test(value);
+  const parsed = Date.parse(hasZone ? value : `${value.replace(" ", "T")}Z`);
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+}
+
+// MySQL TIMESTAMP ends in January 2038. Rails has far-future "effectively
+// unexpired" purchases; the July projection stored those as no expiry.
+const MAX_MYSQL_TIMESTAMP_MS = Date.UTC(2038, 0, 18, 23, 59, 59);
+
+export function mysqlExpiryOrNull(iso: string | null): string | null {
+  if (iso === null) return null;
+  return Date.parse(iso) > MAX_MYSQL_TIMESTAMP_MS ? null : iso;
+}
+
+// ---------------------------------------------------------------------------
+// CourseBuilder snapshot
+
+export type JsonRecord = Record<string, unknown>;
+
+export interface CbUser {
+  readonly id: string;
+  readonly email: string;
+  readonly legacyRailsUserId: string | null;
+  /**
+   * Export emails MySQL's column collation says equal this user's email (the
+   * store pairs them in SQL). Covers cases the JS key misses, such as `ß`/`ss`.
+   */
+  readonly matchedExportEmails: readonly string[];
+}
+
+export interface CbEntitlement {
+  readonly id: string;
+  readonly entitlementType: string;
+  readonly userId: string | null;
+  readonly organizationId: string | null;
+  readonly organizationMembershipId: string | null;
+  readonly sourceType: string;
+  readonly sourceId: string;
+  readonly metadata: JsonRecord;
+  /** ISO string or null. */
+  readonly expiresAt: string | null;
+  /** ISO string or null. */
+  readonly deletedAt: string | null;
+}
+
+export interface CbMembership {
+  readonly id: string;
+  readonly organizationId: string | null;
+  readonly userId: string;
+  readonly role: string;
+  readonly fields: JsonRecord;
+}
+
+/**
+ * What the store read from CourseBuilder. `users` holds only users the export can
+ * reference (by legacy Rails id or email). `entitlements` holds every live row
+ * plus every soft-deleted row this delta owns.
+ */
+export interface CbSnapshot {
+  readonly users: readonly CbUser[];
+  readonly entitlements: readonly CbEntitlement[];
+  readonly memberships: readonly CbMembership[];
+  readonly organizationIds: readonly string[];
+}
+
+// ---------------------------------------------------------------------------
+// Plan operations (JSON-serializable; dates are ISO strings)
+
+export interface NewUser {
+  readonly id: string;
+  readonly email: string;
+  readonly name: string;
+  readonly role: string;
+  readonly fields: JsonRecord;
+  readonly emailVerified: string | null;
+  readonly image: string | null;
+  readonly createdAt: string | null;
+}
+
+export interface NewOrganization {
+  readonly id: string;
+  readonly name: string;
+  readonly fields: JsonRecord;
+  readonly createdAt: string | null;
+}
+
+export interface ExpectedMembership {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly userId: string;
+  readonly invitedById: string;
+  readonly role: string;
+  readonly fields: JsonRecord;
+  readonly createdAt: string | null;
+}
+
+export interface ExpectedEntitlement {
+  readonly id: string;
+  readonly entitlementType: string;
+  readonly userId: string | null;
+  readonly organizationId: string | null;
+  readonly organizationMembershipId: string | null;
+  readonly sourceType: string;
+  readonly sourceId: string;
+  readonly metadata: JsonRecord;
+  readonly expiresAt: string | null;
+  readonly createdAt: string | null;
+}
+
+export type DeltaOp =
+  | {
+      readonly kind: "user_create";
+      readonly key: string;
+      readonly railsUserId: string;
+      readonly user: NewUser;
+    }
+  | {
+      readonly kind: "user_link";
+      readonly key: string;
+      readonly userId: string;
+      readonly railsUserId: string;
+    }
+  | {
+      readonly kind: "organization_create";
+      readonly key: string;
+      readonly organization: NewOrganization;
+    }
+  | {
+      readonly kind: "membership_create" | "membership_update";
+      readonly key: string;
+      readonly membership: ExpectedMembership;
+      readonly reasons: readonly string[];
+    }
+  | { readonly kind: "membership_revoke"; readonly key: string; readonly membershipId: string }
+  | {
+      readonly kind: "entitlement_grant" | "entitlement_extend" | "entitlement_update";
+      readonly key: string;
+      readonly entitlement: ExpectedEntitlement;
+      readonly reasons: readonly string[];
+    }
+  | {
+      readonly kind: "entitlement_revoke" | "entitlement_expire";
+      readonly key: string;
+      readonly entitlementId: string;
+    };
+
+export type DeltaOpKind = DeltaOp["kind"];
+
+export const DELTA_OP_KINDS: readonly DeltaOpKind[] = [
+  "user_create",
+  "user_link",
+  "organization_create",
+  "membership_create",
+  "membership_update",
+  "entitlement_grant",
+  "entitlement_extend",
+  "entitlement_update",
+  "membership_revoke",
+  "entitlement_revoke",
+  "entitlement_expire",
+];
+
+// Grants land before revokes so a crash mid-apply never removes access first.
+const PHASE: Record<DeltaOpKind, number> = {
+  user_create: 1,
+  user_link: 1,
+  organization_create: 2,
+  membership_create: 3,
+  membership_update: 3,
+  entitlement_grant: 4,
+  entitlement_extend: 4,
+  entitlement_update: 4,
+  membership_revoke: 5,
+  entitlement_revoke: 6,
+  entitlement_expire: 6,
+};
+
+function opKey(kind: DeltaOpKind, id: string) {
+  return `${PHASE[kind]}:${kind}:${id}`;
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+
+export type IdentityOutcome =
+  | { readonly kind: "matched"; readonly userId: string }
+  | { readonly kind: "linked"; readonly userId: string }
+  | { readonly kind: "created"; readonly userId: string; readonly user: NewUser }
+  | {
+      readonly kind: "unresolved";
+      readonly reason: "empty_email" | "duplicate_rails_email" | "email_owned_by_other_rails_user";
+    };
+
+function displayName(user: RailsUser) {
+  return [user.firstName, user.lastName]
+    .map((part) => (part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function compact(record: Record<string, unknown>): JsonRecord {
+  const result: JsonRecord = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
+}
+
+function newUserRow(user: RailsUser): NewUser {
+  return {
+    id: projectionIds.user(user.railsUserId),
+    email: normalizeEmail(user.email),
+    name: displayName(user),
+    role: user.isBanned ? "banned" : "user",
+    fields: {
+      source: "rails_access_delta",
+      legacyRailsUserId: user.railsUserId,
+      isBanned: user.isBanned,
+      signInCount: user.signInCount,
+      hasAuthenticationToken: user.hasAuthenticationToken,
+    },
+    emailVerified: railsTimestampToIso(user.confirmedAt),
+    image: user.avatarUrl,
+    createdAt: railsTimestampToIso(user.createdAt),
+  };
+}
+
+/** Match by legacy Rails id, then by email; Rails id order decides email collisions. */
+export function resolveIdentities(
+  railsExport: Pick<RailsAccessExport, "users">,
+  snapshot: Pick<CbSnapshot, "users">,
+): Map<string, IdentityOutcome> {
+  const byRailsId = new Map<string, CbUser>();
+  const byEmail = new Map<string, CbUser>();
+  const keysOf = (user: CbUser) => [
+    emailUniquenessKey(user.email),
+    ...user.matchedExportEmails.map((email) => emailUniquenessKey(email)),
+  ];
+  for (const user of snapshot.users) {
+    if (user.legacyRailsUserId) byRailsId.set(user.legacyRailsUserId, user);
+    for (const key of keysOf(user)) byEmail.set(key, user);
+  }
+
+  const ordered = railsExport.users.toSorted(
+    (a, b) =>
+      Number(a.railsUserId) - Number(b.railsUserId) || a.railsUserId.localeCompare(b.railsUserId),
+  );
+  const claimedEmail = new Set<string>();
+  const outcomes = new Map<string, IdentityOutcome>();
+
+  // Pass 1: legacy-id matches claim their CourseBuilder emails first.
+  for (const user of ordered) {
+    const matched = byRailsId.get(user.railsUserId);
+    if (!matched) continue;
+    outcomes.set(user.railsUserId, { kind: "matched", userId: matched.id });
+    for (const key of keysOf(matched)) claimedEmail.add(key);
+  }
+
+  for (const user of ordered) {
+    if (outcomes.has(user.railsUserId)) continue;
+    const email = normalizeEmail(user.email);
+    if (!email) {
+      outcomes.set(user.railsUserId, { kind: "unresolved", reason: "empty_email" });
+      continue;
+    }
+    const key = emailUniquenessKey(email);
+    if (claimedEmail.has(key)) {
+      const holder = byEmail.get(key);
+      outcomes.set(user.railsUserId, {
+        kind: "unresolved",
+        reason: holder?.legacyRailsUserId
+          ? "email_owned_by_other_rails_user"
+          : "duplicate_rails_email",
+      });
+      continue;
+    }
+    claimedEmail.add(key);
+    const existing = byEmail.get(key);
+    if (existing) {
+      outcomes.set(
+        user.railsUserId,
+        existing.legacyRailsUserId
+          ? { kind: "unresolved", reason: "email_owned_by_other_rails_user" }
+          : { kind: "linked", userId: existing.id },
+      );
+      continue;
+    }
+    const row = newUserRow(user);
+    outcomes.set(user.railsUserId, { kind: "created", userId: row.id, user: row });
+  }
+
+  return outcomes;
+}
+
+function resolvedUserId(identities: ReadonlyMap<string, IdentityOutcome>, railsUserId: string) {
+  const outcome = identities.get(railsUserId);
+  return outcome && outcome.kind !== "unresolved" ? outcome.userId : null;
+}
+
+// ---------------------------------------------------------------------------
+// Expected projection
+
+export interface PolicyCounts {
+  bulkPlaylistPurchases: number;
+  countryRestrictedPlaylistPurchases: number;
+  membersWithoutMemberRole: number;
+  subscriptionsWithoutAccount: number;
+  purchasesWithoutSellable: number;
+  unresolvedGrantRows: number;
+}
+
+export interface ExpectedProjection {
+  readonly entitlements: Map<string, ExpectedEntitlement>;
+  readonly memberships: Map<string, ExpectedMembership>;
+  readonly organizations: Map<string, NewOrganization>;
+  readonly policy: PolicyCounts;
+}
+
+function roleEntitlement(grant: RailsRoleGrant, userId: string): ExpectedEntitlement {
+  const key = `rails_user_role:${grant.roleName}:${grant.railsUserId}`;
+  const lifetime = grant.roleName === "lifetime_subscriber" || grant.roleName === "VIP";
+  return {
+    id: projectionIds.entitlement(key),
+    entitlementType: lifetime ? LIFETIME_TYPE : STAFF_TYPE,
+    userId,
+    organizationId: null,
+    organizationMembershipId: null,
+    sourceType: ROLE_SOURCE_TYPE,
+    sourceId: `${grant.roleName}:${grant.railsUserId}`,
+    metadata: {
+      idempotencyKey: key,
+      source: "special_role",
+      roleName: grant.roleName,
+      railsUserId: grant.railsUserId,
+      accessReason:
+        grant.roleName === "lifetime_subscriber" ? "lifetime_subscriber_role" : "special_role",
+    },
+    expiresAt: null,
+    createdAt: null,
+  };
+}
+
+function basicEntitlement(grant: RailsBasicGrant, userId: string): ExpectedEntitlement {
+  const key = `${BASIC_SOURCE_TYPE}:${grant.railsUserId}`;
+  return {
+    id: projectionIds.entitlement(key),
+    entitlementType: BASIC_ENTITLEMENT_TYPE,
+    userId,
+    organizationId: null,
+    organizationMembershipId: null,
+    sourceType: BASIC_SOURCE_TYPE,
+    sourceId: grant.railsUserId,
+    metadata: {
+      idempotencyKey: key,
+      source: "legacy_basic_role",
+      roleName: "basic",
+      railsUserId: grant.railsUserId,
+      accessReason: "legacy_basic_role",
+      accessLaw: BASIC_ACCESS_LAW,
+      identityRolePreserved: false,
+      defaultGrant: true,
+    },
+    expiresAt: null,
+    createdAt: null,
+  };
+}
+
+function membershipRole(member: RailsSubscriptionMember) {
+  if (member.hasOwnerRole) return "owner";
+  if (member.hasMemberRole) return "member";
+  return "user";
+}
+
+export function buildExpectedProjection(
+  railsExport: RailsAccessExport,
+  identities: ReadonlyMap<string, IdentityOutcome>,
+): ExpectedProjection {
+  const entitlements = new Map<string, ExpectedEntitlement>();
+  const memberships = new Map<string, ExpectedMembership>();
+  const organizations = new Map<string, NewOrganization>();
+  const policy: PolicyCounts = {
+    bulkPlaylistPurchases: 0,
+    countryRestrictedPlaylistPurchases: 0,
+    membersWithoutMemberRole: 0,
+    subscriptionsWithoutAccount: 0,
+    purchasesWithoutSellable: 0,
+    unresolvedGrantRows: 0,
+  };
+  const put = (row: ExpectedEntitlement) => entitlements.set(row.id, row);
+
+  for (const grant of railsExport.roleGrants) {
+    const userId = resolvedUserId(identities, grant.railsUserId);
+    if (userId) put(roleEntitlement(grant, userId));
+    else policy.unresolvedGrantRows++;
+  }
+
+  for (const grant of railsExport.basicGrants) {
+    const userId = resolvedUserId(identities, grant.railsUserId);
+    if (userId) put(basicEntitlement(grant, userId));
+    else policy.unresolvedGrantRows++;
+  }
+
+  for (const sub of railsExport.subscriptions) {
+    if (!sub.railsAccountId) {
+      policy.subscriptionsWithoutAccount++;
+      continue;
+    }
+    const railsAccountId = sub.railsAccountId;
+    const orgId = projectionIds.organization(railsAccountId);
+    const createdAt = railsTimestampToIso(sub.createdAt);
+    const currentPeriodEnd = railsTimestampToIso(sub.currentPeriodEnd);
+    if (!organizations.has(orgId)) {
+      organizations.set(orgId, {
+        id: orgId,
+        name: sub.accountName || `Rails account ${railsAccountId}`,
+        fields: compact({
+          source: SUBSCRIPTION_SOURCE_TYPE,
+          legacyRailsAccountId: railsAccountId,
+          legacyRailsAccountGuid: sub.accountGuid ?? undefined,
+          legacyRailsAccountSlug: sub.accountSlug ?? undefined,
+          stripeCustomerIdPresent: sub.stripeCustomerIdPresent,
+        }),
+        createdAt,
+      });
+    }
+
+    const orgKey = `rails_account_subscription:${sub.railsAccountSubscriptionId}:organization:${orgId}:${ALL_ACCESS_TYPE}`;
+    put({
+      id: projectionIds.entitlement(orgKey),
+      entitlementType: ALL_ACCESS_TYPE,
+      userId: null,
+      organizationId: orgId,
+      organizationMembershipId: null,
+      sourceType: SUBSCRIPTION_SOURCE_TYPE,
+      sourceId: sub.railsAccountSubscriptionId,
+      metadata: {
+        idempotencyKey: orgKey,
+        source: "enabled_account_subscription",
+        railsAccountSubscriptionId: sub.railsAccountSubscriptionId,
+        railsAccountId,
+        status: sub.status,
+        quantity: sub.quantity,
+        accessReason: "enabled_account_subscription",
+        accessLaw: SUBSCRIPTION_ACCESS_LAW,
+        currentPeriodEnd,
+        ownerType: "organization",
+      },
+      expiresAt: null,
+      createdAt,
+    });
+
+    for (const member of sub.members) {
+      const userId = resolvedUserId(identities, member.railsUserId);
+      if (!userId) {
+        if (member.hasMemberRole) policy.unresolvedGrantRows++;
+        continue;
+      }
+      const membershipId = member.railsAccountUserId
+        ? projectionIds.membership(member.railsAccountUserId)
+        : projectionIds.roleMembership(railsAccountId, member.railsUserId);
+      memberships.set(membershipId, {
+        id: membershipId,
+        organizationId: orgId,
+        userId,
+        invitedById: userId,
+        role: membershipRole(member),
+        fields: compact({
+          source: member.railsAccountUserId ? "rails_account_user" : "rails_scoped_account_role",
+          legacyRailsAccountUserId: member.railsAccountUserId ?? undefined,
+          legacyRailsAccountId: railsAccountId,
+          legacyRailsUserId: member.railsUserId,
+          hasAccountMemberRole: member.hasMemberRole,
+          hasAccountOwnerRole: member.hasOwnerRole,
+        }),
+        createdAt: railsTimestampToIso(member.createdAt),
+      });
+      if (!member.hasMemberRole) {
+        policy.membersWithoutMemberRole++;
+        continue;
+      }
+      const seatKey = `rails_account_subscription:${sub.railsAccountSubscriptionId}:membership:${membershipId}:${ALL_ACCESS_TYPE}`;
+      put({
+        id: projectionIds.entitlement(seatKey),
+        entitlementType: ALL_ACCESS_TYPE,
+        userId,
+        organizationId: orgId,
+        organizationMembershipId: membershipId,
+        sourceType: SUBSCRIPTION_SOURCE_TYPE,
+        sourceId: sub.railsAccountSubscriptionId,
+        metadata: compact({
+          idempotencyKey: seatKey,
+          source: "enabled_account_subscription",
+          railsAccountSubscriptionId: sub.railsAccountSubscriptionId,
+          railsAccountId,
+          railsAccountUserId: member.railsAccountUserId ?? undefined,
+          railsUserId: member.railsUserId,
+          status: sub.status,
+          quantity: sub.quantity,
+          accessReason: "enabled_account_subscription_membership",
+          accessLaw: SUBSCRIPTION_ACCESS_LAW,
+          currentPeriodEnd,
+          scopedAccountMemberRole: true,
+          ownerType: "user",
+        }),
+        expiresAt: null,
+        createdAt,
+      });
+    }
+  }
+
+  for (const purchase of railsExport.purchases) {
+    const userId = resolvedUserId(identities, purchase.railsUserId);
+    if (!userId) {
+      policy.unresolvedGrantRows++;
+      continue;
+    }
+    const sellableType = purchase.sellableType ?? "";
+    const sellableId = purchase.sellableId ?? "";
+    if (!sellableType || !sellableId) {
+      policy.purchasesWithoutSellable++;
+      continue;
+    }
+    const entitlementType =
+      sellableType === "Resource::Membership" ? MEMBERSHIP_ACCESS_TYPE : PLAYLIST_ACCESS_TYPE;
+    // Rails Lesson.purchased: bulk playlist rows are seat pools, not content grants.
+    if (entitlementType === PLAYLIST_ACCESS_TYPE && purchase.bulk) {
+      policy.bulkPlaylistPurchases++;
+      continue;
+    }
+    const restrictedToCountry = purchase.restrictedToCountry?.trim() || null;
+    if (entitlementType === PLAYLIST_ACCESS_TYPE && restrictedToCountry) {
+      policy.countryRestrictedPlaylistPurchases++;
+    }
+    const key = `rails_sellable_purchase:${purchase.railsSellablePurchaseId}`;
+    put({
+      id: projectionIds.entitlement(key),
+      entitlementType,
+      userId,
+      organizationId: null,
+      organizationMembershipId: null,
+      sourceType: PURCHASE_SOURCE_TYPE,
+      sourceId: purchase.railsSellablePurchaseId,
+      metadata: compact({
+        idempotencyKey: key,
+        source: "viewable_sellable_purchase",
+        railsSellablePurchaseId: purchase.railsSellablePurchaseId,
+        railsUserId: purchase.railsUserId,
+        productId: projectionIds.product(sellableType, sellableId),
+        sellableType,
+        sellableId,
+        accessReason: "viewable_sellable_purchase",
+        bulk: purchase.bulk ? true : undefined,
+        restrictedToCountry: restrictedToCountry ?? undefined,
+      }),
+      expiresAt: mysqlExpiryOrNull(railsTimestampToIso(purchase.expiresAt)),
+      createdAt: railsTimestampToIso(purchase.createdAt),
+    });
+  }
+
+  return { entitlements, memberships, organizations, policy };
+}
+
+// ---------------------------------------------------------------------------
+// Diff
+
+function timeOf(value: unknown): number | null {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value !== "string") return null;
+  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function sameValue(expected: unknown, stored: unknown): boolean {
+  if ((expected === null || expected === undefined) && (stored === null || stored === undefined)) {
+    return true;
+  }
+  const expectedTime = timeOf(expected);
+  const storedTime = timeOf(stored);
+  if (expectedTime !== null && storedTime !== null) return expectedTime === storedTime;
+  if (typeof expected === "boolean" && typeof stored === "string") {
+    return String(expected) === stored;
+  }
+  if (typeof expected === "number" && typeof stored === "string") {
+    return String(expected) === stored;
+  }
+  return JSON.stringify(expected) === JSON.stringify(stored);
+}
+
+/** Keys present in `expected` that differ in `stored`. Extra stored keys are kept and ignored. */
+function changedKeys(expected: JsonRecord, stored: JsonRecord) {
+  return Object.keys(expected).filter((key) => !sameValue(expected[key], stored[key]));
+}
+
+function laterThan(next: unknown, previous: unknown) {
+  const nextTime = timeOf(next);
+  const previousTime = timeOf(previous);
+  return nextTime !== null && (previousTime === null || nextTime > previousTime);
+}
+
+function classifyEntitlement(
+  expected: ExpectedEntitlement,
+  existing: CbEntitlement | undefined,
+): {
+  kind: "entitlement_grant" | "entitlement_extend" | "entitlement_update";
+  reasons: string[];
+} | null {
+  if (!existing) return { kind: "entitlement_grant", reasons: ["new"] };
+  if (existing.deletedAt !== null) return { kind: "entitlement_grant", reasons: ["restored"] };
+
+  const reasons: string[] = [];
+  const columns = [
+    "entitlementType",
+    "userId",
+    "organizationId",
+    "organizationMembershipId",
+    "sourceType",
+    "sourceId",
+  ] as const;
+  for (const column of columns) {
+    if (!sameValue(expected[column], existing[column])) reasons.push(`${column}_changed`);
+  }
+
+  let extended = false;
+  if (!sameValue(expected.expiresAt, existing.expiresAt)) {
+    const longer =
+      (expected.expiresAt === null && existing.expiresAt !== null) ||
+      laterThan(expected.expiresAt, existing.expiresAt);
+    reasons.push(longer ? "expires_at_later" : "expires_at_earlier");
+    extended ||= longer;
+  }
+  for (const key of changedKeys(expected.metadata, existing.metadata)) {
+    if (key === "currentPeriodEnd" && laterThan(expected.metadata[key], existing.metadata[key])) {
+      reasons.push("current_period_end_later");
+      extended = true;
+    } else {
+      reasons.push(`metadata_${key}_changed`);
+    }
+  }
+
+  if (reasons.length === 0) return null;
+  const onlyExtension = reasons.every(
+    (reason) => reason === "expires_at_later" || reason === "current_period_end_later",
+  );
+  return { kind: extended && onlyExtension ? "entitlement_extend" : "entitlement_update", reasons };
+}
+
+function membershipGrants(membership: Pick<CbMembership, "fields">) {
+  const flag = membership.fields["hasAccountMemberRole"];
+  return flag === true || flag === "true";
+}
+
+function membershipReasons(expected: ExpectedMembership, existing: CbMembership) {
+  const reasons: string[] = [];
+  if (!sameValue(expected.organizationId, existing.organizationId))
+    reasons.push("organization_changed");
+  if (!sameValue(expected.userId, existing.userId)) reasons.push("user_changed");
+  if (!sameValue(expected.role, existing.role)) reasons.push("role_changed");
+  for (const key of changedKeys(expected.fields, existing.fields))
+    reasons.push(`fields_${key}_changed`);
+  return reasons;
+}
+
+export interface DeltaPlan {
+  readonly ops: readonly DeltaOp[];
+  readonly identities: ReadonlyMap<string, IdentityOutcome>;
+  readonly expected: ExpectedProjection;
+  readonly revokeHeldForIdentity: number;
+  /** Seat flags kept because the member's Rails identity is unresolved. */
+  readonly membershipRevokeHeldForIdentity: number;
+  /** Seat flags kept because the organization also holds CourseBuilder-native grants. */
+  readonly membershipFlagHeldForNativeOrganization: number;
+  readonly activeOwnedEntitlements: number;
+}
+
+/**
+ * Compute every change that makes CourseBuilder match the Rails export.
+ * `nowMs` is the export's clock (manifest `exportedAt`): owned rows Rails dropped
+ * only because they expired by then become `entitlement_expire`, not revokes.
+ */
+export function computeDeltaPlan(
+  railsExport: RailsAccessExport,
+  snapshot: CbSnapshot,
+  nowMs: number,
+): DeltaPlan {
+  const identities = resolveIdentities(railsExport, snapshot);
+  const expected = buildExpectedProjection(railsExport, identities);
+  const ops: DeltaOp[] = [];
+  const unresolvedRailsUserIds = new Set(
+    [...identities].filter(([, outcome]) => outcome.kind === "unresolved").map(([id]) => id),
+  );
+  // Organizations that also carry live grants this delta does not own (for
+  // example a CourseBuilder Stripe team subscription). Their seat flags gate
+  // those grants too, so the delta never clears them.
+  const nativeOrganizations = new Set(
+    snapshot.entitlements
+      .filter(
+        (row) =>
+          row.deletedAt === null &&
+          row.organizationId !== null &&
+          !DELTA_OWNED_SOURCE_TYPES.has(row.sourceType),
+      )
+      .map((row) => row.organizationId),
+  );
+  let membershipRevokeHeldForIdentity = 0;
+  let membershipFlagHeldForNativeOrganization = 0;
+
+  for (const [railsUserId, outcome] of identities) {
+    if (outcome.kind === "created") {
+      ops.push({
+        kind: "user_create",
+        key: opKey("user_create", outcome.userId),
+        railsUserId,
+        user: outcome.user,
+      });
+    } else if (outcome.kind === "linked") {
+      ops.push({
+        kind: "user_link",
+        key: opKey("user_link", outcome.userId),
+        userId: outcome.userId,
+        railsUserId,
+      });
+    }
+  }
+
+  const organizationIds = new Set(snapshot.organizationIds);
+  for (const organization of expected.organizations.values()) {
+    if (!organizationIds.has(organization.id)) {
+      ops.push({
+        kind: "organization_create",
+        key: opKey("organization_create", organization.id),
+        organization,
+      });
+    }
+  }
+
+  const membershipsById = new Map(snapshot.memberships.map((row) => [row.id, row]));
+  for (const membership of expected.memberships.values()) {
+    const existing = membershipsById.get(membership.id);
+    if (!existing) {
+      ops.push({
+        kind: "membership_create",
+        key: opKey("membership_create", membership.id),
+        membership,
+        reasons: ["new"],
+      });
+      continue;
+    }
+    const reasons = membershipReasons(membership, existing);
+    const clearsFlag = membershipGrants(existing) && !membershipGrants(membership);
+    if (clearsFlag && existing.organizationId && nativeOrganizations.has(existing.organizationId)) {
+      membershipFlagHeldForNativeOrganization++;
+      continue;
+    }
+    if (reasons.length > 0) {
+      ops.push({
+        kind: "membership_update",
+        key: opKey("membership_update", membership.id),
+        membership,
+        reasons,
+      });
+    }
+  }
+
+  // A Rails-sourced seat flag that Rails no longer backs would keep granting
+  // through organization-level entitlements; clear it.
+  for (const membership of snapshot.memberships) {
+    const source = membership.fields["source"];
+    if (typeof source !== "string" || !RAILS_MEMBERSHIP_SOURCES.has(source)) continue;
+    if (!membershipGrants(membership)) continue;
+    // An expected row is handled above as create/update (no double count).
+    if (expected.memberships.has(membership.id)) continue;
+    const railsUserId = membership.fields["legacyRailsUserId"];
+    if (typeof railsUserId === "string" && unresolvedRailsUserIds.has(railsUserId)) {
+      membershipRevokeHeldForIdentity++;
+      continue;
+    }
+    if (membership.organizationId && nativeOrganizations.has(membership.organizationId)) {
+      membershipFlagHeldForNativeOrganization++;
+      continue;
+    }
+    ops.push({
+      kind: "membership_revoke",
+      key: opKey("membership_revoke", membership.id),
+      membershipId: membership.id,
+    });
+  }
+
+  const entitlementsById = new Map(snapshot.entitlements.map((row) => [row.id, row]));
+  for (const entitlement of expected.entitlements.values()) {
+    const change = classifyEntitlement(entitlement, entitlementsById.get(entitlement.id));
+    if (change) {
+      ops.push({
+        kind: change.kind,
+        key: opKey(change.kind, entitlement.id),
+        entitlement,
+        reasons: change.reasons,
+      });
+    }
+  }
+
+  let revokeHeldForIdentity = 0;
+  let activeOwnedEntitlements = 0;
+  for (const row of snapshot.entitlements) {
+    if (row.deletedAt !== null || !DELTA_OWNED_SOURCE_TYPES.has(row.sourceType)) continue;
+    activeOwnedEntitlements++;
+    if (expected.entitlements.has(row.id)) continue;
+    const railsUserId = row.metadata["railsUserId"];
+    if (typeof railsUserId === "string" && unresolvedRailsUserIds.has(railsUserId)) {
+      // Rails still grants this user; we just could not resolve them. Keep the row.
+      revokeHeldForIdentity++;
+      continue;
+    }
+    // Expired by the export's clock: Rails dropped it for time, not for a cancel.
+    const kind =
+      row.expiresAt !== null && Date.parse(row.expiresAt) <= nowMs
+        ? "entitlement_expire"
+        : "entitlement_revoke";
+    ops.push({ kind, key: opKey(kind, row.id), entitlementId: row.id });
+  }
+
+  const sorted = ops.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return {
+    ops: sorted,
+    identities,
+    expected,
+    revokeHeldForIdentity,
+    membershipRevokeHeldForIdentity,
+    membershipFlagHeldForNativeOrganization,
+    activeOwnedEntitlements,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Simulated apply (same semantics as the store's SQL)
+
+/** Upserts clear the delta's own revoke markers (the store uses JSON_REMOVE). */
+function withoutKeys(record: JsonRecord, keys: readonly string[]): JsonRecord {
+  const result: JsonRecord = { ...record };
+  for (const key of keys) delete result[key];
+  return result;
+}
+
+function mergePatch(stored: JsonRecord, patch: JsonRecord): JsonRecord {
+  const result: JsonRecord = { ...stored };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete result[key];
+    else result[key] = value;
+  }
+  return result;
+}
+
+export function simulateApply(
+  snapshot: CbSnapshot,
+  ops: readonly DeltaOp[],
+  nowIso: string,
+): CbSnapshot {
+  const users = new Map(snapshot.users.map((row) => [row.id, row]));
+  const organizationIds = new Set(snapshot.organizationIds);
+  const memberships = new Map(snapshot.memberships.map((row) => [row.id, row]));
+  const entitlements = new Map(snapshot.entitlements.map((row) => [row.id, row]));
+
+  for (const op of ops) {
+    switch (op.kind) {
+      case "user_create":
+        if (!users.has(op.user.id)) {
+          users.set(op.user.id, {
+            id: op.user.id,
+            email: op.user.email,
+            legacyRailsUserId: op.railsUserId,
+            matchedExportEmails: [],
+          });
+        }
+        break;
+      case "user_link": {
+        const user = users.get(op.userId);
+        if (user && user.legacyRailsUserId === null) {
+          users.set(op.userId, { ...user, legacyRailsUserId: op.railsUserId });
+        }
+        break;
+      }
+      case "organization_create":
+        organizationIds.add(op.organization.id);
+        break;
+      case "membership_create":
+      case "membership_update": {
+        const existing = memberships.get(op.membership.id);
+        memberships.set(op.membership.id, {
+          id: op.membership.id,
+          organizationId: op.membership.organizationId,
+          userId: op.membership.userId,
+          role: op.membership.role,
+          fields: withoutKeys(mergePatch(existing?.fields ?? {}, op.membership.fields), [
+            "memberRoleClearedBy",
+          ]),
+        });
+        break;
+      }
+      case "membership_revoke": {
+        const existing = memberships.get(op.membershipId);
+        if (existing) {
+          memberships.set(op.membershipId, {
+            ...existing,
+            fields: { ...existing.fields, hasAccountMemberRole: false },
+          });
+        }
+        break;
+      }
+      case "entitlement_grant":
+      case "entitlement_extend":
+      case "entitlement_update": {
+        const existing = entitlements.get(op.entitlement.id);
+        const row = op.entitlement;
+        entitlements.set(row.id, {
+          id: row.id,
+          entitlementType: row.entitlementType,
+          userId: row.userId,
+          organizationId: row.organizationId,
+          organizationMembershipId: row.organizationMembershipId,
+          sourceType: row.sourceType,
+          sourceId: row.sourceId,
+          metadata: withoutKeys(mergePatch(existing?.metadata ?? {}, row.metadata), [
+            "revokedBy",
+            "revokedReason",
+          ]),
+          expiresAt: row.expiresAt,
+          deletedAt: null,
+        });
+        break;
+      }
+      case "entitlement_revoke":
+      case "entitlement_expire": {
+        const existing = entitlements.get(op.entitlementId);
+        if (
+          existing &&
+          existing.deletedAt === null &&
+          DELTA_OWNED_SOURCE_TYPES.has(existing.sourceType)
+        ) {
+          entitlements.set(op.entitlementId, { ...existing, deletedAt: nowIso });
+        }
+        break;
+      }
+    }
+  }
+
+  return {
+    users: [...users.values()],
+    organizationIds: [...organizationIds],
+    memberships: [...memberships.values()],
+    entitlements: [...entitlements.values()],
+  };
+}
