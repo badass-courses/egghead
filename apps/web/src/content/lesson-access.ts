@@ -16,7 +16,8 @@ import type { JsonFields } from "./fields";
  *    so it only counts when no stronger signal is present.
  *
  * Anything else (including rows with no gating fields at all) is NOT free:
- * course-linked lessons gate by default.
+ * course-linked lessons gate by default. Standalone lessons gate only with an
+ * explicit pro signal; a resolved lesson-level free marking always wins.
  */
 export function lessonFreeForeverFromFields(fields: JsonFields): boolean {
   const isProContent = booleanOrNull(fields["isProContent"]);
@@ -36,6 +37,16 @@ export function lessonFreeForeverFromFields(fields: JsonFields): boolean {
   if (access === "pro") return false;
 
   return fields["freeForever"] === true;
+}
+
+/** Explicit paid intent, including the older Rails freeAccess mirror. */
+export function lessonExplicitlyProFromFields(fields: JsonFields): boolean {
+  return (
+    fields["isProContent"] === true ||
+    fields["is_pro_content"] === true ||
+    lowerTextOrNull(fields["access"]) === "pro" ||
+    fields["freeAccess"] === false
+  );
 }
 
 export function lessonHasRailsProContentSignal(fields: JsonFields): boolean {
@@ -61,8 +72,8 @@ export function lessonFreeForeverSql(alias: string) {
           THEN JSON_EXTRACT(${alias}.fields, '$.freeAccess') = CAST('true' AS JSON)
         WHEN JSON_TYPE(JSON_EXTRACT(${alias}.fields, '$.free_forever')) = 'BOOLEAN'
           THEN JSON_EXTRACT(${alias}.fields, '$.free_forever') = CAST('true' AS JSON)
-        WHEN LOWER(JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.access'))) IN ('free', 'pro')
-          THEN LOWER(JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.access'))) = 'free'
+        WHEN LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.access')))) IN ('free', 'pro')
+          THEN LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.access')))) = 'free'
         ELSE JSON_EXTRACT(${alias}.fields, '$.freeForever') = CAST('true' AS JSON)
       END,
       FALSE
@@ -70,12 +81,35 @@ export function lessonFreeForeverSql(alias: string) {
   `;
 }
 
+/** SQL twin of `lessonExplicitlyProFromFields`. */
+export function lessonExplicitlyProSql(alias: string) {
+  return `COALESCE((
+    (JSON_TYPE(JSON_EXTRACT(${alias}.fields, '$.isProContent')) = 'BOOLEAN'
+      AND JSON_EXTRACT(${alias}.fields, '$.isProContent') = CAST('true' AS JSON))
+    OR (JSON_TYPE(JSON_EXTRACT(${alias}.fields, '$.is_pro_content')) = 'BOOLEAN'
+      AND JSON_EXTRACT(${alias}.fields, '$.is_pro_content') = CAST('true' AS JSON))
+    OR LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(${alias}.fields, '$.access')))) = 'pro'
+    OR (JSON_TYPE(JSON_EXTRACT(${alias}.fields, '$.freeAccess')) = 'BOOLEAN'
+      AND JSON_EXTRACT(${alias}.fields, '$.freeAccess') = CAST('false' AS JSON))
+  ), FALSE)`;
+}
+
 /**
- * Access law: only course-linked lessons may gate, and a lesson-level free
- * marking always wins over course-level gating (Rails `free_forever` truth).
+ * Access law: courses, course-linked lessons and explicitly pro standalone
+ * lessons gate. A resolved lesson-level free marking always wins.
  */
-export function lessonRequiresAccess(input: { courseLinked: boolean; freeForever: boolean }) {
-  return input.courseLinked && !input.freeForever;
+export function lessonRequiresAccess(input: {
+  courseLinked: boolean;
+  freeForever: boolean;
+  isProContent: boolean;
+}) {
+  return (input.courseLinked || input.isProContent) && !input.freeForever;
+}
+
+/** SQL twin of `lessonRequiresAccess`; courseLinkedSql is the caller's link predicate. */
+export function lessonRequiresAccessSql(alias: string, courseLinkedSql: string) {
+  return `((${courseLinkedSql} OR ${lessonExplicitlyProSql(alias)})
+    AND NOT ${lessonFreeForeverSql(alias)})`;
 }
 
 function booleanOrNull(value: unknown): boolean | null {
