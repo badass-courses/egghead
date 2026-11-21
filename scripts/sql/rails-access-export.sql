@@ -147,10 +147,17 @@ viewable_purchases AS (
     sp.bulk,
     sp.expires_at,
     sp.created_at,
+    sp.application_id,
     NULLIF(BTRIM(cp.conditions ->> 'restricted_to_country'), '') AS restricted_to_country
   FROM sellable_purchases sp
   LEFT JOIN coupons cp ON cp.id = sp.coupon_id
-  WHERE (sp.expires_at IS NULL OR sp.expires_at > NOW())
+  -- Rails is multi-tenant: Just JavaScript, Epic React, Testing JavaScript,
+  -- Technical Interviews and Pure React sell through this same table. Only
+  -- egghead's own applications grant egghead access: 10 (egghead.io course
+  -- purchases) and 111 (egghead lifetime memberships). NULL is the pre-application
+  -- egghead era. The delta script re-checks this list (EGGHEAD_RAILS_APPLICATION_IDS).
+  WHERE (sp.application_id IS NULL OR sp.application_id IN (10, 111))
+    AND (sp.expires_at IS NULL OR sp.expires_at > NOW())
     AND (sp.purchase_state IS NULL OR sp.purchase_state <> 'access_revoked')
 ),
 pro_holders AS (
@@ -271,6 +278,7 @@ purchase_lines AS (
     'kind', 'purchase',
     'railsSellablePurchaseId', p.id::text,
     'railsUserId', p.user_id::text,
+    'railsApplicationId', p.application_id::text,
     'sellableType', p.sellable_type,
     'sellableId', p.sellable_id::text,
     'purchaseState', p.purchase_state,

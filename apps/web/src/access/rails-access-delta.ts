@@ -121,10 +121,24 @@ const subscriptionLine = z.object({
   members: z.array(subscriptionMember),
 });
 
+/**
+ * Rails applications whose purchases grant egghead access: 10 is egghead.io
+ * (course purchases), 111 is egghead (lifetime memberships). Rails is
+ * multi-tenant, so Just JavaScript, Epic React, Testing JavaScript, Technical
+ * Interviews and Pure React purchases share `sellable_purchases`; they grant
+ * nothing here. A null application id is the pre-application egghead era.
+ */
+export const EGGHEAD_RAILS_APPLICATION_IDS: ReadonlySet<string> = new Set(["10", "111"]);
+
+export function isEggheadRailsApplication(applicationId: string | null) {
+  return applicationId === null || EGGHEAD_RAILS_APPLICATION_IDS.has(applicationId);
+}
+
 const purchaseLine = z.object({
   kind: z.literal("purchase"),
   railsSellablePurchaseId: z.string().min(1),
   railsUserId: z.string().min(1),
+  railsApplicationId: nullableText,
   sellableType: nullableText,
   sellableId: nullableText,
   purchaseState: nullableText,
@@ -777,6 +791,8 @@ export interface PolicyCounts {
   membersWithoutMemberRole: number;
   subscriptionsWithoutAccount: number;
   purchasesWithoutSellable: number;
+  /** Purchases from another Skill Recordings site sharing Rails; never granted. */
+  otherTenantPurchases: number;
   unresolvedGrantRows: number;
   /** Projected backed-`pro` and bare-active rows per source type (each alarms on growth). */
   backingGrants: Record<GatedSourceType, number>;
@@ -1029,6 +1045,7 @@ export function buildExpectedProjection(
     membersWithoutMemberRole: 0,
     subscriptionsWithoutAccount: 0,
     purchasesWithoutSellable: 0,
+    otherTenantPurchases: 0,
     unresolvedGrantRows: 0,
     backingGrants: {
       rails_gift: 0,
@@ -1160,6 +1177,10 @@ export function buildExpectedProjection(
   }
 
   for (const purchase of railsExport.purchases) {
+    if (!isEggheadRailsApplication(purchase.railsApplicationId)) {
+      policy.otherTenantPurchases++;
+      continue;
+    }
     const userId = resolvedUserId(identities, purchase.railsUserId);
     if (!userId) {
       policy.unresolvedGrantRows++;
