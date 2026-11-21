@@ -68,6 +68,22 @@ describe('builder access gate (sec-20261121-008)', () => {
 		}
 	})
 
+	it('opens only the coursebuilder webhook, not the rest of its router', () => {
+		for (const route of ['refund', 'redeem', 'checkout', 'create-magic-link', 'lookup', 'transfer', 'session', 'purchases', 'srt']) {
+			expect(decideAccess(`/api/coursebuilder/${route}`, anon), route).toBe('deny')
+		}
+		expect(decideAccess('/api/coursebuilder/webhook/deepgram', anon)).toBe('allow')
+	})
+
+	it('refuses server-action calls from non-editors except on invite pages', () => {
+		for (const path of ['/login', '/privacy', '/api/inngest', '/posts/x/edit', '/activate']) {
+			expect(decideAccess(path, { ...anon, serverAction: true }), path).toBe('deny')
+			expect(decideAccess(path, { ...learner, serverAction: true }), path).toBe('deny')
+			expect(decideAccess(path, { ...contributor, serverAction: true }), path).toBe('allow')
+		}
+		expect(decideAccess('/invites/abc', { ...anon, serverAction: true })).toBe('allow')
+	})
+
 	it('does not let a lookalike path ride an exemption', () => {
 		expect(decideAccess('/api/inngest-evil', anon)).toBe('deny')
 		expect(decideAccess('/api/muxer', anon)).toBe('deny')
@@ -135,6 +151,12 @@ describe('Mux webhook signature', () => {
 		expect(verifyMuxSignature({ rawBody: body, header: null, secret, nowSeconds: t })).toBe(false)
 		expect(verifyMuxSignature({ rawBody: body, header: `t=${t},v1=${sign(body)}`, secret: undefined, nowSeconds: t })).toBe(false)
 	})
+
+	it('accepts any of several v1 values during a secret rotation', () => {
+		const stale = 'ab'.repeat(32)
+		expect(verifyMuxSignature({ rawBody: body, header: `t=${t},v1=${stale},v1=${sign(body)}`, secret, nowSeconds: t })).toBe(true)
+		expect(verifyMuxSignature({ rawBody: body, header: `t=${t},v1=${stale}`, secret, nowSeconds: t })).toBe(false)
+	})
 })
 
 const src = fileURLToPath(new URL('../../src/', import.meta.url))
@@ -178,6 +200,10 @@ describe('client-reachable server actions check the caller before touching data'
 	it('profile edits check ownership and tag creation needs an editor', () => {
 		expect(read('src/trpc/api/routers/users.ts')).toMatch(/signedInUser\.id !== input\.userId/)
 		expect(read('src/trpc/api/routers/tags.ts')).toMatch(/ability\.cannot\('create', 'Content'\)/)
+	})
+
+	it('cron refuses without a configured secret', () => {
+		expect(read('src/app/api/cron/route.ts')).toMatch(/if \(!secret \|\| /)
 	})
 
 	it('upload URL minting and the Mux direct upload require an editor', () => {

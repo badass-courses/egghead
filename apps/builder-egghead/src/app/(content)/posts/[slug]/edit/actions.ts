@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation'
 import { courseBuilderAdapter } from '@/db'
 import { inngest } from '@/inngest/inngest.server'
 import { getServerAuthSession } from '@/server/auth'
+import { requireContentEditor } from '@/server/require-editor'
 
 import { VIDEO_RESOURCE_CREATED_EVENT } from '@coursebuilder/core/events/video'
 import { ContentResource } from '@coursebuilder/core/schemas'
@@ -38,6 +39,7 @@ export async function reprocessTranscript({
 }
 
 export const onPostSave = async (resource: ContentResource) => {
+	await requireContentEditor()
 	const post = await courseBuilderAdapter.getContentResource(resource.id)
 	revalidateTag('posts', 'max')
 	revalidatePath(`/${post?.fields?.slug}`)

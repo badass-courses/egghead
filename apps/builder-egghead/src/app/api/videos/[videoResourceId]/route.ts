@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getVideoResource } from '@/lib/video-resource-query'
+import { courseBuilderAdapter } from '@/db'
 import { getUserAbilityForRequest } from '@/server/ability-for-request'
 
 const corsHeaders = {
@@ -20,7 +20,7 @@ export async function GET(
 	const { ability, user } = await getUserAbilityForRequest(request)
 
 	if (params.videoResourceId) {
-		const videoResource = await getVideoResource(params.videoResourceId)
+		const videoResource = await courseBuilderAdapter.getVideoResource(params.videoResourceId)
 
 		if (!videoResource) {
 			return NextResponse.json(

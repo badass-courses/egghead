@@ -4,9 +4,10 @@ export const dynamic = 'force-dynamic'
 
 export async function GET() {
 	const requestHeaders = await headers()
-	// Vercel Cron sends `Authorization: Bearer $CRON_SECRET` when the secret is set.
+	// Vercel Cron sends `Authorization: Bearer $CRON_SECRET` once CRON_SECRET is
+	// set on the project. Without it, refuse: this path is exempt from the proxy.
 	const secret = process.env.CRON_SECRET
-	if (secret && requestHeaders.get('authorization') !== `Bearer ${secret}`) {
+	if (!secret || requestHeaders.get('authorization') !== `Bearer ${secret}`) {
 		return new Response(null, { status: 401 })
 	}
 	console.log(
