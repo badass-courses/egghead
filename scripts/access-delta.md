@@ -65,6 +65,7 @@ The export needs a Rails read connection, and the dry run needs a CourseBuilder 
    - there are identity conflicts (`identityConflicts`): Rails emails the column collation treats as one, emails owned by another Rails user, or held email updates. If the plan has `user_email_update` or `user_link` ops, run the identity pass (step 5) first;
    - there are held bare `pro` holders (`proCrossCheck.bareProHolders`): Rails holds `pro`, and nothing else grants the user (no special role, `basic`, member seat, membership purchase or live backing), and they did not sign in within `--bare-pro-active-days` (default 365) of the export. Recently active ones are granted instead (`bareProActive`). The receipt lists every held id, a `sample` of 20 spread across the list, and `bareProSignIn` buckets. Accepting means no new grant for the held ones; their existing rows and seats are kept. Once a person has ruled, pass `--accept-bare-pro <bareProHolders.sha256>`. The sha covers the exact set, so a changed list fails again even at the same size;
    - there are held stale legacy subscriptions (`heldLegacySubscriptions`): a pro holder's legacy subscription whose `currentPeriodEnd` is more than `--legacy-stale-days` (default 45) before the export, or missing, because Stripe stopped renewing it without a cancel. A holder whose only backing is such a subscription is bare `pro` with dead billing, so the same sign-in window decides: inside `--bare-pro-active-days` they get `rails_bare_pro_active` (counted in `grantedInWindow` and the first-backing count); outside it the subscription is held. A holder granted another way is on no list, and a stale-only holder is never also on the bare list. `holderSignIn` buckets every stale-only holder. Accepting means no new grant; existing rows are kept. Accept the held set with `--accept-stale-legacy <heldLegacySubscriptions.sha256>`;
+   - there are held managed subscriptions (`heldManagedSubscriptions`): managed-only holders without a current paid-through legacy subscription. Accept the exact managed-subscription/user pairs with `--accept-stale-managed <heldManagedSubscriptions.sha256>`. Acceptance grants nothing, creates no user and keeps existing access. Another independent source can still grant a holder; those are not managed-only holds;
    - any op takes something from a held user (`revokesOnHeldUsers.ops`; must read 0). The receipt joins revokes, expiries, seat-flag clears, an `entitlement_update` that moves a row to another user or organization or brings its expiry forward, and a `membership_update` that moves a seat, to the Rails ids they reach: through the row's `railsUserId`, its linked user, or, for an organization row, every member whose seat flag grants. An op whose row is not in the snapshot counts in `missingTargets`, which must also read 0. Either count above 0 is a bug: do not apply;
    - there are orphan grants (`orphanGrants`): grant lines for a Rails user with no user line. Their rows are revoked (below), so look first: an export that dropped user lines would read as paying users deleted. Accept with `--accept-orphan-grants <orphanGrants.sha256>`;
    - non-held users keep all access only through an organization row held for a held member's seat (`heldOrganizationReach`: over-granted after the simulated apply through that row). Rule on them, then pass `--accept-held-org-reach <heldOrganizationReach.sha256>`;
@@ -130,6 +131,38 @@ The export needs a Rails read connection, and the dry run needs a CourseBuilder 
 
 **When an apply or resume is refused or fails.** This covers `CourseBuilder changed since the reviewed dry run`, a `UserCreateCollisionError` or `UserWriteConflictError` (a signup or edit raced the apply; that batch rolled back), exit 2, or an export that got too old. In every case: export Rails again if the export is old, dry-run into a **new** `--out` folder (for example `$WORK/flip-2`), review that receipt, and `--apply` that plan. The old folder stays locked by its unfinished `cursor.json`, which is fine. Every write is idempotent, and the new plan accounts for whatever the partial apply already did.
 
+## Canary and rollback
+
+Use a private, whitespace-separated file of Rails user ids. Pass `--only-users "$WORK/canary-users.txt"` on the dry run, apply, resume and rollback. Selection is bound to the reviewed plan, not the filename; changing its ids refuses apply. A shared organization must include every member or the canary refuses it. Pick individual holders for the first 50-user canary.
+
+The receipt's plan SHA covers the selected operations. The gate still checks the full export and its holds before any selected writes. Post-apply `remainingOps` is scoped to the selected users, so unselected work does not fail canary verification.
+
+```sh
+# Use the same runtime, injected URL and acceptance flags as the full dry run.
+pnpm access:delta --export "$WORK/rails-access-export.jsonl" --out "$WORK/canary" \
+  --only-users "$WORK/canary-users.txt" <reviewed-acceptance-flags>
+pnpm access:delta --export "$WORK/rails-access-export.jsonl" --out "$WORK/canary" \
+  --only-users "$WORK/canary-users.txt" <reviewed-acceptance-flags> \
+  --apply --expect-plan <canary-plan-sha> --confirm-database <database>
+
+# Read-only preview is the default; no export-age deadline on undo.
+pnpm access:delta:rollback --plan "$WORK/canary/plan.json" \
+  --applied "$WORK/canary/cursor.json" --only-users "$WORK/canary-users.txt"
+pnpm access:delta:rollback --plan "$WORK/canary/plan.json" \
+  --applied "$WORK/canary/cursor.json" --only-users "$WORK/canary-users.txt" \
+  --apply --expect-plan <canary-plan-sha> --confirm-database <database>
+```
+
+For a full-plan rollback, omit `--only-users` on both planning and rollback. Rollback never infers a new subset from a full-plan cursor: review a selected plan before applying a canary.
+
+Plan v7 stores full previous row images. Apply locks and checks those images, then saves a full-row post-apply hash in the private cursor. Rollback locks and validates every touched row before changing any. It restores previous columns, including JSON and fractional timestamps, and deletes only rows that were absent before apply, in order: entitlements, memberships, organizations, users. Generated columns are left to MySQL. New references to a created user, membership or organization refuse deletion. The transaction rolls back on any failure, including PlanetScale's transaction timeout; no partial rollback is accepted.
+
+The target must match runtime, database, host hash and database-user hash. Writes use the same commerce guard as apply (beta remains read-only), reviewed SHA and database confirmation. An old cursor without undo proof refuses rollback. Full undo images remain in mode-0600 plan/cursor files, not receipt samples.
+
+Lifecycle: `reviewed -> prepared (undo proof saved inside the batch transaction) -> committed (cursor advanced) -> rollback reviewed -> rolled back`. A crash between prepare and commit can leave an ambiguous batch: a row/hash mismatch refuses resume and rollback rather than guessing. Keep the private files and replan with the desk. A repeated rollback refuses once rows no longer match their post-apply hashes. After a successful rollback the original reviewed apply can run again while the export is fresh; an old export needs a new dry run.
+
+See [the no-sends proof](./access-delta-no-sends.md) for each checked trigger and its source. Before live apply, the desk must confirm the target's DB triggers as well; only the disposable branch was inspected here.
+
 ## Export format (`egghead-rails-access-export/v3`)
 
 One JSON object per line, ordered by kind then id:
@@ -140,7 +173,7 @@ One JSON object per line, ordered by kind then id:
 - `subscription`: an account subscription in an enabled status, with status, quantity, period start and end (UTC ISO; Rails stores epoch seconds), and every member with `hasMemberRole` (scoped `account_member`) and `hasOwnerRole`. Role-only members have a null `railsAccountUserId`.
 - `purchase`: a viewable sellable purchase (`expires_at` null or in the future, and not `access_revoked`), with its bulk flag and coupon country restriction. `refunded` purchases are viewable in Rails, so they are exported.
 - `pro_holder`: a user holding the global `pro` role, which is what Rails checks (`Ability#lesson_permissions` calls `is_pro?`; `UserStatusVerifier` syncs it from `Subscription::ProStatusChecker`), with `lastSignInOn`: `GREATEST(current_sign_in_at, last_sign_in_at)` as a date, null if never.
-- `backing_grant`: live legacy backing for users Rails grants as pro (`pro`, `basic` or a special role). `gift` is `Gift.active` (`claimed_at` within `COALESCE(duration_months, 12)` months; a NULL `claimed_at` or 0 months is never active), with that end as `expiresAt`. `managed_subscription` is membership of a managed subscription with `is_active`. `legacy_subscription` is `Subscription.active` (`cancelled_on IS NULL` and `willCancelAfterPeriod = false`; NULL is not false), with `currentPeriodEnd` as metadata only.
+- `backing_grant`: live legacy backing for users Rails grants as pro (`pro`, `basic` or a special role). `gift` is `Gift.active` (`claimed_at` within `COALESCE(duration_months, 12)` months; a NULL `claimed_at` or 0 months is never active), with that end as `expiresAt`. `managed_subscription` is membership of a managed subscription with `is_active`, joined to `subscriptions` through `subscription_id`. It grants only if that row has `cancelled_on IS NULL` and a `currentPeriodEnd` date on or after the export's UTC date. Otherwise the export carries `heldReason` (`no_subscription`, `cancelled`, `no_period_end`, `period_end_stale`) and the delta holds it. Managed-only holders never fall back to a recent-sign-in grant. `legacy_subscription` is `Subscription.active` (`cancelled_on IS NULL` and `willCancelAfterPeriod = false`; NULL is not false), with `currentPeriodEnd` as metadata only.
 - `manifest`: the last line, with per-kind counts from the same snapshot, and `backedWithoutPro`: live backing per source for users Rails does not grant as pro (counted, never exported).
 
 The parser refuses a file without the manifest, with lines after it, with counts that disagree, or with duplicate users. A truncated export therefore can never read as "these people lost access". A grant line for a Rails user with no `user` line is an orphan: held, listed in `orphanGrants`, and the gate fails until accepted.
@@ -216,7 +249,7 @@ pnpm access:delta:test          # pure suite; the MySQL suite skips
 ACCESS_DELTA_MYSQL_URL=mysql://…@127.0.0.1:PORT/<name>_test pnpm access:delta:test
 ```
 
-The MySQL suite drops and recreates four `egghead_` tables in a disposable loopback database whose name ends in `_test`. It reads with a page size of 3 and a chunk size of 2, so keyset paging and chunked lookups really run. It also drives the CLI as a child process. `pnpm check` runs only the pure suite; the MySQL suite needs a fixture database, so CI does not run it.
+The MySQL suite drops and recreates four `egghead_` tables in a disposable loopback database whose name ends in `_test`. `scripts/access-delta-fixture-proof.ts` also runs it against the exact in-process leased fixture user, bound by `ACCESS_DELTA_MYSQL_FIXTURE_USER_SHA256`, after the round trip on the fixture's existing live-schema tables. No live/beta credential is accepted by that runner. It reads with a page size of 3 and a chunk size of 2, so keyset paging and chunked lookups really run. It also drives the CLI as a child process. `pnpm check` runs only the pure suite; the MySQL suite needs a fixture database, so CI does not run it.
 
 All fixture data is synthetic (`scripts/access-delta.fixtures.ts`): emails are `@example.test` and ids are invented.
 
