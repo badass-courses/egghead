@@ -1,7 +1,11 @@
 import mysql from "mysql2/promise";
 import { drizzle } from "drizzle-orm/mysql2";
 import { eq } from "drizzle-orm";
-import { authenticateDevice, bearerDeviceToken } from "@/server/device-identity";
+import {
+  authenticateDevice,
+  bearerDeviceToken,
+  logDeviceAuthenticationFailure,
+} from "@/server/device-identity";
 import { subject } from "@casl/ability";
 import * as schema from "@/db/schema";
 import { assertLocalWorkshopRuntime } from "./mysql-store";
@@ -11,7 +15,11 @@ import { WorkshopActor } from "@egghead/core/workshops";
 export async function localWorkshopActor(databaseUrl: string, bearer: string | null) {
   assertLocalWorkshopRuntime(databaseUrl);
   if (!bearerDeviceToken(bearer)) return null;
-  const connection = await mysql.createConnection(databaseUrl);
+  const connection = await mysql.createConnection(databaseUrl).catch(() => {
+    logDeviceAuthenticationFailure("connection_failed");
+    return null;
+  });
+  if (!connection) return null;
   try {
     const database = drizzle(connection, { schema, mode: "default" });
     const identity = await authenticateDevice(bearer, (token) =>

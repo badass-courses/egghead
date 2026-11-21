@@ -10,6 +10,9 @@
     "test/workshops/**/*.ts",
     "test/workshops-mysql/**/*.ts",
     "test/auth/**/*.ts",
+    "test/schema/**/*.ts",
+    "src/app/oauth/**/*.ts",
+    "src/types/human-readable-ids.d.ts",
     "vitest.workshops.config.ts",
     "vitest.workshops-mysql.config.ts"
   ],

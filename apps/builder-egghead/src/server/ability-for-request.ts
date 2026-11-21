@@ -1,11 +1,10 @@
-import { NextRequest } from "next/server";
-import { getAbility } from "@/ability";
+import { createAppAbility } from "@/ability";
 import { authenticateDevice } from "./device-identity";
 import { db } from "@/db";
 import { deviceAccessToken } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-export async function getUserAbilityForRequest(request: NextRequest) {
+export async function getUserAbilityForRequest(request: Pick<Request, "headers">) {
   const identity = await authenticateDevice(request.headers.get("Authorization"), (token) =>
     db.query.deviceAccessToken.findFirst({
       where: eq(deviceAccessToken.token, token),
@@ -22,5 +21,5 @@ export async function getUserAbilityForRequest(request: NextRequest) {
       },
     }),
   );
-  return identity ?? { user: null, ability: getAbility(), tokenId: null };
+  return identity ?? { user: null, ability: createAppAbility([]), tokenId: null };
 }

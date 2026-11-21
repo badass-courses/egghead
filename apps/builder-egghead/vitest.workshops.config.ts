@@ -7,6 +7,7 @@ export default defineConfig({
     include: [
       "test/workshops/**/*.test.ts",
       "test/auth/**/*.test.ts",
+      "test/schema/**/*.test.ts",
       "test/content/**/*.test.ts",
       "../web/test/workshops/**/*.test.ts",
     ],

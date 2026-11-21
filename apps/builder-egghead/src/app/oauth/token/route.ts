@@ -1,90 +1,72 @@
-import { NextResponse } from 'next/server'
-import { getUser } from '@/app/oauth/userinfo/get-user'
-import { db } from '@/db'
-import { deviceAccessToken, deviceVerifications } from '@/db/schema'
-import { eq } from 'drizzle-orm'
+import { NextResponse } from "next/server";
+import { db } from "@/db";
+import { deviceAccessToken, deviceVerifications, users } from "@/db/schema";
+import { and, eq, gt, isNotNull } from "drizzle-orm";
+import { DEVICE_ACCESS_TOKEN_TTL_SECONDS, DEVICE_TOKEN_SCOPE } from "@/server/device-token-policy";
+
+const failure = (error: string, status = 400) => NextResponse.json({ error }, { status });
 
 export async function POST(request: Request) {
-	const formData = await request.formData()
-	const device_code = formData.get('device_code')
-
-	const deviceVerification = await db.query.deviceVerifications.findFirst({
-		where: eq(deviceVerifications.deviceCode, device_code as string),
-	})
-
-	if (deviceVerification) {
-		if (
-			!deviceVerification.verifiedAt &&
-			new Date() > deviceVerification.expires
-		) {
-			return NextResponse.json(
-				{
-					error: 'expired_token',
-					error_description: 'The device verification has expired',
-				},
-				{ status: 403 },
-			)
-		}
-
-		if (!deviceVerification.verifiedAt) {
-			return NextResponse.json(
-				{
-					error: 'authorization_pending',
-					error_description: 'The device verification is pending',
-				},
-				{ status: 403 },
-			)
-		}
-
-		const user = await getUser(deviceVerification.verifiedByUserId)
-
-		if (user) {
-			await db.insert(deviceAccessToken).values({
-				userId: user.id,
-				token: crypto.randomUUID(),
-			})
-
-			const deviceToken = await db.query.deviceAccessToken.findFirst({
-				where: eq(deviceAccessToken.userId, user.id),
-			})
-
-			await db
-				.delete(deviceVerifications)
-				.where(
-					eq(deviceVerifications.deviceCode, deviceVerification.deviceCode),
-				)
-
-			if (!deviceToken) {
-				return NextResponse.json(
-					{
-						error: 'access_denied',
-						error_description: 'Device token not found',
-					},
-					{ status: 403 },
-				)
-			}
-
-			return NextResponse.json({
-				access_token: deviceToken.token,
-				token_type: 'bearer',
-				scope: 'content:read progress',
-			})
-		} else {
-			return NextResponse.json(
-				{
-					error: 'access_denied',
-					error_description: 'User not found',
-				},
-				{ status: 403 },
-			)
-		}
-	} else {
-		return NextResponse.json(
-			{
-				error: 'access_denied',
-				error_description: 'The device code is invalid',
-			},
-			{ status: 403 },
-		)
-	}
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    return failure("invalid_request");
+  }
+  const code = form.get("device_code");
+  if (typeof code !== "string" || !code || code.length > 191) return failure("invalid_request");
+  const grantType = form.get("grant_type");
+  if (grantType !== null && grantType !== "urn:ietf:params:oauth:grant-type:device_code")
+    return failure("unsupported_grant_type");
+  try {
+    return await db.transaction(async (tx) => {
+      const grant = await tx.query.deviceVerifications.findFirst({
+        where: eq(deviceVerifications.deviceCode, code),
+      });
+      if (!grant) return failure("access_denied", 403);
+      const now = new Date();
+      if (!(grant.expires.getTime() > now.getTime())) return failure("expired_token", 403);
+      if (!grant.verifiedAt) return failure("authorization_pending", 403);
+      if (!grant.verifiedByUserId) return failure("access_denied", 403);
+      const user = await tx.query.users.findFirst({
+        where: eq(users.id, grant.verifiedByUserId),
+      });
+      if (!user) return failure("access_denied", 403);
+      // Atomic consumption prevents concurrent polls from minting multiple tokens.
+      const consumed = await tx
+        .delete(deviceVerifications)
+        .where(
+          and(
+            eq(deviceVerifications.deviceCode, code),
+            eq(deviceVerifications.verifiedByUserId, user.id),
+            isNotNull(deviceVerifications.verifiedAt),
+            gt(deviceVerifications.expires, now),
+          ),
+        );
+      if (consumed.rowsAffected !== 1) return failure("access_denied", 403);
+      const token = crypto.randomUUID();
+      await tx.insert(deviceAccessToken).values({
+        userId: user.id,
+        token,
+        scope: DEVICE_TOKEN_SCOPE,
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + DEVICE_ACCESS_TOKEN_TTL_SECONDS * 1000),
+        revokedAt: null,
+      });
+      return NextResponse.json(
+        {
+          access_token: token,
+          token_type: "bearer",
+          expires_in: DEVICE_ACCESS_TOKEN_TTL_SECONDS,
+          scope: DEVICE_TOKEN_SCOPE,
+        },
+        { headers: { "Cache-Control": "no-store", Pragma: "no-cache" } },
+      );
+    });
+  } catch {
+    console.warn(
+      JSON.stringify({ event: "device_token_issue_failed", reason: "transaction_failed" }),
+    );
+    return failure("temporarily_unavailable", 503);
+  }
 }
