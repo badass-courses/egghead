@@ -1508,6 +1508,7 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     const join = revokesOnHeldUsers(
       {
         ops: unheld.plan.ops,
+        heldManagedSubscriptions: result.plan.heldManagedSubscriptions,
         barePro: result.plan.barePro,
         heldLegacySubscriptions: result.plan.heldLegacySubscriptions,
       },
@@ -1569,6 +1570,7 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
       revokesOnHeldUsers(
         {
           ops: [revoke],
+          heldManagedSubscriptions: result.plan.heldManagedSubscriptions,
           barePro: result.plan.barePro,
           heldLegacySubscriptions: result.plan.heldLegacySubscriptions,
         },
@@ -1767,6 +1769,7 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     const held = exportWith([proLine("102", null)]);
     const result = analyze(held, julySnapshot(), NOW_MS);
     const scope = {
+      heldManagedSubscriptions: result.plan.heldManagedSubscriptions,
       barePro: result.plan.barePro,
       heldLegacySubscriptions: result.plan.heldLegacySubscriptions,
     };
@@ -2331,6 +2334,18 @@ void describe(
     const SMALL = { pageSize: 3, chunkSize: 2, concurrency: 4, consistent: true };
 
     async function query(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
+      if (sql.startsWith("CHECKSUM TABLE ")) {
+        // Vitess does not implement CHECKSUM TABLE. Compare complete ordered
+        // row images on both engines, including generated and timestamp fields.
+        return Promise.all(
+          FIXTURE_TABLES.map(async (table) => {
+            const [rows] = await docker
+              .getEggheadMysqlPool()
+              .query(`SELECT * FROM \`${table}\` ORDER BY id`);
+            return { table, rows };
+          }),
+        );
+      }
       const [rows] = await docker.getEggheadMysqlPool().query(sql, params);
       if (!Array.isArray(rows)) return []; // INSERT/UPDATE return a result header
       const list: unknown[] = rows;
@@ -2429,23 +2444,25 @@ void describe(
     }
 
     /** The CLI as a child process against the fixture database, flags as given. */
-    function cliRaw(args: readonly string[], env: Record<string, string> = {}) {
+    function cliRaw(
+      args: readonly string[],
+      env: Record<string, string> = {},
+      script = "scripts/access-delta.ts",
+    ) {
       return new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
-        const child = spawn(
-          process.execPath,
-          ["--import", "tsx", "scripts/access-delta.ts", ...args],
-          {
-            env: {
-              ...process.env,
-              TZ: "UTC",
-              TSX_TSCONFIG_PATH: "apps/web/tsconfig.json",
-              DATABASE_URL: mysqlUrl,
-              EGGHEAD_RUNTIME: "local",
-              ...env,
-            },
-            stdio: ["ignore", "ignore", "pipe"],
+        const child = spawn(process.execPath, ["--import", "tsx", script, ...args], {
+          env: {
+            ...process.env,
+            TZ: "UTC",
+            TSX_TSCONFIG_PATH: "apps/web/tsconfig.json",
+            DATABASE_URL: mysqlUrl,
+            EGGHEAD_RUNTIME: process.env["ACCESS_DELTA_MYSQL_FIXTURE_USER_SHA256"]
+              ? "production"
+              : "local",
+            ...env,
           },
-        );
+          stdio: ["ignore", "ignore", "pipe"],
+        });
         let stderr = "";
         child.stderr.on("data", (chunk: Buffer) => {
           stderr += chunk.toString();
@@ -2495,10 +2512,16 @@ void describe(
 
     before(async () => {
       process.env["DATABASE_URL"] = mysqlUrl;
-      process.env["EGGHEAD_RUNTIME"] = "local";
+      process.env["EGGHEAD_RUNTIME"] = process.env["ACCESS_DELTA_MYSQL_FIXTURE_USER_SHA256"]
+        ? "production"
+        : "local";
       docker = await import("../apps/web/src/db/local-docker");
       const safety = docker.assertDatabaseUrlForRuntime(mysqlUrl);
-      if (!safety.localDockerOnly || !safety.database.endsWith("_test")) {
+      const fixtureBranch =
+        safety.productionDatabaseAllowed &&
+        process.env["ACCESS_DELTA_MYSQL_FIXTURE_USER_SHA256"] ===
+          databaseUserSha256(decodeURIComponent(safety.url.username));
+      if (!fixtureBranch && (!safety.localDockerOnly || !safety.database.endsWith("_test"))) {
         throw new Error(`Refusing a non-disposable access-delta test database: ${safety.database}`);
       }
       docker.assertCommerceWritesAllowed(mysqlUrl);
@@ -2541,7 +2564,8 @@ void describe(
       });
       assert.equal(result.cursor.complete, true);
       assert.equal(result.cursor.appliedOps, EXPECTED_TOTAL);
-      assert.equal(result.saved.length, Math.ceil(EXPECTED_TOTAL / 5));
+      assert.equal(result.saved.findLast((cursor) => cursor.lastKey !== null)?.complete, true);
+      assert.equal(result.saved.length, 2 * Math.ceil(EXPECTED_TOTAL / 5));
       assert.deepEqual(result.verify, {
         remainingOps: 0,
         remainingByClass: {},
@@ -2654,13 +2678,14 @@ void describe(
       assert.equal(first.cursor.lastKey, ops[7]?.key);
       assert.ok(first.verify.remainingOps > 0);
 
-      // Crash after commit but before the second cursor save: resume from the first save.
-      const staleCursor = first.saved[0];
+      // Crash after commit but before advancing the second batch cursor:
+      // the prepared proof is durable, while lastKey still names batch one.
+      const staleCursor = first.saved[2];
       assert.ok(staleCursor);
       const resumed = await applyAll(ops, staleCursor, { batchSize: 4 });
       assert.equal(resumed.cursor.complete, true);
       assert.equal(resumed.cursor.appliedOps, EXPECTED_TOTAL);
-      assert.equal(resumed.saved[0]?.lastKey, ops[7]?.key, "the replayed batch re-applies ops 5-8");
+      assert.equal(resumed.saved[1]?.lastKey, ops[7]?.key, "the replayed batch re-applies ops 5-8");
       assert.equal(resumed.verify.remainingOps, 0);
       assert.equal(resumed.verify.underGrantUsers, 0);
       assert.equal(resumed.verify.overGrantUsers, 0);
@@ -3315,6 +3340,102 @@ void describe(
           "rails_gold=1",
         ]);
         assert.equal(badBacking.code, 64);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    void test("top-up: full rollback restores every row, refuses new references, and reapplies", async () => {
+      await resetToJuly();
+      const undo = await import("../apps/web/src/access/rails-access-delta-rollback");
+      const beforeUndo = await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
+      const analysis = await run.analyzeDatabase(db, railsExport, NOW_MS, SMALL);
+      const undoRows = await undo.captureUndo(db, analysis.plan.ops);
+      const applyWithProof = () =>
+        store.applyDeltaOps(db, analysis.plan.ops, cursorFor(analysis.plan.ops), {
+          batchSize: 20,
+          undoRows,
+          now,
+          saveCursor: async (saved) => {
+            assert.ok(saved.undoRows);
+          },
+        });
+      const cursor = await applyWithProof();
+      assert.ok(cursor.undoRows);
+      const afterApply = await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
+      await undo.rollbackRows(db, cursor.undoRows);
+      assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), afterApply);
+      const created = cursor.undoRows.find(
+        (row) => row.table === "egghead_User" && row.before === null,
+      );
+      assert.ok(created);
+      await query(
+        "INSERT INTO egghead_OrganizationMembership (id,organizationId,userId,invitedById,role,fields) VALUES ('topup-new-reference','fixture-extra-org',?,?,'member','{}')",
+        [created.id, created.id],
+      );
+      const withReference = await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
+      await assert.rejects(undo.rollbackRows(db, cursor.undoRows, true), /new references/);
+      assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), withReference);
+      await query("DELETE FROM egghead_OrganizationMembership WHERE id = 'topup-new-reference'");
+      await undo.rollbackRows(db, cursor.undoRows, true);
+      assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), beforeUndo);
+      assert.equal((await applyWithProof()).complete, true);
+    });
+
+    void test("top-up: CLI canary apply, guarded rollback, and apply again", async () => {
+      await resetToJuly();
+      const dir = await mkdtemp(path.join(tmpdir(), "access-delta-canary-"));
+      const beforeCanary = await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
+      try {
+        const file = await writeExportIn(dir, "rails.jsonl", novemberData(), 0);
+        const onlyFile = path.join(dir, "only.txt");
+        await writeFile(onlyFile, "121\n");
+        const out = path.join(dir, "plan");
+        const dry = await cli(["--export", file, "--out", out, "--only-users", onlyFile]);
+        assert.equal(dry.code, 0, dry.stderr);
+        const sha = await planShaIn(out);
+        const plan = parsePlan(await readFile(path.join(out, "plan.json"), "utf8"));
+        assert.equal(plan.ops.length, 2);
+        const changedFile = path.join(dir, "changed.txt");
+        await writeFile(changedFile, "122\n");
+        const refused = await apply(file, out, ["--expect-plan", sha, "--only-users", changedFile]);
+        assert.equal(refused.code, 1);
+        assert.match(refused.stderr, /only-users differs/);
+        const applied = await apply(file, out, ["--expect-plan", sha, "--only-users", onlyFile]);
+        assert.equal(applied.code, 0, applied.stderr);
+        const rollbackArgs = [
+          "--plan",
+          path.join(out, "plan.json"),
+          "--applied",
+          path.join(out, "cursor.json"),
+          "--only-users",
+          onlyFile,
+        ];
+        const rollback = (extra: string[]) =>
+          cliRaw([...rollbackArgs, ...extra], {}, "scripts/access-delta-rollback.ts");
+        const afterCanary = await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
+        assert.equal((await rollback([])).code, 0);
+        assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), afterCanary);
+        const wrong = await rollback([
+          "--apply",
+          "--expect-plan",
+          sha,
+          "--confirm-database",
+          "wrong",
+        ]);
+        assert.equal(wrong.code, 1);
+        const rolled = await rollback([
+          "--apply",
+          "--expect-plan",
+          sha,
+          "--confirm-database",
+          database,
+        ]);
+        assert.equal(rolled.code, 0, rolled.stderr);
+        assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), beforeCanary);
+        assert.equal((await rollback([])).code, 1, "a second rollback cannot delete anything");
+        const again = await apply(file, out, ["--expect-plan", sha, "--only-users", onlyFile]);
+        assert.equal(again.code, 0, again.stderr);
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

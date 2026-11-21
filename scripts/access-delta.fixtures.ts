@@ -497,7 +497,7 @@ export function novemberExportLines() {
   ].map((railsUserId) => proHolder(railsUserId));
   const backingGrants = [
     backingGrant("gift", "7701", "120", { expiresAt: "2027-03-01 00:00:00" }),
-    backingGrant("managed_subscription", "7702", "121"),
+    backingGrant("managed_subscription", "7702", "121", { currentPeriodEnd: "2026-12-01" }),
     // Lenient: the period end is past, but inside the stale window.
     backingGrant("legacy_subscription", "7703", "122", { currentPeriodEnd: "2026-11-01" }),
     // Stripe stopped renewing it without a cancel: held.
