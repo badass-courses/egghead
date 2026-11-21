@@ -28,7 +28,10 @@
  * The target database comes from DATABASE_URL and the app's runtime guard
  * (`EGGHEAD_RUNTIME`). Local runs need a local `_test` or `_local` MySQL. Beta
  * reads need EGGHEAD_BETA_DB_APPROVED=true; beta writes also need
- * EGGHEAD_PROGRESS_IMPORT_APPLY_APPROVED=true. Production is refused.
+ * EGGHEAD_PROGRESS_IMPORT_APPLY_APPROVED=true. Production writes require
+ * EGGHEAD_PROGRESS_IMPORT_PRODUCTION_APPROVED=true and --confirm-database
+ * matching SELECT DATABASE(), plus a conflict-free inserts-only dry-run receipt.
+ * --pause-ms sleeps between write transactions (default 0).
  */
 import { createHash } from "node:crypto";
 import { appendFileSync, createReadStream, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -54,7 +57,7 @@ import { jsonlRailsProgressSource } from "../apps/web/src/progress/import-source
 function nonNegativeIntegerOption(name: string, value: string | undefined) {
   if (value === undefined) return undefined;
   const number = Number(value);
-  if (!Number.isInteger(number) || number < 0) {
+  if (!Number.isSafeInteger(number) || number < 0) {
     throw new Error(`--${name} must be a non-negative integer, got ${value}`);
   }
   return number;
@@ -76,6 +79,8 @@ async function main() {
     options: {
       source: { type: "string" },
       apply: { type: "boolean", default: false },
+      "confirm-database": { type: "string" },
+      "pause-ms": { type: "string" },
       "expect-dry-run": { type: "string" },
       cursor: { type: "string" },
       manifest: { type: "string" },
@@ -111,7 +116,11 @@ async function main() {
     }
   }
 
-  const { db, identity } = await openProgressImportDatabase({ apply: values.apply });
+  const pauseMs = nonNegativeIntegerOption("pause-ms", values["pause-ms"]) ?? 0;
+  const { db, identity } = await openProgressImportDatabase({
+    apply: values.apply,
+    confirmDatabase: values["confirm-database"],
+  });
 
   try {
     // Checked before any write: the receipt must be for this file and this database.
@@ -129,6 +138,8 @@ async function main() {
         db,
         source,
         apply: values.apply,
+        insertsOnly: identity.runtime === "production",
+        pauseMs,
         runId,
       });
       const output = {
@@ -187,6 +198,8 @@ async function main() {
       db,
       source,
       apply: values.apply,
+      insertsOnly: identity.runtime === "production",
+      pauseMs,
       runId,
       afterRailsUserId,
       batchSize:

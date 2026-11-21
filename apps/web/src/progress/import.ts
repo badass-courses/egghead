@@ -10,6 +10,16 @@ import {
 } from "./import-catalog";
 import { normalizeEmail, type RailsProgressSource, type RailsUserProgress } from "./import-source";
 import { LESSON_PROGRESS_SOURCES } from "./lesson-progress-sources";
+import { assertInsertsOnlyReceipt } from "./import-cli";
+
+export type ProgressImportWriteOptions = {
+  insertsOnly?: boolean;
+  pauseMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+};
+
+const sleepBetweenTransactions = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * Rails → CourseBuilder progress import.
@@ -669,6 +679,7 @@ async function writeInserts(
   db: ProgressImportDb,
   inserts: readonly PlannedWrite[],
   stamp: WriteStamp,
+  insertsOnly = false,
 ) {
   await runInOrder(chunks(inserts, WRITE_CHUNK_SIZE), async (chunk) => {
     const values = chunk
@@ -686,7 +697,7 @@ async function writeInserts(
         INSERT INTO egghead_ResourceProgress
           (userId, resourceId, completedAt, fields, createdAt, updatedAt)
         VALUES ${values}
-        ON DUPLICATE KEY UPDATE userId = userId
+        ${insertsOnly ? "" : "ON DUPLICATE KEY UPDATE userId = userId"}
       `,
       chunk.flatMap((write) => [
         write.cbUserId,
@@ -783,33 +794,53 @@ async function countStampedRows(
  * cursor only moves after the whole batch, so a resume replays the batch and
  * the already-written rows classify as `kept_cb_completed`.
  */
-async function writePlannedRows(
+export async function writePlannedRows(
   db: ProgressImportDb,
   writes: readonly PlannedWrite[],
   receipt: ProgressImportReceipt,
+  options: ProgressImportWriteOptions,
 ) {
   await runInOrder(chunks(writes, receipt.maxRowsPerTransaction), async (group) => {
+    if (options.insertsOnly && group.some((write) => write.action !== "insert")) {
+      throw new Error(
+        "Production inserts-only conflict: transaction would update an existing row; stopped.",
+      );
+    }
+    if (receipt.transactions > 0 && (options.pauseMs ?? 0) > 0) {
+      await (options.sleep ?? sleepBetweenTransactions)(options.pauseMs ?? 0);
+    }
     const stamp: WriteStamp = {
       runId: receipt.runId,
       at: mysqlUtcDateTime(new Date()),
       tx: randomUUID(),
     };
     const started = performance.now();
-    await db.beginTransaction();
     try {
+      await db.beginTransaction();
       await writeInserts(
         db,
         group.filter((write) => write.action === "insert"),
         stamp,
+        options.insertsOnly,
       );
-      await writeUpdates(
-        db,
-        group.filter((write) => write.action === "update"),
-        stamp,
-      );
+      if (!options.insertsOnly) {
+        await writeUpdates(
+          db,
+          group.filter((write) => write.action === "update"),
+          stamp,
+        );
+      }
       const written = await countStampedRows(db, group, stamp);
+      if (options.insertsOnly && (written.inserted !== group.length || written.updated !== 0)) {
+        throw new Error(
+          "Production inserts-only conflict: transaction did not insert exactly the predicted rows; stopped.",
+        );
+      }
       await db.commit();
       const elapsedMs = Math.round(performance.now() - started);
+      console.error(
+        `progress transaction ${receipt.transactions + 1}: ${elapsedMs}ms, ${group.length} rows`,
+      );
       receipt.timings.writeMs += elapsedMs;
       if (elapsedMs >= receipt.timings.slowestTransactionMs) {
         receipt.timings.slowestTransactionMs = elapsedMs;
@@ -820,7 +851,19 @@ async function writePlannedRows(
       receipt.rows.updated += written.updated;
       receipt.rows.raceSkipped += group.length - written.inserted - written.updated;
     } catch (error) {
-      await db.rollback().catch(() => undefined);
+      const rolledBack = await db.rollback().then(
+        () => true,
+        () => false,
+      );
+      console.error(
+        `progress transaction ${receipt.transactions + 1}: ${Math.round(performance.now() - started)}ms, ${group.length} rows, failed (${rolledBack ? "rolled back" : "rollback unconfirmed"})`,
+      );
+      if (options.insertsOnly) {
+        throw new Error(
+          `Production inserts-only transaction failed or encountered a conflicting row; ${rolledBack ? "transaction rolled back" : "rollback unconfirmed; verify the run stamps before resuming"}, import stopped.`,
+          { cause: error },
+        );
+      }
       throw error;
     }
   });
@@ -832,18 +875,20 @@ async function writePlannedRows(
  * the CB user ids about to be written, before any transaction starts, so the
  * caller can record a rollback manifest.
  */
-export async function importProgressBatch(input: {
-  db: ProgressImportDb;
-  users: readonly RailsUserProgress[];
-  catalog: CbContentCatalog;
-  receipt: ProgressImportReceipt;
-  unmapped: UnmappedContentTally;
-  apply: boolean;
-  now: Date;
-  emailOwners?: ReadonlyMap<string, number>;
-  restrictToCbUserId?: string;
-  onBeforeWrite?: (input: { cbUserIds: string[]; runId: string }) => Promise<void> | void;
-}) {
+export async function importProgressBatch(
+  input: ProgressImportWriteOptions & {
+    db: ProgressImportDb;
+    users: readonly RailsUserProgress[];
+    catalog: CbContentCatalog;
+    receipt: ProgressImportReceipt;
+    unmapped: UnmappedContentTally;
+    apply: boolean;
+    now: Date;
+    emailOwners?: ReadonlyMap<string, number>;
+    restrictToCbUserId?: string;
+    onBeforeWrite?: (input: { cbUserIds: string[]; runId: string }) => Promise<void> | void;
+  },
+) {
   const { db, users, catalog, receipt } = input;
   const matches = await matchCbUsers(db, users, input.emailOwners);
   const candidates: Candidate[] = [];
@@ -896,6 +941,27 @@ export async function importProgressBatch(input: {
 
   for (const candidate of collapsed) {
     const existingRow = existing.get(`${candidate.cbUserId}\u001f${candidate.resourceId}`);
+    if (input.apply && input.insertsOnly && existingRow) {
+      // A partially committed batch can be resumed only over unchanged inserts
+      // from this very run. Learner edits, other runs and unstamped rows stop it.
+      const fields = existingRow.fields;
+      const stamp: unknown =
+        fields && typeof fields === "object" ? Reflect.get(fields, "railsImport") : null;
+      const ownInsert =
+        stamp &&
+        typeof stamp === "object" &&
+        Reflect.get(stamp, "runId") === receipt.runId &&
+        Reflect.get(stamp, "action") === "insert" &&
+        Reflect.get(stamp, "railsUserId") === candidate.railsUserId &&
+        Reflect.get(stamp, "completedAt") === mysqlUtcDateTime(candidate.completedAt) &&
+        existingRow.completedAt?.getTime() === candidate.completedAt.getTime() &&
+        existingRow.updatedAt &&
+        Reflect.get(stamp, "at") === mysqlUtcDateTime(existingRow.updatedAt);
+      if (ownInsert) continue;
+      throw new Error(
+        "Production inserts-only conflict: an unpredicted existing progress row was found; import stopped before this batch wrote.",
+      );
+    }
     const decision = classifyProgressCandidate(candidate, existingRow);
     if (decision === "kept_cb_completed") {
       receipt.rows.keptCbCompleted += 1;
@@ -932,13 +998,14 @@ export async function importProgressBatch(input: {
   const lastUser = users.at(-1);
   if (lastUser) receipt.lastRailsUserId = lastUser.railsUserId;
 
+  if (input.apply && input.insertsOnly) assertInsertsOnlyReceipt({ receipt });
   if (!input.apply || writes.length === 0) return;
 
   await input.onBeforeWrite?.({
     cbUserIds: [...new Set(writes.map((write) => write.cbUserId))],
     runId: receipt.runId,
   });
-  await writePlannedRows(db, writes, receipt);
+  await writePlannedRows(db, writes, receipt, input);
 }
 
 /**
@@ -947,26 +1014,31 @@ export async function importProgressBatch(input: {
  * batch commits, so callers can persist the resume cursor. Pass the same
  * `runId` when resuming so one logical import has one runId.
  */
-export async function runProgressImport(input: {
-  db: ProgressImportDb;
-  source: RailsProgressSource;
-  apply: boolean;
-  afterRailsUserId?: number;
-  batchSize?: number;
-  maxUsers?: number;
-  /** Write cap per transaction; defaults to `MAX_ROWS_PER_TRANSACTION`. */
-  maxRowsPerTransaction?: number;
-  catalog?: CbContentCatalog;
-  now?: Date;
-  runId?: string;
-  /** Collects every unmapped Rails lesson and series; pass one in to read the full lists. */
-  unmapped?: UnmappedContentTally;
-  onBeforeWrite?: (input: { cbUserIds: string[]; runId: string }) => Promise<void> | void;
-  onBatchCommitted?: (cursor: {
-    lastRailsUserId: number;
-    receipt: ProgressImportReceipt;
-  }) => Promise<void> | void;
-}): Promise<ProgressImportReceipt> {
+export async function runProgressImport(
+  input: ProgressImportWriteOptions & {
+    db: ProgressImportDb;
+    source: RailsProgressSource;
+    apply: boolean;
+    afterRailsUserId?: number;
+    batchSize?: number;
+    maxUsers?: number;
+    /** Write cap per transaction; defaults to `MAX_ROWS_PER_TRANSACTION`. */
+    maxRowsPerTransaction?: number;
+    catalog?: CbContentCatalog;
+    now?: Date;
+    runId?: string;
+    /** Collects every unmapped Rails lesson and series; pass one in to read the full lists. */
+    unmapped?: UnmappedContentTally;
+    onBeforeWrite?: (input: { cbUserIds: string[]; runId: string }) => Promise<void> | void;
+    onBatchCommitted?: (cursor: {
+      lastRailsUserId: number;
+      receipt: ProgressImportReceipt;
+    }) => Promise<void> | void;
+  },
+): Promise<ProgressImportReceipt> {
+  if (!Number.isSafeInteger(input.pauseMs ?? 0) || (input.pauseMs ?? 0) < 0) {
+    throw new Error("pauseMs must be a non-negative safe integer");
+  }
   await assertUtcSession(input.db);
   await assertProgressUniqueKeys(input.db);
   const now = input.now ?? new Date();
@@ -1002,6 +1074,9 @@ export async function runProgressImport(input: {
       apply: input.apply,
       now,
       emailOwners,
+      ...(input.insertsOnly === undefined ? {} : { insertsOnly: input.insertsOnly }),
+      ...(input.pauseMs === undefined ? {} : { pauseMs: input.pauseMs }),
+      ...(input.sleep ? { sleep: input.sleep } : {}),
       ...(input.onBeforeWrite ? { onBeforeWrite: input.onBeforeWrite } : {}),
     });
     const lastRailsUserId = receipt.lastRailsUserId;
@@ -1048,7 +1123,7 @@ export type UserProgressImportResult =
  */
 export async function importProgressForUser(
   userId: string,
-  options: {
+  options: ProgressImportWriteOptions & {
     db: ProgressImportDb;
     source: RailsProgressSource;
     apply: boolean;
@@ -1099,6 +1174,9 @@ export async function importProgressForUser(
     now,
     emailOwners: await options.source.emailOwners(),
     restrictToCbUserId: user.id,
+    ...(options.insertsOnly === undefined ? {} : { insertsOnly: options.insertsOnly }),
+    ...(options.pauseMs === undefined ? {} : { pauseMs: options.pauseMs }),
+    ...(options.sleep ? { sleep: options.sleep } : {}),
   });
 
   unmapped.applyTo(receipt);
