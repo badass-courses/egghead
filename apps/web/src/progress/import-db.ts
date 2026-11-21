@@ -1,3 +1,4 @@
+import type { RowDataPacket } from "mysql2";
 import mysql from "mysql2/promise";
 
 import {
@@ -9,6 +10,8 @@ import {
 import type { ProgressImportIdentity } from "./import-cli";
 
 export const PROGRESS_IMPORT_APPLY_APPROVAL_ENV = "EGGHEAD_PROGRESS_IMPORT_APPLY_APPROVED";
+export const PROGRESS_IMPORT_PRODUCTION_APPROVAL_ENV =
+  "EGGHEAD_PROGRESS_IMPORT_PRODUCTION_APPROVED";
 
 /**
  * Pins both sides of the connection to UTC. mysql2 formats and parses Dates in
@@ -25,20 +28,26 @@ export async function openUtcConnection(options: mysql.ConnectionOptions) {
  * Who may write. Reading beta needs only the app's own beta approval
  * (`EGGHEAD_BETA_DB_APPROVED`). Writing beta (import apply or rollback apply)
  * also needs `EGGHEAD_PROGRESS_IMPORT_APPLY_APPROVED=true`, so a dry-run
- * environment cannot write by adding `--apply`. Production is refused for
- * writes until it has its own reviewed approval; a production dry run reads only.
+ * environment cannot write by adding `--apply`. Production writes additionally
+ * require their own approval and confirmation of the server-reported database.
  */
 export function assertProgressImportAccess(input: {
   runtime: EggheadRuntime;
   apply: boolean;
   applyApproved: boolean;
+  productionApproved?: boolean;
+  confirmDatabase?: string | undefined;
+  connectedDatabase?: string | null;
 }) {
-  // A production dry run only reads, so it is allowed: the plan for a
-  // production write has to be reviewed against production data. Writing
-  // production stays refused until it has its own reviewed approval.
-  if (input.runtime === "production" && input.apply) {
+  if (
+    input.runtime === "production" &&
+    input.apply &&
+    (!input.productionApproved ||
+      !input.connectedDatabase ||
+      input.confirmDatabase !== input.connectedDatabase)
+  ) {
     throw new Error(
-      "Refusing to write progress into runtime=production. Dry runs are allowed; a production write needs its own reviewed approval.",
+      `Refusing to write progress into runtime=production: set ${PROGRESS_IMPORT_PRODUCTION_APPROVAL_ENV}=true and pass --confirm-database matching SELECT DATABASE().`,
     );
   }
   if (input.apply && input.runtime === "beta" && !input.applyApproved) {
@@ -53,23 +62,54 @@ export function assertProgressImportAccess(input: {
  * (local needs a local `_test`/`_local` MySQL, beta needs
  * EGGHEAD_BETA_DB_APPROVED=true on PlanetScale), then the write guard above.
  */
-export async function openProgressImportDatabase(input: { apply: boolean; rawUrl?: string }) {
+export async function openProgressImportDatabase(input: {
+  apply: boolean;
+  rawUrl?: string;
+  confirmDatabase?: string | undefined;
+}) {
   const rawUrl = input.rawUrl ?? getDatabaseUrl();
   const safety = assertDatabaseUrlForRuntime(rawUrl);
-  assertProgressImportAccess({
+  const access = {
     runtime: safety.runtime,
     apply: input.apply,
     applyApproved: process.env[PROGRESS_IMPORT_APPLY_APPROVAL_ENV]?.trim() === "true",
-  });
-
+    productionApproved: process.env[PROGRESS_IMPORT_PRODUCTION_APPROVAL_ENV] === "true",
+    confirmDatabase: input.confirmDatabase,
+  };
+  // Preserve early refusal without opening a connection for unapproved writes.
+  // An approved production write still needs the server's database name below.
+  if (
+    safety.runtime !== "production" ||
+    !input.apply ||
+    !access.productionApproved ||
+    !input.confirmDatabase
+  ) {
+    assertProgressImportAccess(access);
+  }
   const options = mysqlConnectionOptionsFromUrl(rawUrl);
   const db = await openUtcConnection(options);
+  let connectedDatabase: string;
+  try {
+    const [rows] = await db.query<Array<RowDataPacket & { databaseName: string | null }>>(
+      "SELECT DATABASE() AS databaseName",
+    );
+    const name = rows[0]?.databaseName;
+    assertProgressImportAccess({
+      ...access,
+      connectedDatabase: name ?? null,
+    });
+    if (!name) throw new Error("Progress import needs a selected database; nothing was written.");
+    connectedDatabase = name;
+  } catch (error) {
+    await db.end();
+    throw error;
+  }
   const identity: ProgressImportIdentity = {
     runtime: safety.runtime,
     host: options.host,
     port: options.port,
     user: options.user,
-    database: options.database,
+    database: connectedDatabase,
   };
   return { db, identity };
 }

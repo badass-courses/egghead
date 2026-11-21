@@ -30,6 +30,7 @@ async function main() {
     options: {
       run: { type: "string" },
       apply: { type: "boolean", default: false },
+      "confirm-database": { type: "string" },
       manifest: { type: "string" },
       cursor: { type: "string" },
       "batch-users": { type: "string" },
@@ -51,7 +52,10 @@ async function main() {
   const batchUsers =
     values["batch-users"] === undefined ? undefined : Number(values["batch-users"]);
 
-  const { db, identity } = await openProgressImportDatabase({ apply: values.apply });
+  const { db, identity } = await openProgressImportDatabase({
+    apply: values.apply,
+    confirmDatabase: values["confirm-database"],
+  });
   try {
     const receipt = await rollbackProgressImport({
       db,
