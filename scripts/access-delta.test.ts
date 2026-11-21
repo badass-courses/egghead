@@ -3356,7 +3356,7 @@ void describe(
       }
     });
 
-    void test("top-up: full rollback restores every row, refuses new references, and reapplies", async () => {
+    void test("top-up: rollback ignores Vitess copies, refuses app references, restores and reapplies", async () => {
       await resetToJuly();
       const undo = await import("../apps/web/src/access/rails-access-delta-rollback");
       const beforeUndo = await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
@@ -3380,17 +3380,52 @@ void describe(
         (row) => row.table === "egghead_User" && row.before === null,
       );
       assert.ok(created);
-      await query(
-        "INSERT INTO egghead_OrganizationMembership (id,organizationId,userId,invitedById,role,fields) VALUES ('topup-new-reference','fixture-extra-org',?,?,'member','{}')",
-        [created.id, created.id],
-      );
-      const withReference = await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
-      await assert.rejects(undo.rollbackRows(db, cursor.undoRows, true), /new references/);
-      assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), withReference);
-      await query("DELETE FROM egghead_OrganizationMembership WHERE id = 'topup-new-reference'");
-      await undo.rollbackRows(db, cursor.undoRows, true);
-      assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), beforeUndo);
-      assert.equal((await applyWithProof()).complete, true);
+      const suffix = createHash("sha256")
+        .update(`${process.pid}:${Date.now()}`)
+        .digest("hex")
+        .slice(0, 12);
+      const copyTables = [`_vt_vrp_${suffix}_`, `_vt_other_${suffix}`];
+      // Neither an egghead_ allowlist nor an unescaped LIKE '_vt_%' may hide this app table.
+      const appTable = `avt_reference_${suffix}`;
+      const ownedTables: string[] = [];
+      try {
+        await [...copyTables, appTable].reduce(async (previous, table) => {
+          await previous;
+          await query(
+            `CREATE TABLE \`${table}\` (userId varchar(191), invitedById varchar(191), organizationId varchar(191), organizationMembershipId varchar(191))`,
+          );
+          ownedTables.push(table);
+        }, Promise.resolve());
+        await Promise.all(
+          copyTables.map(async (table) => {
+            await query(
+              `INSERT INTO \`${table}\` (userId, invitedById, organizationId, organizationMembershipId) SELECT userId, userId, organizationId, organizationMembershipId FROM egghead_Entitlement`,
+            );
+            assert.ok(
+              (await query(`SELECT userId FROM \`${table}\` WHERE userId = ?`, [created.id]))
+                .length > 0,
+              "Vitess copy contains a reference to a created user",
+            );
+          }),
+        );
+        await query(`INSERT INTO \`${appTable}\` (userId) VALUES (?)`, [created.id]);
+        const withReference = await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`);
+        await assert.rejects(undo.rollbackRows(db, cursor.undoRows, true), /new references/);
+        assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), withReference);
+        assert.equal((await query(`SELECT userId FROM \`${appTable}\``)).length, 1);
+        await query(`DELETE FROM \`${appTable}\``);
+        // Leave both Vitess copies populated: only real app references should block undo.
+        await undo.rollbackRows(db, cursor.undoRows, true);
+        assert.deepEqual(await query(`CHECKSUM TABLE ${FIXTURE_TABLES.join(", ")}`), beforeUndo);
+        await Promise.all(
+          copyTables.map(async (table) => {
+            assert.ok((await query(`SELECT userId FROM \`${table}\``)).length > 0);
+          }),
+        );
+        assert.equal((await applyWithProof()).complete, true);
+      } finally {
+        await Promise.all(ownedTables.map((table) => query(`DROP TABLE \`${table}\``)));
+      }
     });
 
     void test("top-up: CLI canary apply, guarded rollback, and apply again", async () => {

@@ -2,7 +2,7 @@ import { db } from '@/db'
 import { deviceVerifications } from '@/db/schema'
 import { getServerAuthSession } from '@/server/auth'
 import { isAfter } from 'date-fns'
-import { eq } from 'drizzle-orm'
+import { and, eq, gt, isNull } from 'drizzle-orm'
 import { z } from 'zod'
 
 import { createTRPCRouter, publicProcedure } from '../trpc'
@@ -14,10 +14,9 @@ export const deviceVerificationRouter = createTRPCRouter({
 				userCode: z.string(),
 			}),
 		)
-		.mutation(async ({ ctx, input }) => {
+		.mutation(async ({ input }) => {
 			const { session } = await getServerAuthSession()
 
-			console.log({ session })
 
 			if (session) {
 				const deviceVerification = await db.query.deviceVerifications.findFirst(
@@ -26,7 +25,6 @@ export const deviceVerificationRouter = createTRPCRouter({
 					},
 				)
 
-				console.log({ deviceVerification })
 
 				if (deviceVerification) {
 					if (deviceVerification.verifiedAt) {
@@ -41,17 +39,19 @@ export const deviceVerificationRouter = createTRPCRouter({
 						return { status: 'login-required' }
 					}
 
-					await db
+					const verified = await db
 						.update(deviceVerifications)
 						.set({
 							verifiedAt: new Date(),
 							verifiedByUserId: session.user.id,
 						})
-						.where(
+						.where(and(
 							eq(deviceVerifications.deviceCode, deviceVerification.deviceCode),
-						)
+							isNull(deviceVerifications.verifiedAt),
+							gt(deviceVerifications.expires, new Date()),
+						))
 
-					return { status: 'device-verified' }
+					return { status: verified.rowsAffected === 1 ? 'device-verified' : 'code-expired' }
 				} else {
 					return { status: 'no-verification-found' }
 				}

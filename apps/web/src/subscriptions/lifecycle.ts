@@ -90,11 +90,11 @@ export function reconcileBilling(state: SubscriptionState, snapshot: Subscriptio
   if (
     previous &&
     (previous.id === incoming.id ||
-      previous.createdAt > incoming.createdAt ||
-      (previous.createdAt === incoming.createdAt &&
-        (eventPriority[previous.kind] > eventPriority[incoming.kind] ||
-          (eventPriority[previous.kind] === eventPriority[incoming.kind] &&
-            previous.observedAt > incoming.observedAt))))
+      previous.observedAt > incoming.observedAt ||
+      (previous.observedAt === incoming.observedAt &&
+        (previous.createdAt > incoming.createdAt ||
+          (previous.createdAt === incoming.createdAt &&
+            eventPriority[previous.kind] > eventPriority[incoming.kind]))))
   )
     return { status: "unchanged", state } as const;
 
@@ -122,7 +122,9 @@ export function reconcileBilling(state: SubscriptionState, snapshot: Subscriptio
       seats: snapshot.seats,
       status: snapshot.status,
       currentPeriodEnd: snapshot.currentPeriodEnd,
-      revision: incoming,
+      // A late-delivered event may trigger a fresher Stripe read. Keep that
+      // observation, but never move the event-created watermark backwards.
+      revision: { ...incoming, createdAt: Math.max(previous?.createdAt ?? 0, incoming.createdAt) },
       assignments,
       reduction: applyReduction || renewedPastPlan ? null : reduction,
     },
