@@ -17,6 +17,20 @@ CREATE TABLE `egghead_Account` (
   KEY `userId_idx` (`userId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE `egghead_Comment` (
+  `id` varchar(191) NOT NULL,
+  `userId` varchar(255) NOT NULL,
+  `organizationMembershipId` varchar(255) DEFAULT NULL,
+  `context` json DEFAULT (_utf8mb4'{}'),
+  `text` text NOT NULL,
+  `createdAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `deletedAt` timestamp(3) NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `crr_userIdId_idx` (`userId`),
+  KEY `organizationMembershipId_idx` (`organizationMembershipId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE `egghead_CommunicationChannel` (
   `id` varchar(255) NOT NULL,
   `name` varchar(255) NOT NULL,
@@ -195,6 +209,7 @@ CREATE TABLE `egghead_Coupon` (
   `usedCount` int NOT NULL DEFAULT '0',
   `percentageDiscount` decimal(3,2) NOT NULL,
   `restrictedToProductId` varchar(191) DEFAULT NULL,
+  `amountDiscount` int DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `Coupon_code_key` (`code`),
   KEY `Coupon_id_code_index` (`id`,`code`),
@@ -202,13 +217,13 @@ CREATE TABLE `egghead_Coupon` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `egghead_DeviceAccessToken` (
-  `scope` varchar(191) DEFAULT NULL,
-  `expiresAt` timestamp(3) NULL DEFAULT NULL,
-  `revokedAt` timestamp(3) NULL DEFAULT NULL,
   `token` varchar(191) NOT NULL,
   `userId` varchar(191) NOT NULL,
   `createdAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
   `organizationMembershipId` varchar(191) DEFAULT NULL,
+  `scope` varchar(191) DEFAULT NULL,
+  `expiresAt` timestamp(3) NULL DEFAULT NULL,
+  `revokedAt` timestamp(3) NULL DEFAULT NULL,
   PRIMARY KEY (`token`),
   KEY `userId_idx` (`userId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
@@ -240,7 +255,8 @@ CREATE TABLE `egghead_Entitlement` (
   KEY `userId_idx` (`userId`),
   KEY `orgId_idx` (`organizationId`),
   KEY `source_idx` (`sourceType`,`sourceId`),
-  KEY `type_idx` (`entitlementType`)
+  KEY `type_idx` (`entitlementType`),
+  KEY `idx_Entitlement_on_userId_type_deletedAt` (`userId`,`entitlementType`,`deletedAt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `egghead_EntitlementType` (
@@ -264,6 +280,43 @@ CREATE TABLE `egghead_Invite` (
   `completedAt` timestamp NULL DEFAULT NULL,
   `invitedById` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `egghead_LegacyFeedToken` (
+  `id` varchar(255) NOT NULL,
+  `userId` varchar(255) NOT NULL,
+  `legacyRailsUserId` varchar(255) NOT NULL,
+  `tokenSha256` char(64) NOT NULL,
+  `source` varchar(64) NOT NULL DEFAULT 'rails_authentication_token',
+  `importedAt` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `revokedAt` timestamp(3) NULL DEFAULT NULL,
+  `revokedReason` varchar(191) DEFAULT NULL,
+  `lastSeenImportId` varchar(64) DEFAULT NULL,
+  `railsEmailSha256` char(64) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `legacyFeedToken_tokenSha256_idx` (`tokenSha256`),
+  UNIQUE KEY `legacyFeedToken_legacyRailsUserId_idx` (`legacyRailsUserId`),
+  KEY `legacyFeedToken_userId_idx` (`userId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `egghead_LessonProgress` (
+  `id` varchar(191) NOT NULL,
+  `userId` varchar(191) NOT NULL,
+  `organizationId` varchar(191) DEFAULT NULL,
+  `organizationMembershipId` varchar(191) DEFAULT NULL,
+  `lessonId` varchar(191) DEFAULT NULL,
+  `lessonSlug` varchar(191) DEFAULT NULL,
+  `lessonVersion` varchar(191) DEFAULT NULL,
+  `sectionId` varchar(191) DEFAULT NULL,
+  `moduleId` varchar(191) DEFAULT NULL,
+  `completedAt` datetime(3) DEFAULT NULL,
+  `updatedAt` datetime(3) DEFAULT NULL,
+  `createdAt` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  KEY `crp_userId_contentResourceId_idx` (`userId`,`lessonId`),
+  KEY `userId_idx` (`userId`),
+  KEY `lessonId_idx` (`lessonId`),
+  KEY `organizationMembershipId_idx` (`organizationMembershipId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `egghead_MerchantAccount` (
@@ -302,6 +355,7 @@ CREATE TABLE `egghead_MerchantCoupon` (
   `merchantAccountId` varchar(191) NOT NULL,
   `percentageDiscount` decimal(3,2) NOT NULL,
   `type` varchar(191) DEFAULT NULL,
+  `amountDiscount` int DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `MerchantCoupon_identifier_key` (`identifier`),
   KEY `organizationId_idx` (`organizationId`)
@@ -319,6 +373,18 @@ CREATE TABLE `egghead_MerchantCustomer` (
   UNIQUE KEY `MerchantCustomer_identifier_key` (`identifier`),
   KEY `idx_MerchantCustomer_on_userId` (`userId`),
   KEY `organizationId_idx` (`organizationId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `egghead_MerchantEvents` (
+  `id` varchar(191) NOT NULL,
+  `merchantAccountId` varchar(191) NOT NULL,
+  `identifier` varchar(191) NOT NULL,
+  `payload` json NOT NULL,
+  `createdAt` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `MerchantEvents_identifier_key` (`identifier`),
+  KEY `merchantAccountId_idx` (`merchantAccountId`),
+  KEY `createdAt_idx` (`createdAt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `egghead_MerchantPrice` (
@@ -356,6 +422,22 @@ CREATE TABLE `egghead_MerchantSession` (
   PRIMARY KEY (`id`),
   KEY `organizationId_idx` (`organizationId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `egghead_MerchantSubscription` (
+  `id` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `organizationId` varchar(191) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `merchantAccountId` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `status` int NOT NULL DEFAULT '0',
+  `createdAt` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `label` varchar(191) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `identifier` varchar(191) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `merchantCustomerId` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `merchantProductId` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `organizationId_idx` (`organizationId`),
+  KEY `merchantCustomerId_idx` (`merchantCustomerId`),
+  KEY `identifier_idx` (`identifier`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `egghead_Organization` (
   `id` varchar(255) NOT NULL,
@@ -410,6 +492,27 @@ CREATE TABLE `egghead_Permission` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `egghead_Permission_name_unique` (`name`),
   KEY `name_idx` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `egghead_PersonalAccessToken` (
+  `id` varchar(191) NOT NULL,
+  `userId` varchar(191) NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `publicId` varchar(64) NOT NULL,
+  `tokenPrefix` varchar(128) NOT NULL,
+  `tokenHash` varchar(128) NOT NULL,
+  `scopes` json NOT NULL,
+  `expiresAt` timestamp(3) NULL DEFAULT NULL,
+  `lastUsedAt` timestamp(3) NULL DEFAULT NULL,
+  `revokedAt` timestamp(3) NULL DEFAULT NULL,
+  `createdAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `publicId_idx` (`publicId`),
+  UNIQUE KEY `tokenHash_idx` (`tokenHash`),
+  KEY `userId_idx` (`userId`),
+  KEY `expiresAt_idx` (`expiresAt`),
+  KEY `revokedAt_idx` (`revokedAt`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `egghead_Price` (
@@ -475,7 +578,8 @@ CREATE TABLE `egghead_Purchase` (
   UNIQUE KEY `Purchase_upgradedFromId_key` (`upgradedFromId`),
   KEY `idx_Purchase_on_merchantChargeId` (`merchantChargeId`),
   KEY `organizationId_idx` (`organizationId`),
-  KEY `organizationMembershipId_idx` (`organizationMembershipId`)
+  KEY `organizationMembershipId_idx` (`organizationMembershipId`),
+  KEY `idx_Purchase_on_userId_status_productId` (`userId`,`status`,`productId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `egghead_PurchaseUserTransfer` (
@@ -492,6 +596,29 @@ CREATE TABLE `egghead_PurchaseUserTransfer` (
   `completedAt` timestamp(3) NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `organizationId_idx` (`organizationId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `egghead_QuestionResponse` (
+  `id` varchar(255) NOT NULL,
+  `surveyId` varchar(255) NOT NULL,
+  `questionId` varchar(255) NOT NULL,
+  `respondentKey` varchar(255) DEFAULT NULL,
+  `surveySessionId` varchar(255) DEFAULT NULL,
+  `userId` varchar(255) DEFAULT NULL,
+  `emailListSubscriberId` varchar(255) DEFAULT NULL,
+  `fields` json DEFAULT (_utf8mb4'{}'),
+  `createdAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `deletedAt` timestamp(3) NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `survey_question_respondent_unique` (`surveyId`,`questionId`,`respondentKey`),
+  KEY `surveyId_idx` (`surveyId`),
+  KEY `questionId_idx` (`questionId`),
+  KEY `respondent_key_idx` (`respondentKey`),
+  KEY `survey_session_id_idx` (`surveySessionId`),
+  KEY `userId_idx` (`userId`),
+  KEY `emailListSubscriberId_idx` (`emailListSubscriberId`),
+  KEY `survey_subscriber_idx` (`surveyId`,`emailListSubscriberId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `egghead_ResourceProgress` (
@@ -545,6 +672,19 @@ CREATE TABLE `egghead_Session` (
   KEY `userId_idx` (`userId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE `egghead_Subscription` (
+  `id` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `organizationId` varchar(191) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `productId` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `createdAt` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `merchantSubscriptionId` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `status` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',
+  `fields` json DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `organizationId_idx` (`organizationId`),
+  KEY `merchantSubscriptionId_idx` (`merchantSubscriptionId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE `egghead_Tag` (
   `id` varchar(255) NOT NULL,
   `type` varchar(255) NOT NULL,
@@ -574,6 +714,21 @@ CREATE TABLE `egghead_TagTag` (
   KEY `organizationId_idx` (`organizationId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE `egghead_UpgradableProducts` (
+  `upgradableToId` varchar(255) NOT NULL,
+  `upgradableFrom` varchar(255) NOT NULL,
+  `organizationId` varchar(191) DEFAULT NULL,
+  `position` double NOT NULL DEFAULT '0',
+  `metadata` json DEFAULT (_utf8mb4'{}'),
+  `createdAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `deletedAt` timestamp(3) NULL DEFAULT NULL,
+  PRIMARY KEY (`upgradableToId`,`upgradableFrom`),
+  KEY `upgradableFromId_idx` (`upgradableToId`),
+  KEY `upgradableToId_idx` (`upgradableFrom`),
+  KEY `organizationId_idx` (`organizationId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE `egghead_User` (
   `id` varchar(255) NOT NULL,
   `name` varchar(255) DEFAULT NULL,
@@ -585,6 +740,7 @@ CREATE TABLE `egghead_User` (
   `createdAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
   `legacyRailsUserId` varchar(255) GENERATED ALWAYS AS (json_unquote(json_extract(`fields`,_utf8mb4'$.legacyRailsUserId'))) STORED,
   `legacyContactId` varchar(255) GENERATED ALWAYS AS (json_unquote(json_extract(`fields`,_utf8mb4'$.legacyContactId'))) STORED,
+  `updatedAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `egghead_User_email_unique` (`email`),
   UNIQUE KEY `legacyRailsUserId_idx` (`legacyRailsUserId`),
@@ -605,6 +761,20 @@ CREATE TABLE `egghead_UserPermission` (
   PRIMARY KEY (`userId`,`permissionId`),
   KEY `userId_idx` (`userId`),
   KEY `permissionId_idx` (`permissionId`),
+  KEY `organizationId_idx` (`organizationId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `egghead_UserPrefs` (
+  `id` varchar(191) NOT NULL,
+  `organizationId` varchar(191) DEFAULT NULL,
+  `type` varchar(191) NOT NULL DEFAULT 'Global',
+  `userId` varchar(255) NOT NULL,
+  `fields` json DEFAULT (_utf8mb4'{}'),
+  `createdAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` timestamp(3) NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `deletedAt` timestamp(3) NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `crr_userIdId_idx` (`userId`),
   KEY `organizationId_idx` (`organizationId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 

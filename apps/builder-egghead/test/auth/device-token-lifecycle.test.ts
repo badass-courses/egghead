@@ -245,6 +245,28 @@ describe("device token lifecycle through the real handlers", () => {
     );
     expect(JSON.stringify(log.mock.calls)).not.toContain("synthetic-secret-value");
   });
+  it("invalid or empty authorization cannot fall back to an otherwise valid editor session", async () => {
+    mocks.session.mockResolvedValue({
+      session: { user: { id: person.id } },
+      ability: { can: () => true },
+    });
+    const cookieOnly = new NextRequest("https://example.invalid/api/uploads/signed-url");
+    expect(await isContentEditorRequest(cookieOnly)).toBe(true);
+    mocks.session.mockClear();
+    const invalid = new NextRequest(cookieOnly.url, { headers: { Authorization: "" } });
+    expect(await isContentEditorRequest(invalid)).toBe(false);
+    expect(mocks.session).not.toHaveBeenCalled();
+  });
+  it("issuance database failures log a fixed reason without exposing the grant", async () => {
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.transaction.mockRejectedValue(new Error("synthetic-sensitive-grant"));
+    expect((await exchange()).status).toBe(503);
+    expect(log).toHaveBeenCalledWith(
+      JSON.stringify({ event: "device_token_issue_failed", reason: "transaction_failed" }),
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toContain("synthetic-sensitive-grant");
+    expect(tokens.size).toBe(0);
+  });
   it("only one concurrent exchange can consume an approved grant", async () => {
     const results = await Promise.all([exchange(), exchange()]);
     expect(results.map((response) => response.status).toSorted()).toEqual([200, 403]);

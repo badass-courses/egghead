@@ -4,7 +4,14 @@ import { deviceAccessToken, deviceVerifications, users } from "@/db/schema";
 import { and, eq, gt, isNotNull } from "drizzle-orm";
 import { DEVICE_ACCESS_TOKEN_TTL_SECONDS, DEVICE_TOKEN_SCOPE } from "@/server/device-token-policy";
 
-const failure = (error: string, status = 400) => NextResponse.json({ error }, { status });
+const failure = (error: string, status = 400) =>
+  NextResponse.json(
+    { error },
+    {
+      status,
+      headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+    },
+  );
 
 export async function POST(request: Request) {
   let form: FormData;

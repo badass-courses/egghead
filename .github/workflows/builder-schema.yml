@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "apps/builder-egghead/**"
+      - "apps/web/src/db/**"
       - "packages/core/**"
       - "package.json"
       - "pnpm-lock.yaml"
