@@ -8,8 +8,9 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import type { DeltaOp } from "./rails-access-delta";
+import { undoRowSchema, type UndoRow } from "./rails-access-delta-rollback";
 
-export const PLAN_FORMAT = "egghead-access-delta-plan/v6";
+export const PLAN_FORMAT = "egghead-access-delta-plan/v7";
 export const CURSOR_FORMAT = "egghead-access-delta-cursor/v1";
 
 const jsonRecord = z.record(z.string(), z.unknown());
@@ -104,6 +105,7 @@ const gateInputsSchema = z.object({
   acceptBarePro: z.string().nullable(),
   /** sha256 of the accepted held legacy-subscription id list. */
   acceptStaleLegacy: z.string().nullable(),
+  acceptStaleManaged: z.string().nullable(),
   /** sha256 of the accepted orphan Rails user id list (their rows are revoked). */
   acceptOrphanGrants: z.string().nullable(),
   /** sha256 of the accepted held-organization reach list. */
@@ -158,6 +160,9 @@ const planFile = z.object({
   generatedAt: z.string(),
   planSha256: z.string(),
   ops: z.array(deltaOp),
+  undoRows: z.array(undoRowSchema).optional(),
+  onlyUsers: z.array(z.string()).optional(),
+  runtime: z.string().optional(),
 });
 
 const cursorFile = z.object({
@@ -171,6 +176,7 @@ const cursorFile = z.object({
   lastKey: z.string().nullable(),
   complete: z.boolean(),
   updatedAt: z.string(),
+  undoRows: z.array(undoRowSchema).optional(),
 });
 
 export type DeltaPlanFile = Omit<z.infer<typeof planFile>, "ops"> & {
@@ -200,6 +206,9 @@ export function serializePlan(input: {
   gateInputs: GateInputs;
   generatedAt: string;
   ops: readonly DeltaOp[];
+  undoRows?: readonly UndoRow[];
+  onlyUsers?: string[];
+  runtime?: string;
 }): string {
   const file: DeltaPlanFile = {
     format: PLAN_FORMAT,
@@ -212,6 +221,9 @@ export function serializePlan(input: {
     generatedAt: input.generatedAt,
     planSha256: planSha256(input.ops),
     ops: input.ops,
+    ...(input.undoRows ? { undoRows: [...input.undoRows] } : {}),
+    ...(input.onlyUsers ? { onlyUsers: input.onlyUsers } : {}),
+    ...(input.runtime ? { runtime: input.runtime } : {}),
   };
   return `${JSON.stringify(file)}\n`;
 }

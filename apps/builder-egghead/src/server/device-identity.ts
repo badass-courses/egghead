@@ -16,6 +16,13 @@ export function bearerDeviceToken(bearer: string | null) {
   return bearer?.match(/^Bearer (\S+)$/i)?.[1] ?? null;
 }
 
+export function logDeviceAuthenticationFailure(
+  reason: "lookup_failed" | "connection_failed" | "revocation_failed",
+) {
+  // Never log the exception: database errors can contain SQL, credentials or bearer values.
+  console.warn(JSON.stringify({ event: "device_authentication_denied", reason }));
+}
+
 /** One token policy for bearer APIs, production content MCP and local Workshops. */
 export async function authenticateDevice(
   bearer: string | null,
@@ -24,7 +31,13 @@ export async function authenticateDevice(
 ) {
   const token = bearerDeviceToken(bearer);
   if (!token) return null;
-  const row = await lookup(token);
+  let row: DeviceIdentityRow | undefined;
+  try {
+    row = await lookup(token);
+  } catch {
+    logDeviceAuthenticationFailure("lookup_failed");
+    return null;
+  }
   if (
     !row?.verifiedBy ||
     row.revokedAt !== null ||

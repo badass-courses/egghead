@@ -50,7 +50,7 @@
 --                             COALESCE(duration_months, 12) months is in the
 --                             future (Gift.active, app/models/gift.rb). expiresAt
 --                             is that end.
---       managed_subscription  users.managed_subscription_id -> is_active
+--       managed_subscription  users.managed_subscription_id -> is_active + paid-through subscription
 --                             (User#belongs_to_active_managed_subscription?)
 --       legacy_subscription   subscriptions.user_id with cancelled_on IS NULL and
 --                             "willCancelAfterPeriod" = false (Subscription.active,
@@ -167,23 +167,31 @@ pro_holders AS (
   WHERE r.resource_type IS NULL AND r.name = 'pro'
 ),
 -- Live legacy backing. Gifts: Gift.active (claimed_at within COALESCE(duration_months, 12)
--- months; NULL claimed_at never matches, 0 months is already over). Managed: is_active.
+-- months; NULL claimed_at never matches, 0 months is already over). Managed: is_active
+-- plus an uncancelled subscriptions row paid through current_date (a Rails date).
+-- Invalid managed backing stays in the export as a reasoned hold, never a grant.
 -- Legacy subscriptions: Subscription.active (cancelled_on IS NULL and
 -- willCancelAfterPeriod = FALSE; NULL is not false, as in Rails' where(... false)).
 all_backing AS (
   SELECT 'gift' AS source, g.id AS source_id, g.user_id,
          g.claimed_at + (COALESCE(g.duration_months, 12) || ' months')::interval AS expires_at,
-         NULL::date AS current_period_end
+         NULL::date AS current_period_end, NULL::text AS held_reason
   FROM gifts g
   WHERE g.user_id IS NOT NULL
     AND g.claimed_at >= NOW() - (COALESCE(g.duration_months, 12) || ' months')::interval
   UNION ALL
-  SELECT 'managed_subscription', ms.id, u.id, NULL::timestamp, NULL::date
+  SELECT 'managed_subscription', ms.id, u.id, NULL::timestamp, ls."currentPeriodEnd",
+         CASE WHEN ls.id IS NULL THEN 'no_subscription'
+              WHEN ls.cancelled_on IS NOT NULL THEN 'cancelled'
+              WHEN ls."currentPeriodEnd" IS NULL THEN 'no_period_end'
+              WHEN ls."currentPeriodEnd" < current_date THEN 'period_end_stale'
+              ELSE NULL END
   FROM users u
   JOIN managed_subscriptions ms ON ms.id = u.managed_subscription_id
+  LEFT JOIN subscriptions ls ON ls.id = ms.subscription_id
   WHERE ms.is_active
   UNION ALL
-  SELECT 'legacy_subscription', ls.id, ls.user_id, NULL::timestamp, ls."currentPeriodEnd"
+  SELECT 'legacy_subscription', ls.id, ls.user_id, NULL::timestamp, ls."currentPeriodEnd", NULL::text
   FROM subscriptions ls
   WHERE ls.user_id IS NOT NULL
     AND ls.cancelled_on IS NULL
@@ -307,7 +315,8 @@ backing_lines AS (
     'railsSourceId', b.source_id::text,
     'railsUserId', b.user_id::text,
     'expiresAt', b.expires_at,
-    'currentPeriodEnd', b.current_period_end
+    'currentPeriodEnd', b.current_period_end,
+    'heldReason', b.held_reason
   )::text AS line
   FROM backing b
 ),
