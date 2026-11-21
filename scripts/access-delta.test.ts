@@ -168,10 +168,10 @@ function classCounts(ops: readonly DeltaOp[]) {
 }
 
 const EXPECTED_CLASSES = {
-  user_create: 8, // 103, 109, 113, 114, 115, backed 120, 121, 122 (held 123 is not created)
+  user_create: 6, // 103, 109, 114, backed 120, 121, 122; grantless 113/115 stay cold
   user_link: 1, // 111 -> beta signup
-  organization_create: 2, // accounts 7003, 7014
-  membership_create: 3, // 8003 (103), 8006 (106), role-only 115 on 7014
+  organization_create: 1, // account 7003; trialing 7014 has no grant
+  membership_create: 2, // 8003 (103), 8006 (106)
   // 9003 org+seat, 9004 seat 106, lifetime 108, purchases 6001 and 6002,
   // basic 114, 9011 org+seat; trialing 9014 grants nothing.
   // Backed pro: gift 120, managed 121, legacy subscription 122.
@@ -181,7 +181,7 @@ const EXPECTED_CLASSES = {
   entitlement_revoke: 5, // 9002 and past_due 9010 org+seat, 9004 seat 107
   entitlement_expire: 1, // purchase 6009 ran out in September
 };
-const EXPECTED_TOTAL = 38;
+const EXPECTED_TOTAL = 34;
 
 /** Export text for these data lines, with a manifest counted from them. */
 function exportText(lines: readonly string[], exportedAt = "2026-11-19T11:00:00.000Z") {
@@ -442,6 +442,15 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     assert.equal(new Set(receipt.samples.map((sample) => sample["kind"])).size, 9);
     assert.equal(JSON.stringify(receipt).includes("@example.test"), false);
     assert.deepEqual(receipt.gate, { pass: true, failures: [] });
+    assert.equal(receipt.identity.created, 6);
+    assert.deepEqual(receipt.identity.skippedGrantless, {
+      users: 2,
+      organizations: 1,
+      memberships: 1,
+      sampleRailsUserIds: ["113", "115"],
+      sampleRailsAccountIds: ["7014"],
+      sampleRailsAccountUserIds: [],
+    });
   });
 
   void test("receipt forecasts holder losses without counting organization and seat twice", () => {
@@ -449,7 +458,7 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     assert.equal(loss.currentSubscriptionHolders, 5);
     assert.equal(loss.losingHolders, 3);
     assert.equal(loss.retainedHolders, 2);
-    assert.deepEqual(loss.byReason.status_past_due, {
+    assert.deepEqual(loss.byReason.boundary_passed, {
       holders: 1,
       sampleRailsSubscriptionIds: ["9010"],
     });
@@ -527,13 +536,12 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     assert.equal(held.plan.membershipRevokeHeldForIdentity, 1);
   });
 
-  void test("basic legacy role and role-only membership survive, but trialing grants no seat", () => {
+  void test("basic legacy role survives, but trialing creates no grantless membership", () => {
     const basic = opFor(ops, "entitlement_grant", ids.basicEntitlement("114"));
     assert.ok(basic && basic.kind === "entitlement_grant");
     assert.equal(basic.entitlement.entitlementType, "egghead_basic_legacy_access");
     const roleMember = opFor(ops, "membership_create", ids.roleMembership("7014", "115"));
-    assert.ok(roleMember && roleMember.kind === "membership_create");
-    assert.equal(roleMember.membership.fields["source"], "rails_scoped_account_role");
+    assert.equal(roleMember, undefined);
     const seat = ops.find(
       (op) =>
         op.kind === "entitlement_grant" &&

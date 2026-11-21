@@ -905,8 +905,8 @@ export function sampleOps(ops: readonly DeltaOp[], size = SAMPLE_SIZE) {
   return samples;
 }
 
-function countBy<T>(values: readonly T[], key: (value: T) => string) {
-  const counts: Record<string, number> = {};
+function countBy<T, K extends string>(values: readonly T[], key: (value: T) => K) {
+  const counts: Partial<Record<K, number>> = {};
   for (const value of values) counts[key(value)] = (counts[key(value)] ?? 0) + 1;
   return counts;
 }
@@ -1267,7 +1267,11 @@ export function buildReceipt(
       reasons,
       planSha256: planSha256(plan.ops),
     },
-    identity,
+    identity: {
+      ...identity,
+      created: (identity["created"] ?? 0) - plan.skippedGrantless.users,
+      skippedGrantless: plan.skippedGrantless,
+    },
     identityConflicts: conflicts,
     gateInputs: gate,
     proCrossCheck: { ...pro, acceptedBareProSha256: gate.acceptBarePro },

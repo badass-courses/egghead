@@ -231,7 +231,9 @@ routes at receipt like any event:
 - CB-owned with a subscription: published as `egghead/stripe-billing-signal`, shaped like a
   subscription event, so the billing function re-reads that subscription's live Stripe state and
   reconciles it under the same per-subscription concurrency key. Dunning reaches access through
-  the status (`past_due`, `unpaid`). Refunds and disputes log `receipt=billing-signal-receipt` at info
+  the status and paid-through boundary: `past_due` keeps access while `current_period_end` is
+  strictly future, then suspends at that boundary; `unpaid` suspends immediately. The Rails
+  access delta uses the same rule. Refunds and disputes log `receipt=billing-signal-receipt` at info
   with Stripe ids only, for support.
 - CB-owned with no subscription (a one-off charge), or a signal whose subscription has no local
   row (a charge from before CB held it, ADR §12): an unmatched receipt

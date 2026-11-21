@@ -73,7 +73,9 @@ for (const [name, status, boundary, seat, cancel, grants] of [
   ["lapsed", "active", NOW - 86_400_000, true, false, false],
   ["cancel at period end", "active", NOW + 1, true, true, true],
   ["cancellation boundary", "active", NOW, true, true, false],
-  ["past_due even before boundary", "past_due", NOW + 86_400_000, true, false, false],
+  ["past_due inside period", "past_due", NOW + 86_400_000, true, false, true],
+  ["past_due at boundary", "past_due", NOW, true, false, false],
+  ["past_due after boundary", "past_due", NOW - 1, true, false, false],
   ["trialing", "trialing", NOW + 86_400_000, true, false, false],
   ["unpaid", "unpaid", NOW + 86_400_000, true, false, false],
   ["team without seat", "active", NOW + 86_400_000, false, false, false],
@@ -87,6 +89,106 @@ for (const [name, status, boundary, seat, cancel, grants] of [
       assert.equal(row.expiresAt, source.subscriptions[0]?.currentPeriodEnd);
   });
 }
+
+for (const status of ["active", "past_due", "trialing", "unpaid"]) {
+  void test(`grantless ${status} subscription creates no identities`, () => {
+    const source = exported(status, new Date(NOW - 1).toISOString());
+    const result = project(source);
+    assert.deepEqual(result.plan.ops, []);
+    assert.deepEqual(result.plan.skippedGrantless, {
+      users: 1,
+      organizations: 1,
+      memberships: 1,
+      sampleRailsUserIds: [user.railsUserId],
+      sampleRailsAccountIds: [first.railsAccountId],
+      sampleRailsAccountUserIds: [member.railsAccountUserId],
+    });
+    assert.deepEqual(computeDeltaPlan(source, result.snapshot, NOW).ops, []);
+  });
+}
+
+void test("live new member gets a user, organization, membership and grants", () => {
+  const result = project(exported());
+  assert.equal(result.plan.ops.filter((op) => op.kind === "user_create").length, 1);
+  assert.equal(result.plan.ops.filter((op) => op.kind === "organization_create").length, 1);
+  assert.equal(result.plan.ops.filter((op) => op.kind === "membership_create").length, 1);
+  assert.equal(result.plan.ops.filter((op) => op.kind === "entitlement_grant").length, 2);
+  assert.equal(result.plan.skippedGrantless.users, 0);
+  assert.deepEqual(computeDeltaPlan(exported(), result.snapshot, NOW).ops, []);
+});
+
+void test("ending subscription never creates a seat for a newcomer", () => {
+  const initial = project(exported());
+  const newcomer = { ...user, railsUserId: "newcomer", email: "newcomer@example.test" };
+  const dead = exported("active", new Date(NOW - 1).toISOString());
+  const source = {
+    ...dead,
+    users: [...dead.users, newcomer],
+    subscriptions: dead.subscriptions.map((sub) =>
+      Object.assign({}, sub, {
+        members: [
+          ...sub.members,
+          { ...member, railsUserId: newcomer.railsUserId, railsAccountUserId: "new-seat" },
+        ],
+      }),
+    ),
+  };
+  // Exercise both revoke and expire of the existing org/seat rows.
+  for (const expiresAt of [new Date(NOW + 1).toISOString(), new Date(NOW - 1).toISOString()]) {
+    const snapshot = {
+      ...initial.snapshot,
+      entitlements: initial.snapshot.entitlements.map((row) =>
+        Object.assign({}, row, { expiresAt }),
+      ),
+    };
+    const result = project(source, snapshot);
+    assert.equal(
+      result.plan.ops.some((op) => op.kind.endsWith("_create")),
+      false,
+    );
+    assert.equal(result.plan.skippedGrantless.users, 1);
+    assert.equal(result.plan.skippedGrantless.memberships, 1);
+    assert.equal(
+      result.plan.ops.filter(
+        (op) =>
+          op.kind === (Date.parse(expiresAt) > NOW ? "entitlement_revoke" : "entitlement_expire"),
+      ).length,
+      2,
+    );
+  }
+});
+
+void test("only a surviving live organization grant can back a missing membership", () => {
+  const initial = project(exported()).snapshot;
+  const orgGrant = required(initial.entitlements.find((row) => row.userId === null));
+  const source = exported("active", new Date(NOW - 1).toISOString());
+  for (const expiresAt of [new Date(NOW + 1).toISOString(), new Date(NOW - 1).toISOString()]) {
+    const snapshot = {
+      ...EMPTY,
+      entitlements: [{ ...orgGrant, sourceType: "stripe", expiresAt }],
+    };
+    const result = project(source, snapshot);
+    assert.equal(
+      result.plan.ops.filter((op) => op.kind.endsWith("_create")).length,
+      Date.parse(expiresAt) > NOW ? 3 : 0,
+    );
+  }
+});
+
+void test("grantless existing users still get email updates and links", () => {
+  const source = exported("active", new Date(NOW - 1).toISOString());
+  const initial = required(project(exported()).snapshot.users[0]);
+  for (const existing of [
+    { ...initial, email: "old@example.test" },
+    { ...initial, legacyRailsUserId: null },
+  ]) {
+    const result = project(source, { ...EMPTY, users: [existing] });
+    assert.deepEqual(
+      result.plan.ops.map((op) => op.kind),
+      [existing.legacyRailsUserId === null ? "user_link" : "user_email_update"],
+    );
+  }
+});
 
 void test("fresh exports retain unpaid facts for loss reporting, not bare-pro fallback grants", () => {
   const sql = readFileSync(new URL("./sql/rails-access-export.sql", import.meta.url), "utf8");
@@ -160,7 +262,8 @@ void test("loss report deduplicates org and seat, classifies denials, and exclud
   };
   const cases = [
     ["active", new Date(NOW - 1).toISOString(), true, "boundary_passed"],
-    ["past_due", null, true, "status_past_due"],
+    ["past_due", new Date(NOW - 1).toISOString(), true, "boundary_passed"],
+    ["past_due", null, true, "missing_boundary"],
     ["trialing", null, true, "status_trialing"],
     ["unpaid", null, true, "status_unpaid"],
     ["active", null, true, "missing_boundary"],

@@ -204,7 +204,7 @@ describe("policy", () => {
 });
 
 describe("access rules", () => {
-  it("lenient grants by status (ADR-0006); strict needs an active paid period (ADR-0008)", () => {
+  it("lenient grants by status (ADR-0006); strict needs an active or past_due paid period (ADR-0008)", () => {
     for (const status of ["active", "trialing", "past_due"] as const) {
       expect(
         accessGranted(lenientStatusRule.evaluate({ status, paidThroughAt: NOW - DAY, now: NOW })),
@@ -219,6 +219,11 @@ describe("access rules", () => {
     expect(strictPaidThroughRule.evaluate({ status: "active", paidThroughAt: NOW, now: NOW })).toBe(
       "not_paid_through",
     );
+    for (const paidThroughAt of [NOW + 1, NOW, NOW - 1, null]) {
+      expect(strictPaidThroughRule.evaluate({ status: "past_due", paidThroughAt, now: NOW })).toBe(
+        paidThroughAt !== null && paidThroughAt > NOW ? "paid_through" : "not_paid_through",
+      );
+    }
     expect(
       strictPaidThroughRule.evaluate({ status: "trialing", paidThroughAt: NOW + DAY, now: NOW }),
     ).toBe("not_paid_through");
