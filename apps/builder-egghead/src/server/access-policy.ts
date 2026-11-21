@@ -31,7 +31,6 @@ const PUBLIC_PREFIXES = [
 	'/privacy',
 	'/unsubscribed',
 	'/robots.txt',
-	'/favicon',
 	'/_next/',
 	'/api/auth/',
 	'/oauth/',
@@ -61,11 +60,26 @@ const matches = (pathname: string, prefix: string) =>
 		? pathname.startsWith(prefix) || pathname === prefix.slice(0, -1)
 		: pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}?`)
 
-const isStaticAsset = (pathname: string) =>
-	/\.(?:png|jpe?g|gif|svg|webp|ico|txt|xml|webmanifest|woff2?|ttf|css|js|map)$/i.test(pathname)
+// Files in public/, by exact name. Never match by extension: a dynamic route
+// such as /api/tags/[postId] or /[post] would accept `x.js` as its param.
+const PUBLIC_FILES = new Set([
+	'/android-chrome-192x192.png',
+	'/android-chrome-512x512.png',
+	'/apple-touch-icon.png',
+	'/browserconfig.xml',
+	'/epic-web-flows.png',
+	'/event-diagram.png',
+	'/favicon-16x16.png',
+	'/favicon-32x32.png',
+	'/favicon.ico',
+	'/mstile-150x150.png',
+	'/safari-pinned-tab.svg',
+	'/site.webmanifest',
+	'/stack.png',
+])
 
 export function decideAccess(pathname: string, requester: Requester): Access {
-	if (isStaticAsset(pathname)) return 'allow'
+	if (PUBLIC_FILES.has(pathname)) return 'allow'
 	if (PUBLIC_PREFIXES.some((p) => matches(pathname, p))) return 'allow'
 
 	const isEditor = requester.signedIn && requester.roles.some((r) => EDITOR_ROLES.has(r))

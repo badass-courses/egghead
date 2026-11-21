@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -50,6 +50,21 @@ describe('builder access gate (sec-20261121-008)', () => {
 			'/favicon.ico',
 		]) {
 			expect(decideAccess(path, anon), path).toBe('allow')
+		}
+	})
+
+	it('does not open a route because its path ends in a file extension', () => {
+		expect(decideAccess('/api/tags/some-post.js', anon)).toBe('deny')
+		expect(decideAccess('/api/videos/abc.css', anon)).toBe('deny')
+		expect(decideAccess('/api/posts.txt', anon)).toBe('deny')
+		expect(decideAccess('/some-lesson.png', anon)).toBe('login')
+		expect(decideAccess('/admin/x.map', anon)).toBe('login')
+	})
+
+	it('serves every public/ file without a session', () => {
+		const dir = fileURLToPath(new URL('../../public/', import.meta.url))
+		for (const name of readdirSync(dir)) {
+			expect(decideAccess(`/${name}`, anon), name).toBe('allow')
 		}
 	})
 
