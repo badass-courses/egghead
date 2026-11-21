@@ -200,6 +200,17 @@ const manifestLine = z.object({
     .optional(),
 });
 
+/** Shared validation only; recovery does not use the batch planner or store. */
+export const railsAccessEvidenceSchema = z.strictObject({
+  users: z.array(userLine),
+  roleGrants: z.array(roleGrantLine),
+  basicGrants: z.array(basicGrantLine),
+  subscriptions: z.array(subscriptionLine),
+  purchases: z.array(purchaseLine),
+  proHolders: z.array(proHolderLine),
+  backingGrants: z.array(backingGrantLine),
+});
+
 const exportLine = z.discriminatedUnion("kind", [
   userLine,
   roleGrantLine,
