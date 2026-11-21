@@ -46,7 +46,7 @@ export const mysqlFeedTokenStore: FeedTokenStore = {
 /**
  * Rails pro_user_permissions: pro (not trialing) or instructor. CB answers the
  * pro half with the broad-entitlement evaluator (bare legacy `pro` does not
- * grant; trialing subscriptions do, matching web access), and the instructor
+ * grant; subscriptions require active paid-through grants), and the instructor
  * half with the admin/contributor roles.
  */
 export const mysqlFeedMembership: FeedMembershipCheck = async (userId) => {

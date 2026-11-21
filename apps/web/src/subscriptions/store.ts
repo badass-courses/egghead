@@ -221,6 +221,10 @@ async function persist(
   now: number,
 ) {
   const date = new Date(now);
+  // One boundary field for Rails projection and Stripe lifecycle, including
+  // suspended/canceled rows. deletedAt denies access when there are no beneficiaries.
+  const expiresAt =
+    state.currentPeriodEnd === null ? null : new Date(state.currentPeriodEnd * 1000);
   const subscriptionId = stored.row.id;
   const organizationId = stored.row.organizationId;
   const beneficiaryIds = subscriptionBeneficiaries(state, now);
@@ -305,7 +309,7 @@ async function persist(
   // Grants are a rebuildable projection. Both former ID schemes are retired atomically.
   await transaction
     .update(entitlements)
-    .set({ deletedAt: date, updatedAt: date })
+    .set({ deletedAt: date, expiresAt, updatedAt: date })
     .where(
       and(
         eq(entitlements.sourceId, subscriptionId),
@@ -326,7 +330,7 @@ async function persist(
       status: state.status,
       stripeSubscriptionId: stored.stripeSubscriptionId,
     },
-    expiresAt: state.currentPeriodEnd ? new Date(state.currentPeriodEnd * 1000) : null,
+    expiresAt,
     deletedAt: null,
     updatedAt: date,
   }));

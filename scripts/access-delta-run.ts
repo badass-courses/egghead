@@ -52,6 +52,8 @@ import {
   type UserShadow,
 } from "../apps/web/src/access/rails-access-shadow";
 
+import { subscriptionBoundaryLoss } from "../apps/web/src/access/subscription-boundary-loss";
+
 export const RECEIPT_FORMAT = "egghead-access-delta-receipt/v1";
 const SAMPLE_SIZE = 20;
 
@@ -128,6 +130,7 @@ export function emailMoveCollisions(
 export interface DeltaAnalysis {
   readonly pass: DeltaPass;
   readonly snapshot: CbSnapshot;
+  readonly subscriptionBoundaryLoss: ReturnType<typeof subscriptionBoundaryLoss>;
   /** The plan for this pass (`ops` holds only this pass's ops). */
   readonly plan: DeltaPlan;
   /** Identity pass only: the full plan's verdict once the identity ops land. */
@@ -150,7 +153,7 @@ export interface DeltaAnalysis {
     readonly entitlementMoves: number;
     /** `membership_update` that clears `hasAccountMemberRole`. */
     readonly seatClearsByUpdate: number;
-    /** `entitlement_expire` on a lenient subscription row (the runtime ignores its expiry). */
+    /** `entitlement_expire` on a subscription row (formerly exempt from expiry). */
     readonly subscriptionExpires: number;
     readonly threshold: number;
     readonly tripped: boolean;
@@ -705,6 +708,12 @@ export function analyze(
       threshold,
       tripped: revokes > threshold,
     },
+    subscriptionBoundaryLoss: subscriptionBoundaryLoss(
+      railsExport,
+      snapshot,
+      simulateApply(snapshot, fullPlan.ops, nowIso),
+      nowMs,
+    ),
     proCrossCheck: proCrossCheck(railsExport, fullPlan, nowMs),
     identityOps: {
       emailUpdates: count((op) => op.kind === "user_email_update"),
@@ -1263,6 +1272,7 @@ export function buildReceipt(
     gateInputs: gate,
     proCrossCheck: { ...pro, acceptedBareProSha256: gate.acceptBarePro },
     backingGrants: { ...backing, growth, previous: context.previousBackingCounts },
+    subscriptionBoundaryLoss: analysis.subscriptionBoundaryLoss,
     heldLegacySubscriptions: heldLegacy,
     heldManagedSubscriptions: heldManaged,
     staleLegacyReconciliation: staleLegacyReconciliation(

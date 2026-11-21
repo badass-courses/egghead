@@ -1,13 +1,14 @@
 // Shadow compare: "Rails says X, CourseBuilder says Y" for every user in scope.
 //
-// Rails side: the export under Rails law (ADR-0006 lenient status, scoped
-// account_member seats, viewable non-bulk purchases).
+// Rails side: the export under ADR-0008 strict paid-through, scoped
+// account_member seats and viewable non-bulk purchases.
 // CourseBuilder side: the snapshot under the runtime predicate in
 // `access/evaluate.ts` (ACCESS_ENTITLEMENT_ROWS_SQL + entitlementGrantsAccess).
 // Grants compare as keys: `all_access` or `sellable:<type>:<id>`.
 
 import {
   DELTA_OWNED_SOURCE_TYPES,
+  subscriptionPaidThrough,
   type CbEntitlement,
   type CbMembership,
   type CbSnapshot,
@@ -16,7 +17,6 @@ import {
 } from "./rails-access-delta";
 
 const ALL_ACCESS = "all_access";
-const RAILS_SUBSCRIPTION_SOURCE = "rails_account_subscription";
 const BROAD_GRANTING_TYPES: ReadonlySet<string> = new Set([
   "egghead_all_access_subscription",
   "egghead_lifetime_access",
@@ -44,6 +44,7 @@ export interface ExtraRailsGrant {
 export function railsGrantsByUser(
   railsExport: RailsAccessExport,
   extra: readonly ExtraRailsGrant[] = [],
+  nowMs: number = Date.parse(railsExport.manifest.exportedAt),
 ): Map<string, GrantMap> {
   const result = new Map<string, GrantMap>();
   const grants = (railsUserId: string) => {
@@ -62,7 +63,7 @@ export function railsGrantsByUser(
     addGrant(grants(grant.railsUserId), ALL_ACCESS, "role basic");
   }
   for (const sub of railsExport.subscriptions) {
-    if (!sub.railsAccountId) continue;
+    if (!sub.railsAccountId || !subscriptionPaidThrough(sub, nowMs)) continue;
     for (const member of sub.members) {
       if (!member.hasMemberRole) continue;
       addGrant(
@@ -118,7 +119,7 @@ function push<T>(map: Map<string, T[]>, key: string, value: T) {
 /** Mirrors ACCESS_ENTITLEMENT_ROWS_SQL's validity predicate. */
 function rowIsLive(row: CbEntitlement, nowMs: number) {
   if (row.deletedAt !== null) return false;
-  if (row.sourceType === RAILS_SUBSCRIPTION_SOURCE || row.expiresAt === null) return true;
+  if (row.expiresAt === null) return true;
   return Date.parse(row.expiresAt) > nowMs;
 }
 
@@ -250,7 +251,7 @@ export function compareShadow(
   nowMs: number,
   extra: readonly ExtraRailsGrant[] = [],
 ): ShadowResult {
-  const railsGrants = railsGrantsByUser(railsExport, extra);
+  const railsGrants = railsGrantsByUser(railsExport, extra, nowMs);
   const index = indexSnapshot(snapshot, nowMs);
   const railsByCbUser = new Map<string, string[]>();
   const users: UserShadow[] = [];
