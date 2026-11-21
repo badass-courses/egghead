@@ -2,6 +2,7 @@
 
 import { headers } from 'next/headers'
 import { env } from '@/env.mjs'
+import { selfFetchHeaders } from '@/server/self-fetch'
 
 export async function getCsrf() {
 	const headerStore = await headers()
@@ -9,6 +10,7 @@ export async function getCsrf() {
 	const options: RequestInit = {
 		headers: {
 			...(cookie ? { cookie } : {}),
+			...selfFetchHeaders(),
 		},
 		cache: 'no-cache',
 	}

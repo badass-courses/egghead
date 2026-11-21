@@ -1,4 +1,5 @@
 import { headers } from 'next/headers'
+import { selfFetchHeaders } from '@/server/self-fetch'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,6 +15,7 @@ export async function GET() {
 		'refreshing inngest',
 		await fetch(`${process.env.COURSEBUILDER_URL}/api/inngest`, {
 			method: 'PUT',
+			headers: selfFetchHeaders(),
 		}),
 	)
 	return new Response(null, {

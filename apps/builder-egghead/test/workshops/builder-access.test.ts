@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { acceptanceProblem, profileCreationProblem } from '../../src/lib/invites/invite-rules'
 import { verifyMuxSignature } from '../../src/lib/mux-webhook-signature'
 import { decideAccess } from '../../src/server/access-policy'
+import { selfFetchHeaders } from '../../src/server/self-fetch'
 
 const anon = { signedIn: false, roles: [], hasBearer: false }
 const learner = { signedIn: true, roles: ['user'], hasBearer: false }
@@ -135,6 +136,26 @@ describe('instructor invite chain (sec-20261121-007)', () => {
 		const created = read('src/inngest/functions/instructor-invite-created.ts')
 		const length = Number(created.match(/customAlphabet\([^,]+,\s*(\d+)\)/)?.[1])
 		expect(length).toBeGreaterThanOrEqual(20)
+	})
+})
+
+describe('server self-fetch under Vercel protection', () => {
+	it('forwards the automation bypass secret only when Vercel provides it', () => {
+		const before = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+		try {
+			delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+			expect(selfFetchHeaders()).toEqual({})
+			process.env.VERCEL_AUTOMATION_BYPASS_SECRET = 'bypass-test'
+			expect(selfFetchHeaders()).toEqual({ 'x-vercel-protection-bypass': 'bypass-test' })
+		} finally {
+			if (before === undefined) delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+			else process.env.VERCEL_AUTOMATION_BYPASS_SECRET = before
+		}
+	})
+
+	it('the login CSRF fetch and the cron Inngest refresh use it', () => {
+		expect(read('src/app/(user)/login/actions.ts')).toMatch(/\.\.\.selfFetchHeaders\(\)/)
+		expect(read('src/app/api/cron/route.ts')).toMatch(/headers: selfFetchHeaders\(\)/)
 	})
 })
 
