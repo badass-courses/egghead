@@ -199,9 +199,21 @@ async function assertSuspended(status: SubscriptionSnapshot["status"]) {
   );
 }
 
+async function assertPastDueBoundary(currentPeriodEnd: number) {
+  seed(1);
+  assert.equal(
+    (await store.reconcile({ ...snapshot, status: "past_due", currentPeriodEnd }, cb)).status,
+    "applied",
+  );
+  assert.deepEqual(grantUsers, currentPeriodEnd * 1000 > now ? ["member-0"] : []);
+  assert.equal(subscriptionStateSchema.parse(fields["membershipState"]).assignments.length, 1);
+}
+
 await test("strict lifecycle renews the existing expiresAt column, suspends unpaid states and restores the same grant", async () => {
   // These assertions share the transport state, so they must stay sequential.
-  await assertSuspended("past_due");
+  await assertPastDueBoundary(now / 1000 + 1);
+  await assertPastDueBoundary(now / 1000);
+  await assertPastDueBoundary(now / 1000 - 1);
   await assertSuspended("trialing");
   await assertSuspended("unpaid");
   await assertSuspended("canceled");
@@ -222,7 +234,7 @@ await test("strict lifecycle renews the existing expiresAt column, suspends unpa
   await store.reconcile(
     {
       ...snapshot,
-      status: "past_due",
+      status: "unpaid",
       event: { ...snapshot.event, id: "failure", createdAt: 11, observedAt: 11 },
     },
     cb,

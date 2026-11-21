@@ -45,11 +45,11 @@ export const lenientStatusRule: AccessRule = {
   evaluate: ({ status }) => (railsEnabledStatuses.has(status) ? "status_grant" : "status_no_grant"),
 };
 
-/** ADR-0008: only an active subscription inside its paid period grants. */
+/** ADR-0008: active and past_due subscriptions grant only inside their paid period. */
 export const strictPaidThroughRule: AccessRule = {
   name: "adr-0008-strict-paid-through",
   evaluate: ({ status, paidThroughAt, now }) =>
-    status === "active" && paidThroughAt !== null && paidThroughAt > now
+    (status === "active" || status === "past_due") && paidThroughAt !== null && paidThroughAt > now
       ? "paid_through"
       : "not_paid_through",
 };

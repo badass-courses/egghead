@@ -234,20 +234,29 @@ describe("isolated shadow projection", () => {
   });
 
   it.each([
-    "past_due",
-    "trialing",
-    "unpaid",
-    "paused",
-    "canceled",
-    "incomplete",
-    "incomplete_expired",
-  ])("strict paid-through denies %s", async (status) => {
-    const { projected } = await recorded("invoice.payment_failed", subscription({ status }), {
-      id: "in_synthetic",
-      subscription: "sub_synthetic",
-    });
-    expect(projected?.accessVerdict).toBe("deny");
+    [end, "grant"],
+    [now / 1000, "deny"],
+    [now / 1000 - 1, "deny"],
+    [null, "deny"],
+  ] as const)("past_due boundary %s projects %s", async (current_period_end, verdict) => {
+    const { projected } = await recorded(
+      "invoice.payment_failed",
+      subscription({ status: "past_due", current_period_end }),
+      { id: "in_synthetic", subscription: "sub_synthetic" },
+    );
+    expect(projected?.accessVerdict).toBe(verdict);
   });
+
+  it.each(["trialing", "unpaid", "paused", "canceled", "incomplete", "incomplete_expired"])(
+    "strict paid-through denies %s",
+    async (status) => {
+      const { projected } = await recorded("invoice.payment_failed", subscription({ status }), {
+        id: "in_synthetic",
+        subscription: "sub_synthetic",
+      });
+      expect(projected?.accessVerdict).toBe("deny");
+    },
+  );
 
   it("cancel-at-period-end grants only before the boundary; equality and missing period deny", async () => {
     expect(

@@ -1062,12 +1062,12 @@ function membershipRole(member: RailsSubscriptionMember) {
   return "user";
 }
 
-/** Unknown Rails statuses fail closed; ADR-0008 grants only `active`. */
+/** Unknown Rails statuses fail closed; active and past_due share the paid boundary. */
 export function subscriptionPaidThrough(sub: RailsSubscription, nowMs: number): boolean {
   const boundary = railsTimestampToIso(sub.currentPeriodEnd);
   return accessGranted(
     strictPaidThroughRule.evaluate({
-      status: sub.status === "active" ? "active" : "unpaid",
+      status: sub.status === "active" || sub.status === "past_due" ? sub.status : "unpaid",
       paidThroughAt: boundary === null ? null : Date.parse(boundary) / 1000,
       now: nowMs / 1000,
     }),
@@ -1461,6 +1461,14 @@ export interface DeltaPlan {
   readonly ops: readonly DeltaOp[];
   readonly identities: ReadonlyMap<string, IdentityOutcome>;
   readonly expected: ExpectedProjection;
+  readonly skippedGrantless: {
+    readonly users: number;
+    readonly organizations: number;
+    readonly memberships: number;
+    readonly sampleRailsUserIds: readonly string[];
+    readonly sampleRailsAccountIds: readonly string[];
+    readonly sampleRailsAccountUserIds: readonly string[];
+  };
   readonly revokeHeldForIdentity: number;
   /** Seat flags kept because the member's Rails identity is unresolved. */
   readonly membershipRevokeHeldForIdentity: number;
@@ -1927,9 +1935,77 @@ export function computeDeltaPlan(
     ops.push({ kind, key: opKey(kind, row.id), entitlementId: row.id });
   }
 
-  const sorted = ops.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  // Only materialize identities needed by a grant or by surviving live access.
+  // Evaluate the final rows: a revoked/expired subscription must not bootstrap
+  // seats for people who never had access, even if it was live before this plan.
+  const projected = simulateApply(snapshot, ops, new Date(nowMs).toISOString());
+  const grantingIds = new Set(
+    ops.flatMap((op) => (op.kind === "entitlement_grant" ? [op.entitlement.id] : [])),
+  );
+  const neededUsers = new Set<string>();
+  const neededOrganizations = new Set<string>();
+  const neededMemberships = new Set<string>();
+  const grantingOrganizations = new Set<string>();
+  for (const row of projected.entitlements) {
+    if (row.deletedAt !== null) continue;
+    const live = row.expiresAt === null || Date.parse(row.expiresAt) > nowMs;
+    if (!live && !grantingIds.has(row.id)) continue;
+    if (row.userId) neededUsers.add(row.userId);
+    if (row.organizationId) neededOrganizations.add(row.organizationId);
+    if (row.organizationMembershipId) neededMemberships.add(row.organizationMembershipId);
+    // An organization grant reaches only memberships whose seat flag grants.
+    if (live && row.organizationId && row.userId === null) {
+      grantingOrganizations.add(row.organizationId);
+    }
+  }
+  for (const membership of projected.memberships) {
+    if (
+      membership.organizationId &&
+      membershipGrants(membership) &&
+      grantingOrganizations.has(membership.organizationId)
+    ) {
+      neededMemberships.add(membership.id);
+    }
+    if (!neededMemberships.has(membership.id)) continue;
+    neededUsers.add(membership.userId);
+    if (membership.organizationId) neededOrganizations.add(membership.organizationId);
+  }
+  let skippedOrganizations = 0;
+  let skippedMemberships = 0;
+  const skippedUsers: string[] = [];
+  const skippedAccounts: string[] = [];
+  const skippedAccountUsers: string[] = [];
+  const retained = ops.filter((op) => {
+    if (op.kind === "user_create" && !neededUsers.has(op.user.id)) {
+      skippedUsers.push(op.railsUserId);
+      return false;
+    }
+    if (op.kind === "organization_create" && !neededOrganizations.has(op.organization.id)) {
+      skippedOrganizations++;
+      const railsId = op.organization.fields["legacyRailsAccountId"];
+      if (typeof railsId === "string") skippedAccounts.push(railsId);
+      return false;
+    }
+    if (op.kind === "membership_create" && !neededMemberships.has(op.membership.id)) {
+      skippedMemberships++;
+      const railsId = op.membership.fields["legacyRailsAccountUserId"];
+      if (typeof railsId === "string") skippedAccountUsers.push(railsId);
+      return false;
+    }
+    return true;
+  });
+  const skipped: DeltaPlan["skippedGrantless"] = {
+    users: skippedUsers.length,
+    organizations: skippedOrganizations,
+    memberships: skippedMemberships,
+    sampleRailsUserIds: skippedUsers.toSorted().slice(0, 5),
+    sampleRailsAccountIds: skippedAccounts.toSorted().slice(0, 5),
+    sampleRailsAccountUserIds: skippedAccountUsers.toSorted().slice(0, 5),
+  };
+  const sorted = retained.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   return {
     ops: sorted,
+    skippedGrantless: skipped,
     identities,
     expected,
     revokeHeldForIdentity,

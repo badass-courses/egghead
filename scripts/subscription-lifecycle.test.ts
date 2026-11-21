@@ -56,9 +56,21 @@ await test("individual renewal, suspension, recovery and cancellation keep one b
       current,
       snapshot(subscriptionSnapshotSchema.shape.status.parse(status), index + 1, 1),
     ).state;
-    assert.deepEqual(subscriptionBeneficiaries(current, now), status === "active" ? ["owner"] : []);
+    assert.deepEqual(
+      subscriptionBeneficiaries(current, now),
+      status === "active" || status === "past_due" ? ["owner"] : [],
+    );
     assert.equal(current.assignments.length, 1);
   }
+});
+
+await test("past_due keeps its beneficiary inside the paid period and suspends at the boundary", () => {
+  const current = reconcileBilling(state("individual"), snapshot("past_due", 1, 1)).state;
+  const boundary = 5_000_000;
+  assert.deepEqual(subscriptionBeneficiaries(current, boundary - 1), ["owner"]);
+  assert.deepEqual(subscriptionBeneficiaries(current, boundary), []);
+  assert.deepEqual(subscriptionBeneficiaries(current, boundary + 1), []);
+  assert.equal(current.assignments.length, 1);
 });
 
 await test("suspension preserves assignments; removing a member during suspension survives recovery", () => {
@@ -493,7 +505,11 @@ await test("generated histories with plans, reviews, seat changes, renewals and 
       }
       const reviewing = model.assigned.size > model.seats;
       const expected =
-        model.status === "active" && !reviewing ? new Set(model.assigned.keys()) : new Set();
+        (model.status === "active" || model.status === "past_due") &&
+        model.periodEnd * 1000 > at &&
+        !reviewing
+          ? new Set(model.assigned.keys())
+          : new Set();
       const context = JSON.stringify({ seed, step, command });
       assert.deepEqual(new Set(subscriptionBeneficiaries(current, at)), expected, context);
       assert.deepEqual(

@@ -95,10 +95,9 @@ export function subscriptionBoundaryLoss(
       const sub = subscriptions.get(row.sourceId);
       let reason: Reason;
       if (!sub) reason = "subscription_missing";
-      else if (sub.status === "past_due") reason = "status_past_due";
       else if (sub.status === "trialing") reason = "status_trialing";
       else if (sub.status === "unpaid") reason = "status_unpaid";
-      else if (sub.status !== "active") reason = "status_other";
+      else if (sub.status !== "active" && sub.status !== "past_due") reason = "status_other";
       else {
         const boundary = railsTimestampToIso(sub.currentPeriodEnd);
         if (boundary === null) reason = "missing_boundary";
