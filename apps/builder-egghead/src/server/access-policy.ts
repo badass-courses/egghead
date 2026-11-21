@@ -53,6 +53,7 @@ const PUBLIC_PREFIXES = [
 const SIGNED_IN_PREFIXES = ['/activate']
 
 const BEARER_API_PREFIXES = [
+	'/api/content-mcp',
 	'/api/posts',
 	'/api/tags',
 	'/api/videos/',

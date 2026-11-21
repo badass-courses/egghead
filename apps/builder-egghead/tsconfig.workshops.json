@@ -2,6 +2,10 @@
   "extends": "./tsconfig.json",
   "include": [
     "src/lib/workshops/**/*.ts",
+    "src/lib/content/**/*.ts",
+    "src/app/api/content-mcp/**/*.ts",
+    "src/server/ability-for-request.ts",
+    "test/content/**/*.ts",
     "src/app/api/workshop-mcp/**/*.ts",
     "test/workshops/**/*.ts",
     "test/workshops-mysql/**/*.ts",
