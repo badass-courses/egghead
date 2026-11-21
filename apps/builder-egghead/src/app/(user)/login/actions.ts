@@ -10,7 +10,7 @@ export async function getCsrf() {
 	const options: RequestInit = {
 		headers: {
 			...(cookie ? { cookie } : {}),
-			...selfFetchHeaders(),
+			...selfFetchHeaders(env.COURSEBUILDER_URL),
 		},
 		cache: 'no-cache',
 	}

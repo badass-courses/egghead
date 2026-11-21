@@ -15,7 +15,7 @@ export async function GET() {
 		'refreshing inngest',
 		await fetch(`${process.env.COURSEBUILDER_URL}/api/inngest`, {
 			method: 'PUT',
-			headers: selfFetchHeaders(),
+			headers: selfFetchHeaders(`${process.env.COURSEBUILDER_URL}`),
 		}),
 	)
 	return new Response(null, {
