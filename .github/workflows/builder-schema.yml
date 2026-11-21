@@ -1,0 +1,30 @@
+name: builder-schema
+on:
+  pull_request:
+    paths:
+      - "apps/builder-egghead/**"
+      - "apps/web/src/db/**"
+      - "packages/core/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/builder-schema.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  schema-and-device-tokens:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Builder and adapter schema drift plus token lifecycle
+        working-directory: apps/builder-egghead
+        run: pnpm exec vitest run --config vitest.workshops.config.ts test/schema/live-schema.test.ts test/auth/device-token-lifecycle.test.ts
