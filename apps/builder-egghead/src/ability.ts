@@ -7,6 +7,7 @@ import {
 } from '@casl/ability'
 import z from 'zod'
 import type { Workshop } from '@egghead/core/contracts'
+import type { ContentPost } from '@egghead/core/contracts/content'
 
 import { ContentResource } from '@coursebuilder/core/schemas'
 
@@ -46,6 +47,7 @@ type Subjects =
 	| 'User'
 	| ContentResource
 	| Workshop
+	| ContentPost
 	| MinimalPost
 	| User
 	| 'all'

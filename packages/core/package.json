@@ -4,6 +4,8 @@
   "type": "module",
   "exports": {
     "./contracts": "./src/contracts.ts",
+    "./contracts/content": "./src/contracts/content.ts",
+    "./content": "./src/content.ts",
     "./capability": "./src/capability.ts",
     "./workshops": "./src/workshops.ts"
   },
