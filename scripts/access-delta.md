@@ -2,7 +2,7 @@
 
 `pnpm access:delta` re-projects who has paid access from a Rails export into CourseBuilder. It replaces the one-shot July 2026 projection with a delta you can rehearse now and rerun at the flip.
 
-Law: **ADR-0006, lenient at the flip.** Anyone Rails grants today keeps access. A subscription in `trialing`, `active` or `past_due` grants, whatever its period end says.
+Law: **ADR-0008, strict paid-through for account subscriptions.** Only `active` with a strictly future paid boundary grants subscription access, and teams require a valid seat. Other grant promises keep their separate laws. See [paid-through access](../docs/paid-through-access.md) for the reader audit, Stripe seam, loss report and rollout gate.
 
 ADR-0006 note: grants follow Rails `is_pro?` today. Live legacy backing (an active gift, managed subscription or legacy subscription) only explains a grant and sets its expiry; it never widens it. Bare `pro` with no backing is granted only to users active in the last year. Rails' own sign-in check would strip the others the next time they log in.
 
@@ -188,13 +188,13 @@ Identity, in Rails id order:
 4. Empty emails, emails already claimed by a lower Rails id, and emails owned by a different Rails user stay unresolved. Their grants are not projected, and their existing entitlements and seat flags are held, never revoked. They fail the gate.
 5. A user matched by legacy id whose Rails email differs from CourseBuilder's (under the collation) gets `user_email_update`: Rails is the source of truth for email until the flip, so they can sign in with the address they use today. If another user already holds the Rails email, the update is held, the old email stays, and the conflict fails the gate. A case-only change is the same email and is left alone.
 
-Expected rows reproduce the July projection's ids, keys and metadata exactly, plus backed `pro`:
+Expected rows preserve the July projection's ids and keys. Subscription metadata and boundaries now follow ADR-0008; other grants keep their approved laws:
 
 - special roles: `egghead_lifetime_access` (lifetime_subscriber, VIP) or `egghead_staff_special_access`;
 - `basic`: `egghead_basic_legacy_access`, which the runtime treats as full access;
-- each enabled subscription: an organization-level `egghead_all_access_subscription`, plus one seat row per member holding the scoped `account_member` role. `expiresAt` stays null, and `currentPeriodEnd` is metadata only (lenient law). Members without the role get a membership row only. Several enabled subscriptions on one account share one membership;
+- each active subscription with a strictly future `currentPeriodEnd`: an organization-level `egghead_all_access_subscription`, plus one seat row per member holding the scoped `account_member` role. Both rows store that boundary in `expiresAt` under `adr-0008-strict-paid-through`. Equality, missing/invalid boundaries, trialing, past_due and unpaid deny. Cancel-at-period-end grants only until the boundary. Members without the role get a membership row only. Several subscriptions on one account share one membership. Renewal extends the same entitlement ids. A boundary beyond the MySQL TIMESTAMP range refuses planning instead of creating an indefinite grant;
 - purchases: `egghead_membership_access` for `Resource::Membership`, otherwise `egghead_playlist_access`, with the purchase's expiry (anything past MySQL's 2038 limit means no expiry). Bulk playlist pools and purchases without a sellable grant nothing;
-- backed `pro`: one `egghead_all_access_subscription` row per live backing of a user Rails grants as pro, with source type `rails_gift` (expires with the gift; an end past 2038 means no expiry), `rails_managed_subscription` or `rails_legacy_subscription` (no expiry; the period end is metadata, and `legacySubscriptionsPastPeriodEnd` counts granted ones already past it). A legacy subscription past `--legacy-stale-days` is held instead. When the backing lapses or the user loses `pro`, the row expires or is revoked like any owned row. The runtime enforces a gift's expiry because it exempts only `rails_account_subscription` rows from `expiresAt`;
+- backed `pro`: one `egghead_all_access_subscription` row per live backing of a user Rails grants as pro, with source type `rails_gift` (expires with the gift; an end past 2038 means no expiry), `rails_managed_subscription` or `rails_legacy_subscription` (no expiry; the period end is metadata, and `legacySubscriptionsPastPeriodEnd` counts granted ones already past it). A legacy subscription past `--legacy-stale-days` is held instead. When the backing lapses or the user loses `pro`, the row expires or is revoked like any owned row. The runtime enforces every source's `expiresAt`, including gifts and account subscriptions;
 - bare `pro` (including a holder whose only backing is a stale legacy subscription) signed in within `--bare-pro-active-days`: one `egghead_all_access_subscription` row with source type `rails_bare_pro_active`, keyed on the Rails user id, no expiry, lenient law, with any stale subscription ids in `staleLegacySubscriptionIds`. The sign-in date stays in the plan and receipt, not the row: it would churn an update every run. The window decides only the first grant: a later run keeps the row while Rails keeps the user's `pro` role, and revokes it when the role goes.
 
 Change classes, applied in this order so a crash never removes access before granting it:
@@ -259,7 +259,7 @@ The pure suite covers:
 - a team with an owner without a seat, a kept seat, a new seat and a removed seat;
 - lifetime role, lifetime (no-expiry) purchase, basic legacy role;
 - trialing subscription with a role-only member, two subscriptions on one account;
-- lapsed `past_due` user who keeps access;
+- lapsed `past_due` user who loses subscription access;
 - beta signup linked by email, collation-paired emails;
 - bulk buyer, purchase without a sellable, expired purchase classed as `entitlement_expire`;
 - CourseBuilder-native and quarantine rows left alone, seat flags held for native organizations;

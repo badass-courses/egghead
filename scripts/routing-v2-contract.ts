@@ -163,17 +163,17 @@ const checks = [
   assertEqual("course with no access marker defaults to pro", courseAccessFromFields({}), "pro"),
   assertEqual(
     "course-linked paid lessons require access",
-    lessonRequiresAccess({ courseLinked: true, freeForever: false }),
+    lessonRequiresAccess({ courseLinked: true, freeForever: false, isProContent: false }),
     true,
   ),
   assertEqual(
-    "standalone lessons do not require pro access",
-    lessonRequiresAccess({ courseLinked: false, freeForever: false }),
+    "standalone lessons without an explicit pro signal do not require pro access",
+    lessonRequiresAccess({ courseLinked: false, freeForever: false, isProContent: false }),
     false,
   ),
   assertEqual(
     "free course-linked lessons do not require pro access",
-    lessonRequiresAccess({ courseLinked: true, freeForever: true }),
+    lessonRequiresAccess({ courseLinked: true, freeForever: true, isProContent: true }),
     false,
   ),
   // Realistic served-DB field shapes. Rails `free_forever` truth arrived under
@@ -189,6 +189,7 @@ const checks = [
     lessonRequiresAccess({
       courseLinked: true,
       freeForever: lessonFreeForeverFromFields({ freeAccess: true, visibility: "public" }),
+      isProContent: false,
     }),
     false,
   ),
@@ -197,6 +198,7 @@ const checks = [
     lessonRequiresAccess({
       courseLinked: true,
       freeForever: lessonFreeForeverFromFields({ freeAccess: false, visibility: "pro" }),
+      isProContent: true,
     }),
     true,
   ),
@@ -248,7 +250,11 @@ const checks = [
   ),
   assertEqual(
     "course-linked lesson with no gating fields gates by default",
-    lessonRequiresAccess({ courseLinked: true, freeForever: lessonFreeForeverFromFields({}) }),
+    lessonRequiresAccess({
+      courseLinked: true,
+      freeForever: lessonFreeForeverFromFields({}),
+      isProContent: false,
+    }),
     true,
   ),
   assertNumberEqual(
@@ -261,10 +267,15 @@ const checks = [
     ACCESS_ENTITLEMENT_ROWS_SQL,
     "$.hasAccountMemberRole",
   ),
+  assertEqual(
+    "access evaluator never exempts a source from expiry gating",
+    String(ACCESS_ENTITLEMENT_ROWS_SQL.includes("entitlement.sourceType = ?")),
+    "false",
+  ),
   assertIncludes(
-    "access evaluator exempts subscription rows from generic expiresAt gating",
+    "access evaluator requires a strictly future expiry",
     ACCESS_ENTITLEMENT_ROWS_SQL,
-    "entitlement.sourceType = ?",
+    "entitlement.expiresAt > CURRENT_TIMESTAMP(3)",
   ),
   assertIncludes(
     "access evaluator reads purchase country restriction",
@@ -362,7 +373,7 @@ console.log(
       legacyUrlsPreserved: true,
       lessonStaticParamLimit: LESSON_STATIC_PARAM_LIMIT,
       lessonLevelFreeMarkingWinsOverCourseGating: true,
-      onlyCourseLinkedLessonsMayGate: true,
+      courseLinkedAndExplicitlyProStandaloneLessonsGate: true,
     },
   }),
 );

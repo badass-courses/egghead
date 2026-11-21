@@ -15,7 +15,11 @@ import {
   publishedResourceSql,
   routeableLessonResourceSql,
 } from "./publication";
-import { lessonFreeForeverFromFields, lessonHasRailsProContentSignal } from "./lesson-access";
+import {
+  lessonExplicitlyProFromFields,
+  lessonFreeForeverFromFields,
+  lessonHasRailsProContentSignal,
+} from "./lesson-access";
 import { canonicalLessonOrderSql } from "./canonical-order";
 import { contentResourceSlugSql } from "./resource-slug";
 import { HOT_LESSON_STATIC_PARAMS } from "./hot-lesson-static-params";
@@ -282,7 +286,7 @@ function lessonFromRows(input: {
     body: markdownField(fields),
     duration: numberField(fields, "duration") ?? numberField(videoFields, "duration"),
     freeForever: input.freeForeverOverride ?? lessonFreeForeverFromFields(fields),
-    isProContent: booleanField(fields, "isProContent"),
+    isProContent: lessonExplicitlyProFromFields(fields),
     courseLinked: Boolean(parentCourseSlug),
     parentCourseId: input.parentCourse?.id ?? null,
     parentCourseSlug,
@@ -340,8 +344,12 @@ async function getLessonByWhereClause(input: {
     const parentCourse = await parentCoursesForLesson(connection, lesson.id);
     const fields = fieldsFromJson(lesson.fields);
     const slug = stringField(fields, "slug") ?? input.requestedSlug;
+    // An author-free CB post without Rails paid intent needs no duplicate-row fallback.
+    const authorFree =
+      stringField(fields, "access")?.toLowerCase() === "free" &&
+      !lessonExplicitlyProFromFields(fields);
     const freeForeverOverride =
-      parentCourse && !lessonHasRailsProContentSignal(fields)
+      parentCourse && !authorFree && !lessonHasRailsProContentSignal(fields)
         ? await sameSlugRailsTruthFreeForever(connection, { lessonId: lesson.id, slug })
         : null;
     const videoResource = await videoResourceForLesson(connection, lesson.id);

@@ -32,6 +32,7 @@ Signed-in learners use a private profile to review access and recent progress, e
 
 - Public discovery includes browsing and search across courses, lessons, articles, talks, podcasts, and related published resources.
 - Course and lesson routes preserve valuable established URLs, including canonical and compatibility routes where customer value still depends on them.
+- Courses, course-linked lessons, and explicitly pro standalone lessons gate. A resolved lesson-level free marking always wins.
 - Access decisions use explicit granting entitlements. A bare legacy `pro` value must not grant broad access.
 - Progress records published resource completions for signed-in learners; anonymous use must not fabricate completion state.
 - Private profile data and connected-provider details remain private. Public profiles expose only an allowlisted projection.

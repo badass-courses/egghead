@@ -179,6 +179,29 @@ export function manifestUserIds(text: string, runId: string) {
   return [...userIds];
 }
 
+const zero = z.literal(0);
+const insertsOnlyReceiptSchema = z.object({
+  receipt: z.object({
+    rows: z.object({
+      toUpdate: zero,
+      keptCbCompleted: zero,
+      keptCbNewer: zero,
+      keptFieldsNotObject: zero,
+      collapsedDuplicates: zero,
+    }),
+    users: z.object({ unmatchedEmailConflict: zero, unmatchedSharedEmail: zero }),
+  }),
+});
+
+/** Missing counts fail closed too: production approval is inserts-only. */
+export function assertInsertsOnlyReceipt(value: unknown) {
+  if (!insertsOnlyReceiptSchema.safeParse(value).success) {
+    throw new Error(
+      "Production progress import is inserts-only: toUpdate, keptCbCompleted, keptCbNewer, keptFieldsNotObject, collapsedDuplicates, unmatchedEmailConflict and unmatchedSharedEmail must all be 0. Nothing further was written.",
+    );
+  }
+}
+
 const dryRunReceiptSchema = z.object({
   sourceSha256: z.string(),
   target: progressImportTargetSchema,
@@ -211,6 +234,9 @@ export function assertDryRunReceiptMatches(
     throw new Error(
       `The --expect-dry-run receipt was made against another database or branch (runtime ${parsed.data.target.runtime}), not this connection (runtime ${identity.runtime}, same host, port, user and database required). Dry-run this target first.`,
     );
+  }
+  if (identity.runtime === "production") {
+    assertInsertsOnlyReceipt(parseJson(text, "Dry-run receipt"));
   }
   if (parsed.data.sourceSha256 !== sourceSha256) {
     throw new Error(

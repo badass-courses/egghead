@@ -199,7 +199,13 @@ export async function rollbackRows(db: EggheadDatabase, rows: readonly UndoRow[]
           )})`,
         );
         await serial(
-          z.array(z.object({ TABLE_NAME: z.string(), COLUMN_NAME: z.string() })).parse(columns),
+          z
+            .array(z.object({ TABLE_NAME: z.string(), COLUMN_NAME: z.string() }))
+            .parse(columns)
+            // Vitess online-DDL copies are not app references. Exclude its literal
+            // prefix in code (no LIKE wildcards), not an app-prefix allowlist that
+            // could miss real references from other application tables.
+            .filter((column) => !column.TABLE_NAME.startsWith("_vt_")),
           async (column) => {
             const [references] = await tx.execute(
               sql`SELECT 1 AS found FROM ${sql.identifier(column.TABLE_NAME)} WHERE ${sql.identifier(column.COLUMN_NAME)} IN (${ids}) LIMIT 1 FOR UPDATE`,

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RowDataPacket } from "mysql2";
 import mysql from "mysql2/promise";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getEggheadMysqlPool } from "../db/local-docker";
 import {
@@ -19,6 +19,9 @@ import { getPrivateLearningProgress } from "../profile/data";
 import { syncCourseProgressForUser } from "./course-progress";
 import {
   classifyProgressCandidate,
+  emptyProgressImportReceipt,
+  writePlannedRows,
+  type ProgressImportDb,
   importProgressForUser,
   MAX_ROWS_PER_TRANSACTION,
   PROGRESS_IMPORT_SOURCE,
@@ -27,6 +30,7 @@ import {
 } from "./import";
 import {
   assertDryRunReceiptMatches,
+  assertInsertsOnlyReceipt,
   assertRollbackCursorFits,
   manifestUserIds,
   parseImportCursor,
@@ -37,7 +41,12 @@ import {
   resolveImportStart,
   targetMatches,
 } from "./import-cli";
-import { assertProgressImportAccess, openUtcConnection } from "./import-db";
+import {
+  assertProgressImportAccess,
+  openProgressImportDatabase,
+  openUtcConnection,
+  PROGRESS_IMPORT_PRODUCTION_APPROVAL_ENV,
+} from "./import-db";
 import { rollbackProgressImport } from "./import-rollback";
 import {
   jsonlRailsProgressSource,
@@ -1773,6 +1782,176 @@ describe("write rules and guards", () => {
     expect(() =>
       assertProgressImportAccess({ runtime: "production", apply: true, applyApproved: false }),
     ).toThrow("production");
+  });
+});
+
+function transactionFixture() {
+  const execute = vi.fn().mockResolvedValue([[{ action: "insert", count: 1 }], []]);
+  const db: ProgressImportDb = {
+    execute,
+    query: vi.fn(),
+    beginTransaction: vi.fn().mockResolvedValue(undefined),
+    commit: vi.fn().mockResolvedValue(undefined),
+    rollback: vi.fn().mockResolvedValue(undefined),
+  };
+  const receipt = emptyProgressImportReceipt({
+    mode: "apply",
+    runId: "unit",
+    source: "unit",
+    afterRailsUserId: 0,
+    maxRowsPerTransaction: 1,
+    catalog: {
+      lessonByRailsId: new Map(),
+      lessonBySlug: new Map(),
+      courseByRailsPlaylistId: new Map(),
+      courseBySlug: new Map(),
+      stats: {
+        lessonRows: 0,
+        lessonRowsWithRailsId: 0,
+        duplicateLessonRowsForRailsId: 0,
+        courseRows: 0,
+        courseRowsWithRailsPlaylistId: 0,
+      },
+    },
+    startedAt: new Date(),
+  });
+  const writes = [1, 2, 3].map((id) => ({
+    action: "insert" as const,
+    railsUserId: id,
+    cbUserId: `synthetic-${id}`,
+    resourceId: "lesson",
+    kind: "lesson" as const,
+    railsRef: { railsLessonId: 1 },
+    completedAt: new Date(),
+  }));
+  return { db, execute, receipt, writes };
+}
+
+describe("production progress write discipline", () => {
+  it("refuses an unset production approval before connecting", async () => {
+    const connect = vi
+      .spyOn(mysql, "createConnection")
+      .mockRejectedValue(new Error("must not connect"));
+    vi.stubEnv("EGGHEAD_RUNTIME", "production");
+    vi.stubEnv(PROGRESS_IMPORT_PRODUCTION_APPROVAL_ENV, undefined);
+    try {
+      await expect(
+        openProgressImportDatabase({
+          apply: true,
+          rawUrl: "mysql://fixture:synthetic@fixture.connect.psdb.cloud/fixture",
+          confirmDatabase: "fixture",
+        }),
+      ).rejects.toThrow(PROGRESS_IMPORT_PRODUCTION_APPROVAL_ENV);
+      expect(connect).not.toHaveBeenCalled();
+    } finally {
+      connect.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["import", "rollback"])(
+    "gates %s apply on approval and server database confirmation",
+    () => {
+      const input = {
+        runtime: "production",
+        apply: true,
+        applyApproved: false,
+        productionApproved: true,
+        confirmDatabase: "fixture",
+        connectedDatabase: "fixture",
+      } as const;
+      expect(() => assertProgressImportAccess(input)).not.toThrow();
+      expect(() => assertProgressImportAccess({ ...input, productionApproved: false })).toThrow(
+        "production",
+      );
+      expect(() => assertProgressImportAccess({ ...input, confirmDatabase: "wrong" })).toThrow(
+        "confirm-database",
+      );
+      expect(() => assertProgressImportAccess({ ...input, confirmDatabase: undefined })).toThrow(
+        "confirm-database",
+      );
+      expect(() => assertProgressImportAccess({ ...input, connectedDatabase: null })).toThrow(
+        "confirm-database",
+      );
+    },
+  );
+
+  const clean = {
+    rows: {
+      toUpdate: 0,
+      keptCbCompleted: 0,
+      keptCbNewer: 0,
+      keptFieldsNotObject: 0,
+      collapsedDuplicates: 0,
+    },
+    users: { unmatchedEmailConflict: 0, unmatchedSharedEmail: 0 },
+  };
+  it("requires every inserts-only count to be present and zero", () => {
+    expect(() => assertInsertsOnlyReceipt({ receipt: clean })).not.toThrow();
+    expect(() => assertInsertsOnlyReceipt({ receipt: {} })).toThrow("inserts-only");
+    for (const key of Object.keys(clean.rows)) {
+      expect(() =>
+        assertInsertsOnlyReceipt({ receipt: { ...clean, rows: { ...clean.rows, [key]: 1 } } }),
+      ).toThrow("inserts-only");
+    }
+    for (const key of Object.keys(clean.users)) {
+      expect(() =>
+        assertInsertsOnlyReceipt({ receipt: { ...clean, users: { ...clean.users, [key]: 1 } } }),
+      ).toThrow("inserts-only");
+    }
+    const identity = {
+      runtime: "production",
+      host: "fixture.example.test",
+      port: 3306,
+      user: "fixture",
+      database: "fixture",
+    };
+    const output = importOutput({
+      identity,
+      sourceSha256: "abc",
+      receipt: { ...clean, mode: "dry_run", fullSource: true, finishedAt: "now" },
+    });
+    expect(() => assertDryRunReceiptMatches(JSON.stringify(output), "abc", identity)).not.toThrow();
+    output.receipt.rows.toUpdate = 1;
+    expect(() => assertDryRunReceiptMatches(JSON.stringify(output), "abc", identity)).toThrow(
+      "inserts-only",
+    );
+  });
+
+  it("sleeps only between transactions, including across batch calls; production SQL has no upsert", async () => {
+    const { db, execute, receipt, writes } = transactionFixture();
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    await writePlannedRows(db, writes.slice(0, 2), receipt, {
+      insertsOnly: true,
+      pauseMs: 17,
+      sleep,
+    });
+    await writePlannedRows(db, writes.slice(2), receipt, { insertsOnly: true, pauseMs: 17, sleep });
+    expect(sleep.mock.calls).toEqual([[17], [17]]);
+    expect(receipt.rows).toMatchObject({ inserted: 3, updated: 0 });
+    expect(execute.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO"))).toHaveLength(
+      3,
+    );
+    expect(execute.mock.calls.some(([sql]) => /UPDATE/.test(String(sql)))).toBe(false);
+  });
+
+  it("does not sleep at the default, refuses updates, and rolls back an unexpected insert count", async () => {
+    const { db, execute, receipt, writes } = transactionFixture();
+    const sleep = vi.fn();
+    await writePlannedRows(db, writes.slice(0, 1), receipt, { sleep });
+    expect(sleep).not.toHaveBeenCalled();
+    const first = writes[0];
+    if (!first) throw new Error("missing synthetic write");
+    await expect(
+      writePlannedRows(db, [{ ...first, action: "update", priorUpdatedAt: null }], receipt, {
+        insertsOnly: true,
+      }),
+    ).rejects.toThrow("would update");
+    execute.mockResolvedValue([[], []]);
+    await expect(
+      writePlannedRows(db, writes.slice(1, 2), receipt, { insertsOnly: true }),
+    ).rejects.toThrow("rolled back");
+    expect(db.rollback).toHaveBeenCalledOnce();
   });
 });
 
