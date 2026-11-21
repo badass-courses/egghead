@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isContentEditorRequest } from '@/server/editor-for-request'
 import { getSignedUrlForVideoFile } from '@/video-uploader/get-signed-s3-url'
 
 export const GET = async (request: NextRequest) => {
+	if (!(await isContentEditorRequest(request))) {
+		return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+	}
 	const searchParams = new URL(request.url).searchParams
 	const filename = searchParams.get('objectName')
 

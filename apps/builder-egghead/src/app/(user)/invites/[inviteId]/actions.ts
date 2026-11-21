@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation'
 import { db } from '@/db'
 import { invites } from '@/db/schema'
+import { acceptanceProblem } from '@/lib/invites/invite-rules'
 import { eq } from 'drizzle-orm'
 
 interface AcceptInstructorInviteParams {
@@ -19,22 +20,20 @@ export async function acceptInstructorInvite({
 		columns: {
 			inviteEmail: true,
 			inviteState: true,
+			expiresAt: true,
 		},
 	})
 
-	if (!invite) {
-		throw new Error('Invite not found')
-	}
-
-	if (invite.inviteState !== 'INITIATED') {
-		throw new Error('Invite has already been used or expired')
+	const problem = acceptanceProblem(invite, String(email ?? ''))
+	if (problem || !invite) {
+		throw new Error(problem ?? 'Invite not found')
 	}
 
 	await db
 		.update(invites)
 		.set({
 			inviteState: 'VERIFIED',
-			acceptedEmail: email,
+			acceptedEmail: invite.inviteEmail,
 			confirmedAt: new Date(),
 		})
 		.where(eq(invites.id, inviteId))

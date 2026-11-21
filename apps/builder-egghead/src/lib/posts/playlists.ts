@@ -4,6 +4,10 @@ import { eggheadPgQuery } from '@/db/eggheadPostgres'
 import { contentResource, contentResourceResource } from '@/db/schema'
 import { EggheadApiError } from '@/errors/egghead-api-error'
 import { getServerAuthSession } from '@/server/auth'
+import {
+	requireCanManageResource,
+	requireContentEditor,
+} from '@/server/require-editor'
 import { and, eq, like } from 'drizzle-orm'
 
 import { ContentResource } from '@coursebuilder/core/schemas'
@@ -111,6 +115,8 @@ export const removePostFromCoursePost = async ({
 		throw new Error('Missing post ID or course post ID')
 	}
 
+	await requireCanManageResource(resourceOfId)
+
 	const result = await db
 		.delete(contentResourceResource)
 		.where(
@@ -213,6 +219,7 @@ export const addResourceToResource = async ({
 	resource: ContentResource
 	parentResourceId: string
 }) => {
+	await requireContentEditor()
 	const parentResource = await db.query.contentResource.findFirst({
 		where: like(contentResource.id, `%${last(parentResourceId.split('-'))}%`),
 		with: {
@@ -223,6 +230,8 @@ export const addResourceToResource = async ({
 	if (!parentResource) {
 		throw new Error(`Workshop with id ${parentResourceId} not found`)
 	}
+
+	await requireCanManageResource(parentResource.id)
 
 	await db.insert(contentResourceResource).values({
 		resourceOfId: parentResource.id,
@@ -412,6 +421,11 @@ export async function removeSection(
 	sectionId: string,
 	pathToRevalidate: string,
 ) {
+	const { resource } = await requireCanManageResource(sectionId)
+	if (resource.type !== 'section') {
+		throw new Error('Only sections can be removed here')
+	}
+
 	await db.delete(contentResource).where(eq(contentResource.id, sectionId))
 
 	revalidatePath(pathToRevalidate)

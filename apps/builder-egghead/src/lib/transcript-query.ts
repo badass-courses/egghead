@@ -1,5 +1,6 @@
 'use server'
 
+import { requireContentEditor } from '@/server/require-editor'
 import { revalidateTag } from 'next/cache'
 import { courseBuilderAdapter, db } from '@/db'
 import { contentResource } from '@/db/schema'
@@ -43,6 +44,7 @@ export async function updateTranscript(
 	videoResourceId: string,
 	deepgramResponse: DeepgramResponse,
 ) {
+	await requireContentEditor()
 	const { deepgramResults } = deepgramResponse
 	const srt = srtFromTranscriptResult(deepgramResults)
 	const wordLevelSrt = wordLevelSrtFromTranscriptResult(deepgramResults)
