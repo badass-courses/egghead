@@ -3,9 +3,10 @@ import { decideAccess } from '@/server/access-policy'
 import { auth } from '@/server/auth'
 
 /**
- * Closes the builder to anyone without a contributor or admin session.
- * See `src/server/access-policy.ts` for the exemptions. Server actions and
- * route handlers keep their own checks; this is the outer gate, not the only one.
+ * Closes the builder's pages and API routes to anyone without a contributor or
+ * admin session; see `src/server/access-policy.ts` for the exemptions. It can't
+ * fully gate server actions (Next dispatches them by id, not path), so it only
+ * narrows them; each action and route handler checks its caller itself.
  */
 export const proxy = auth((req) => {
 	const { pathname } = req.nextUrl
@@ -22,6 +23,7 @@ export const proxy = auth((req) => {
 		roles,
 		hasBearer: /^Bearer\s+\S+/i.test(req.headers.get('authorization') ?? ''),
 		preflight: req.method === 'OPTIONS',
+		serverAction: Boolean(req.headers.get('next-action')),
 	})
 
 	if (access === 'allow') return NextResponse.next()

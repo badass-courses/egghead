@@ -8,6 +8,7 @@ import {
 	VIDEO_DETACHED_EVENT,
 } from '@/inngest/events/video-attachment'
 import { inngest } from '@/inngest/inngest.server'
+import { requireContentEditor } from '@/server/require-editor'
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm'
 import { z } from 'zod'
 
@@ -24,6 +25,7 @@ export const getCachedVideoResource = unstable_cache(
 )
 
 export async function getVideoResource(id: string | null | undefined) {
+	await requireContentEditor()
 	return courseBuilderAdapter.getVideoResource(id)
 }
 
