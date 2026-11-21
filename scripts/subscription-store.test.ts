@@ -15,6 +15,7 @@ process.env["EGGHEAD_RUNTIME"] = "local";
 process.env["DATABASE_URL"] = "mysql://root:root@127.0.0.1:3307/coursebuilder_test";
 const now = 2_000_000;
 const statements: string[] = [];
+let lastGrantBindings: unknown[] = [];
 let fields: Record<string, unknown> = {};
 let grantUsers: string[] = [];
 let failProjection: boolean | "deadlock-once" = false;
@@ -85,6 +86,7 @@ async function query(options: { sql: string }, input: unknown[]) {
     deletedMemberships.push(input);
   else if (sql.startsWith("update `egghead_Entitlement`")) grantUsers = [];
   else if (sql.startsWith("insert into `egghead_Entitlement`")) {
+    lastGrantBindings = input;
     if (failProjection === "deadlock-once") {
       failProjection = false;
       throw Object.assign(new Error("Deadlock found when trying to get lock"), { errno: 1213 });
@@ -137,6 +139,7 @@ function seed(count: number) {
   fields = { ownerId: "owner", seats: 100, membershipKind: "team", membershipState: state };
   grantUsers = state.assignments.map((assignment) => assignment.userId);
   statements.length = 0;
+  lastGrantBindings = [];
   failProjection = false;
   legacyGrants = [];
   rowStatus = "active";
@@ -181,6 +184,65 @@ await test("reconciliation batches 100 grants with the same statement budget as 
   const oneGrantStatements = await measureReconciliation(1);
   const manyGrantStatements = await measureReconciliation(100);
   assert.equal(manyGrantStatements, oneGrantStatements);
+});
+
+async function assertSuspended(status: SubscriptionSnapshot["status"]) {
+  seed(1);
+  assert.equal((await store.reconcile({ ...snapshot, status }, cb)).status, "applied");
+  assert.deepEqual(grantUsers, [], status);
+  const retire = statements.find((sql) => sql.startsWith("update `egghead_Entitlement`"));
+  assert.ok(retire);
+  assert.match(
+    retire,
+    /`expiresAt` = \?/,
+    "failure and cancellation persist the same boundary column even when grants are retired",
+  );
+}
+
+await test("strict lifecycle renews the existing expiresAt column, suspends unpaid states and restores the same grant", async () => {
+  // These assertions share the transport state, so they must stay sequential.
+  await assertSuspended("past_due");
+  await assertSuspended("trialing");
+  await assertSuspended("unpaid");
+  await assertSuspended("canceled");
+  seed(1);
+  await store.reconcile(snapshot, cb);
+  const insert = statements.find((sql) => sql.startsWith("insert into `egghead_Entitlement`"));
+  assert.ok(insert);
+  assert.match(insert, /`expiresAt` = VALUES\(/);
+  assert.ok(
+    lastGrantBindings.some(
+      (value) => typeof value === "string" && value.startsWith("1970-01-01 01:40:00"),
+    ),
+    "renewal stores currentPeriodEnd=6000 seconds in expiresAt",
+  );
+  const firstIds = lastGrantBindings.filter(
+    (value) => typeof value === "string" && value.startsWith("stripe_seat_"),
+  );
+  await store.reconcile(
+    {
+      ...snapshot,
+      status: "past_due",
+      event: { ...snapshot.event, id: "failure", createdAt: 11, observedAt: 11 },
+    },
+    cb,
+  );
+  assert.deepEqual(grantUsers, []);
+  await store.reconcile(
+    {
+      ...snapshot,
+      currentPeriodEnd: 7000,
+      event: { ...snapshot.event, id: "recovery", createdAt: 12, observedAt: 12 },
+    },
+    cb,
+  );
+  assert.deepEqual(grantUsers, ["member-0"]);
+  assert.deepEqual(
+    lastGrantBindings.filter(
+      (value) => typeof value === "string" && value.startsWith("stripe_seat_"),
+    ),
+    firstIds,
+  );
 });
 
 await test("a failed projection rolls back state and grants and remains retryable", async () => {

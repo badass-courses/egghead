@@ -12,7 +12,6 @@ const BROAD_GRANTING_ENTITLEMENT_TYPES = new Set([
 
 const PLAYLIST_ENTITLEMENT_TYPE = "egghead_playlist_access";
 const QUARANTINE_ENTITLEMENT_TYPE = "egghead_legacy_pro_quarantine";
-const AUTH_SUBSCRIPTION_SOURCE_TYPE = "rails_account_subscription";
 
 export const ACCESS_ENTITLEMENT_ROWS_SQL = `
   SELECT
@@ -28,8 +27,7 @@ export const ACCESS_ENTITLEMENT_ROWS_SQL = `
    AND membership.userId = ?
   WHERE entitlement.deletedAt IS NULL
     AND (
-      entitlement.sourceType = ?
-      OR entitlement.expiresAt IS NULL
+      entitlement.expiresAt IS NULL
       OR entitlement.expiresAt > CURRENT_TIMESTAMP(3)
     )
     AND (
@@ -69,7 +67,6 @@ export async function readAccessEntitlementsForUser(
   try {
     const [rows] = await connection.execute<AccessEntitlementRow[]>(ACCESS_ENTITLEMENT_ROWS_SQL, [
       userId,
-      AUTH_SUBSCRIPTION_SOURCE_TYPE,
       userId,
       userId,
     ]);

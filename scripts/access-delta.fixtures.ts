@@ -458,7 +458,7 @@ export function novemberExportLines() {
     subscription("9003", "7003", "active", 1, "2026-12-15T00:00:00Z", [
       member("8003", "103", { member: true, owner: true }),
     ]),
-    subscription("9004", "7004", "active", 5, "2026-07-31T00:00:00Z", [
+    subscription("9004", "7004", "active", 5, "2026-12-31T00:00:00Z", [
       member("8004", "104", { member: false, owner: true }),
       member("8005", "105", { member: true, owner: false }),
       member("8006", "106", { member: true, owner: false }),

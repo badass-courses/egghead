@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { stripeSubscriptionGrantsAccess } from "./access";
+import { accessGranted, strictPaidThroughRule } from "./ownership/access-rule";
 import { MAX_TEAM_SEATS, subscriptionCheckoutQuantitySchema } from "./team-contracts";
 
 export const billingEventSchema = z.object({
@@ -191,9 +192,13 @@ export function subscriptionNeedsCapacityReview(state: SubscriptionState) {
 
 export function subscriptionBeneficiaries(state: SubscriptionState, now: number) {
   if (
-    !stripeSubscriptionGrantsAccess(state.status) ||
-    !state.currentPeriodEnd ||
-    state.currentPeriodEnd * 1000 <= now ||
+    !accessGranted(
+      strictPaidThroughRule.evaluate({
+        status: state.status,
+        paidThroughAt: state.currentPeriodEnd,
+        now: now / 1000,
+      }),
+    ) ||
     subscriptionNeedsCapacityReview(state)
   )
     return [];
