@@ -11,15 +11,15 @@ Headers:
 - The MCP protocol header negotiated by the SDK
 - `x-vercel-protection-bypass` when required by the deployment
 
-The label is caller-supplied attribution, not an authorization claim. Device tokens remain person-bound. Active database role assignments determine CASL permissions. Missing, unknown, revoked, expired, unverified and no-role tokens are refused. Legacy tokens with a NULL expiry keep the existing Workshop policy (no expiry). Inactive or deleted assignments and roles grant nothing. Content MCP currently requires an editor's `create Content` ability; it is not a general learner-facing read API.
+The label is caller-supplied attribution, not an authorization claim. Device tokens remain person-bound. Active database role assignments determine CASL permissions. Missing, unknown, revoked, expired, unverified and no-role tokens are refused. Legacy tokens with a NULL expiry keep the existing Workshop policy (no expiry). Inactive or deleted assignments and roles grant nothing. Authentication does not require creation permission. Each tool checks its own CASL ability: broad `read Content` before listing, `read` on the post for a single read, `create Content` for creation, and `manage` on the post for editing. Read-only and manage-only identities can use their authorized operations without gaining creation permission.
 
 ## Owned contract
 
-The `@egghead/core/contracts/content` subpath defines Effect Schema inputs, outputs and typed failures. `@egghead/core/content` implements the four capabilities:
+`@egghead/core` is a private workspace package (`private: true`), not a published package. The `@egghead/core/contracts/content` subpath defines Effect Schema inputs, outputs and typed failures. `@egghead/core/content` implements the four capabilities:
 
 | Tool           | Arguments                                | Permission                                                                                                     |
 | -------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `list_posts`   | `limit` (1–50), optional `cursor`        | Admins list all native posts; other editors list their own. Every result must pass `read Content` on the post. |
+| `list_posts`   | `limit` (1–50), optional `cursor`        | Requires `read Content`. Admins list all native posts; other callers list their own. Every result must also pass `read` on the post. |
 | `get_post`     | `id`                                     | `read Content` on that post                                                                                    |
 | `create_draft` | `title`, `body`, `postType`, `fields`    | `create Content`                                                                                               |
 | `update_draft` | `id`, optional `title`, `body`, `fields` | `manage Content` on that post, and its current state must be `draft`                                           |
@@ -63,7 +63,7 @@ pnpm exec vitest run --config vitest.workshops-mysql.config.ts test/workshops-my
 
 This uses uniquely prefixed fixture tables, the published CourseBuilder adapter for creation, the production draft-update SQL, and the same capability/store layer. It exercises create, read, list, edit, audit persistence, stale-snapshot refusal and published-post refusal. It drops only its own fixture tables. Do not point it at a shared or production database.
 
-## Desk proof after an authorized deployment
+## Desk live proof
 
 Deployment and production writes are separate approvals. This implementation does not run them.
 
@@ -74,5 +74,73 @@ Deployment and production writes are separate approvals. This implementation doe
 5. Call `get_post` with the ID. Confirm the edited title and body and `state=draft`. Call `list_posts` as the same person and follow cursors if needed to find it.
 6. Inspect the native row privately: confirm two audit entries with the expected user, label and hashed token identity. Do not copy credentials or customer rows into PRs or fixtures.
 7. Confirm a revoked device token cannot use the content endpoint or create through `/api/posts`. Restore or replace the dedicated proof token only through its normal token lifecycle.
+
+Run this from `apps/builder-egghead` only after the desk has authorized the target deployment and draft write. Supply secrets through the process environment: `CONTENT_MCP_DEVICE_TOKEN`, `CONTENT_MCP_REVOKED_TOKEN` (a dedicated token already revoked through its normal lifecycle), and `VERCEL_AUTOMATION_BYPASS_SECRET`. Set `CONTENT_MCP_BASE_URL` to the exact authorized deployment origin. The script leaves one draft and prints only its new resource ID.
+
+```sh
+pnpm exec tsx --input-type=module <<'JS'
+import assert from 'node:assert/strict'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+const required = (key) => {
+  const value = process.env[key]
+  assert(value, `Missing ${key}`)
+  return value
+}
+const base = new URL(required('CONTENT_MCP_BASE_URL'))
+assert.equal(base.protocol, 'https:')
+const token = required('CONTENT_MCP_DEVICE_TOKEN')
+const revoked = required('CONTENT_MCP_REVOKED_TOKEN')
+assert.notEqual(token, revoked)
+const bypass = required('VERCEL_AUTOMATION_BYPASS_SECRET')
+const headers = {
+  Authorization: `Bearer ${token}`,
+  'X-Actor-Label': 'desk-content-proof',
+  'x-vercel-protection-bypass': bypass,
+}
+const client = new Client({ name: 'desk-content-proof', version: '1' })
+try {
+  await client.connect(new StreamableHTTPClientTransport(new URL('/api/content-mcp', base), {
+    requestInit: { headers },
+  }))
+  assert.deepEqual((await client.listTools()).tools.map(({ name }) => name),
+    ['list_posts', 'get_post', 'create_draft', 'update_draft'])
+  const call = async (name, args) => {
+    const result = await client.callTool({ name, arguments: args })
+    assert.notEqual(result.isError, true, 'Content tool refused the proof operation')
+    assert(result.structuredContent)
+    return result.structuredContent
+  }
+  const created = await call('create_draft', {
+    title: 'Content MCP proof draft', body: 'Original proof body', postType: 'article', fields: {},
+  })
+  assert.equal(typeof created.id, 'string')
+  console.log(`Proof draft ID: ${created.id}`)
+  await call('update_draft', { id: created.id, title: 'Content MCP proof draft edited', body: 'Edited proof body' })
+  const read = await call('get_post', { id: created.id })
+  assert.equal(read.fields.title, 'Content MCP proof draft edited')
+  assert.equal(read.fields.body, 'Edited proof body')
+  assert.equal(read.fields.state, 'draft')
+  const revokedHeaders = {
+    ...headers, Authorization: `Bearer ${revoked}`, 'Content-Type': 'application/json',
+    Accept: 'application/json, text/event-stream',
+  }
+  const deniedMcp = await fetch(new URL('/api/content-mcp', base), {
+    method: 'POST', headers: revokedHeaders,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  })
+  assert.equal(deniedMcp.status, 401)
+  const deniedPosts = await fetch(new URL('/api/posts', base), {
+    method: 'POST', headers: revokedHeaders,
+    body: JSON.stringify({ title: 'Must never be created', postType: 'article' }),
+  })
+  assert.equal(deniedPosts.status, 401)
+} finally {
+  await client.close()
+}
+JS
+```
+
+Using the desk's read-only database access, inspect only `fields.contentMcpAudit` on that returned resource ID. Require exactly two entries with the expected person, `actorLabel=desk-content-proof`, and `tokenId` equal to SHA-256 of the proof token; never paste the token into SQL. Retain a redacted pass/fail receipt rather than the raw row. HTTP success alone does not prove this audit check.
 
 Leave the proof as a draft. Do not publish or delete it through this slice.

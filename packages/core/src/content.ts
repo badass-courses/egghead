@@ -19,6 +19,7 @@ export type ContentAudit = {
 export class ContentActor extends Context.Tag("egghead/ContentActor")<
   ContentActor,
   ContentAudit & {
+    readonly canList: boolean;
     readonly canCreate: boolean;
     readonly canManageAll: boolean;
     readonly canRead: (post: ContentPost) => boolean;
@@ -54,6 +55,10 @@ const missing = () => new ContentFailure({ code: "NotFound", message: "Post not 
 export const listPosts = implement(listPostsContract, (input) =>
   Effect.gen(function* () {
     const actor = yield* ContentActor;
+    if (!actor.canList)
+      return yield* Effect.fail(
+        new ContentFailure({ code: "Unauthorized", message: "Cannot read Content" }),
+      );
     const page = yield* (yield* ContentStore).list({
       ...input,
       ownerId: actor.canManageAll ? undefined : actor.userId,

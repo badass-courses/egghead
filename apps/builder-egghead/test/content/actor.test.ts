@@ -86,7 +86,7 @@ describe("shared device identity", () => {
     expect(actor?.canManage({ ...post, createdById: "other" })).toBe(false);
     expect(actor?.canRead(post)).toBe(true);
   });
-  it("refuses a live token whose database role cannot create Content", async () => {
+  it("authenticates a live token without granting create or manage to a learner", async () => {
     const identity = await authenticateDevice(
       "Bearer synthetic-token",
       async () => ({
@@ -98,7 +98,15 @@ describe("shared device identity", () => {
       }),
       now,
     );
-    expect(contentActor(identity, "test-agent")).toBeNull();
+    expect(contentActor(identity, "test-agent")).toMatchObject({ canCreate: false });
+    expect(
+      contentActor(identity, "test-agent")?.canManage({
+        id: "post",
+        type: "post",
+        createdById: "learner",
+        fields: { title: "Draft", slug: "draft", state: "draft", postType: "lesson" },
+      }),
+    ).toBe(false);
   });
   it.each([
     ["revoked", { ...valid, revokedAt: new Date() }],

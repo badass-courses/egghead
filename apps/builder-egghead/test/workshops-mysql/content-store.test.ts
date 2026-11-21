@@ -95,6 +95,7 @@ it("content contract persists CourseBuilder drafts and atomically appends audit 
       userId: "author",
       tokenId: "synthetic-hash",
       actorLabel: "test-agent",
+      canList: true,
       canCreate: true,
       canManageAll: false,
       canRead: (post) => post.createdById === "author",

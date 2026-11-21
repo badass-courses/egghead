@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
   }
   if (!actor)
     return Response.json(
-      { error: "A valid editor device token and X-Actor-Label are required" },
+      { error: "A valid device token and X-Actor-Label are required" },
       {
         status: 401,
         headers: { "WWW-Authenticate": 'Bearer realm="egghead-builder"' },

@@ -9,11 +9,11 @@ export function contentActor(
   if (!identity || !actorLabel || !/^[a-zA-Z0-9][a-zA-Z0-9 ._/-]{0,99}$/.test(actorLabel))
     return null;
   const { user, ability, tokenId } = identity;
-  if (!ability.can("create", "Content")) return null;
   return ContentActor.of({
     userId: user.id,
     actorLabel,
     tokenId,
+    canList: ability.can("read", "Content"),
     canCreate: ability.can("create", "Content"),
     canManageAll: ability.can("manage", "all"),
     canRead: (post) => ability.can("read", subject("Content", post)),

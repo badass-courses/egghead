@@ -1,4 +1,5 @@
 import { and, asc, eq, gt, isNull } from "drizzle-orm";
+import type { ExecutedQuery } from "@planetscale/database";
 import { draftWrite } from "./draft-write";
 import { courseBuilderAdapter, db } from "@/db";
 import { contentResource } from "@/db/schema";
@@ -43,7 +44,11 @@ const persistence: ContentPersistence = {
     // table with a CAS predicate so a concurrent publish or ownership change cannot
     // turn this draft-only operation into a published-content edit. Audit is atomic.
     const write = draftWrite(contentResource, current, changes, audit);
-    const result = await db.update(contentResource).set(write.values).where(write.where);
+    // Keep the production driver contract explicit: mysql2's affectedRows is not this shape.
+    const result: ExecutedQuery<unknown> = await db
+      .update(contentResource)
+      .set(write.values)
+      .where(write.where);
     return result.rowsAffected === 1;
   },
 };
