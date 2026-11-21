@@ -10,11 +10,13 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import {
+  EGGHEAD_RAILS_APPLICATION_IDS,
   emailUniquenessKey,
   mysqlExpiryOrNull,
   parseRailsAccessExport,
@@ -250,6 +252,7 @@ function learnerLines(railsUserId: string, email: string, sellableId: string) {
       kind: "purchase",
       railsSellablePurchaseId: `60${railsUserId}`,
       railsUserId,
+      railsApplicationId: "10",
       sellableType: "Playlist",
       sellableId,
       purchaseState: "paid",
@@ -539,6 +542,51 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
 
   void test("a purchase without a sellable is counted, not projected", () => {
     assert.equal(analysis.plan.expected.policy.purchasesWithoutSellable, 1);
+  });
+
+  void test("another Skill Recordings site's purchase grants nothing on egghead", () => {
+    // Rails is multi-tenant: Epic React (109), Just JavaScript (181) and the
+    // others share sellable_purchases. Only egghead's applications grant.
+    const tenantLines = (railsUserId: string, sellableId: string, applicationId: string | null) =>
+      learnerLines(railsUserId, `u${railsUserId}@example.test`, sellableId).map((line) =>
+        line.includes('"kind":"purchase"')
+          ? line.replace(
+              '"railsApplicationId":"10"',
+              `"railsApplicationId":${JSON.stringify(applicationId)}`,
+            )
+          : line,
+      );
+    const tenantExport = exportWith([
+      ...tenantLines("150", "800", "109"),
+      ...tenantLines("151", "801", "181"),
+      ...tenantLines("152", "802", "10"),
+      ...tenantLines("153", "803", null),
+    ]);
+    const tenant = analyze(tenantExport, julySnapshot(), NOW_MS);
+    const grantsFor = (railsUserId: string) =>
+      tenant.plan.ops.filter(
+        (op) =>
+          op.kind === "entitlement_grant" &&
+          op.entitlement.metadata?.["railsUserId"] === railsUserId,
+      ).length;
+    assert.equal(grantsFor("150"), 0);
+    assert.equal(grantsFor("151"), 0);
+    assert.equal(grantsFor("152"), 1);
+    assert.equal(grantsFor("153"), 1);
+    assert.equal(tenant.plan.expected.policy.otherTenantPurchases, 2);
+  });
+
+  void test("the export SQL filters sellable purchases to the same egghead applications", () => {
+    // Users are exported only when a granting line references them, so the SQL
+    // filter keeps other sites' buyers out of the export entirely.
+    const sql = readFileSync(new URL("./sql/rails-access-export.sql", import.meta.url), "utf8");
+    const match = sql.match(/sp\.application_id IS NULL OR sp\.application_id IN \(([^)]*)\)/);
+    assert.ok(match, "export SQL must filter sellable_purchases by application_id");
+    const sqlIds = (match[1] ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .toSorted();
+    assert.deepEqual(sqlIds, [...EGGHEAD_RAILS_APPLICATION_IDS].toSorted());
   });
 
   void test("#11: an owned purchase that expired by export time is an expire, not a revoke", () => {
@@ -1985,6 +2033,7 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
         kind: "purchase",
         railsSellablePurchaseId: "6113",
         railsUserId: "113",
+        railsApplicationId: "10",
         sellableType: "Resource::Membership",
         sellableId: "1",
         purchaseState: "paid",
