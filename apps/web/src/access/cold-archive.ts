@@ -19,6 +19,7 @@ import {
 
 const FORMAT = "egghead-cold-archive/v1";
 const MAX_SHARD_BYTES = 64 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const shardSchema = z.strictObject({
   key: z.string().min(1),
@@ -46,7 +47,7 @@ const bodySchema = z.strictObject({
 const signedManifestSchema = z.strictObject({ body: bodySchema, mac: digestSchema });
 export type ArchiveManifest = z.infer<typeof signedManifestSchema>;
 
-/** Private immutable object adapter. put must reject replacement with different bytes. */
+/** Private immutable object adapter. put must atomically reject different-byte replacements. */
 export interface ColdArchiveStore {
   get(key: string): Promise<Uint8Array | null>;
   put(key: string, bytes: Uint8Array): Promise<void>;
@@ -76,7 +77,28 @@ function mac(body: ArchiveManifest["body"], key: Uint8Array) {
   return createHmac("sha256", key).update(JSON.stringify(body)).digest("hex");
 }
 
-/** Compress, then AES-256-GCM; publish the authenticated manifest LAST. No provider/key I/O. */
+function manifestBudget(value: number | undefined) {
+  return z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_MANIFEST_BYTES)
+    .parse(value ?? MAX_MANIFEST_BYTES);
+}
+function manifestBytes(manifest: ArchiveManifest, budget: number) {
+  const bytes = Buffer.from(JSON.stringify(manifest));
+  if (bytes.byteLength > budget) throw new Error("manifest exceeds budget before publication");
+  return bytes;
+}
+function shardPlaintext(records: readonly SubjectEnvelope[]) {
+  return Buffer.from(records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+}
+
+/**
+ * Publication lifecycle: preflight -> reserved -> shards -> manifest -> published.
+ * Any failure after reservation abandons the id; recovery starts with a NEW exportId.
+ * No in-place retry machine or background job is installed by this offline function.
+ */
 export async function exportColdArchive(input: {
   store: ColdArchiveStore;
   keys: ArchiveKeys;
@@ -87,8 +109,11 @@ export async function exportColdArchive(input: {
   bundleKey: string;
   // Independent approved candidate inventory: identities absent from the eligible export survive.
   candidates: readonly ColdCandidate[];
+  // May lower, never raise, the verifier's hard memory/publication limit.
+  manifestByteLimit?: number;
 }): Promise<{ manifestKey: string; manifest: ArchiveManifest }> {
   validateKeys(input.keys);
+  const budget = manifestBudget(input.manifestByteLimit);
   const records = buildSubjectRecords(input);
   const groups = new Map<number, SubjectEnvelope[]>();
   for (const record of records) {
@@ -97,67 +122,104 @@ export async function exportColdArchive(input: {
     group.push(record);
     groups.set(bucket, group);
   }
-  const counts = Object.fromEntries(evidenceFields.map((field) => [field, 0]));
-  const shards: ArchiveManifest["body"]["shards"] = [];
+  const counts = Object.fromEntries(
+    evidenceFields.map((field) => [
+      field,
+      records.reduce((sum, record) => sum + record.counts[field], 0),
+    ]),
+  );
   const prefix = `cold/${sha256(JSON.stringify([input.exportId, input.keyVersion]))}`;
-  // Serialize shard I/O to bound peak decrypted/compressed memory.
-  await [...groups]
+  const manifestKey = `${prefix}/manifest.json`;
+  // Two passes avoid retaining every ciphertext in memory. SHA/MAC hex values have fixed
+  // lengths, so placeholder digests give the EXACT final serialized manifest byte count.
+  const planned = [...groups]
     .toSorted(([a], [b]) => a - b)
-    .reduce(async (previous, [bucket, unsorted]) => {
-      await previous;
+    .map(([bucket, unsorted]) => {
       const group = unsorted.toSorted((a, b) => subjectDigest(a).localeCompare(subjectDigest(b)));
-      const plaintext = Buffer.from(
-        group.map((record) => JSON.stringify(record)).join("\n") + "\n",
-      );
+      const plaintext = shardPlaintext(group);
       if (plaintext.byteLength > MAX_SHARD_BYTES)
         throw new Error("shard exceeds decompression budget");
-      const key = `${prefix}/shard-${bucket.toString(16).padStart(2, "0")}.bin`;
-      const nonce = randomBytes(12);
-      const cipher = createCipheriv("aes-256-gcm", input.keys.encryption, nonce);
-      cipher.setAAD(aad(input, key));
-      const ciphertext = Buffer.concat([
-        nonce,
-        cipher.update(gzipSync(plaintext)),
-        cipher.final(),
-        cipher.getAuthTag(),
-      ]);
       const descriptor = shardSchema.parse({
-        key,
+        key: `${prefix}/shard-${bucket.toString(16).padStart(2, "0")}.bin`,
         bucket,
-        bytes: ciphertext.byteLength,
-        ciphertextSha256: sha256(ciphertext),
+        bytes: gzipSync(plaintext).byteLength + 12 + 16,
+        ciphertextSha256: "0".repeat(64),
         plaintextSha256: sha256(plaintext),
         plaintextBytes: plaintext.byteLength,
         subjects: group.map(subjectDigest),
       });
-      await input.store.put(key, ciphertext);
-      shards.push(descriptor);
-      for (const record of group)
-        for (const field of evidenceFields) {
-          counts[field] = (counts[field] ?? 0) + record.counts[field];
-        }
-    }, Promise.resolve());
+      return { group, descriptor };
+    });
   // Parse source even for an empty candidate inventory via buildSubjectRecords above.
   const sourceManifest = input.exportText.trim().split("\n").at(-1);
   if (!sourceManifest) throw new Error("missing source manifest");
   const parsedSource: unknown = JSON.parse(sourceManifest);
   const { exportedAt } = z.object({ exportedAt: z.iso.datetime() }).parse(parsedSource);
-  const body = bodySchema.parse({
-    format: FORMAT,
-    subjectSchema: SUBJECT_SCHEMA,
-    exportId: input.exportId,
-    exportedAt,
-    bundleKey: input.bundleKey,
-    sourceSha256: input.expectedSourceSha256,
-    keyVersion: input.keyVersion,
-    candidateCount: records.length,
-    candidateDigest: candidateDigest(records.map(subjectDigest)),
-    counts,
-    shards,
-  });
-  const manifest = { body, mac: mac(body, input.keys.authentication) };
-  const manifestKey = `${prefix}/manifest.json`;
-  await input.store.put(manifestKey, Buffer.from(JSON.stringify(manifest)));
+  const manifestFor = (shards: ArchiveManifest["body"]["shards"]): ArchiveManifest => {
+    const body = bodySchema.parse({
+      format: FORMAT,
+      subjectSchema: SUBJECT_SCHEMA,
+      exportId: input.exportId,
+      exportedAt,
+      bundleKey: input.bundleKey,
+      sourceSha256: input.expectedSourceSha256,
+      keyVersion: input.keyVersion,
+      candidateCount: records.length,
+      candidateDigest: candidateDigest(records.map(subjectDigest)),
+      counts,
+      shards,
+    });
+    return { body, mac: mac(body, input.keys.authentication) };
+  };
+  // Validate the complete manifest and its exact byte budget BEFORE ANY store write.
+  const plannedSize = manifestBytes(
+    manifestFor(planned.map((shard) => shard.descriptor)),
+    budget,
+  ).byteLength;
+  const reservationKey = `cold/attempts/${sha256(input.exportId)}.json`;
+  if ((await input.store.get(reservationKey)) || (await input.store.get(manifestKey))) {
+    throw new Error("archive exportId already reserved; retry with a new exportId");
+  }
+  try {
+    await input.store.put(
+      reservationKey,
+      Buffer.from(
+        JSON.stringify({
+          format: "egghead-cold-publication-attempt/v1",
+          exportId: input.exportId,
+          keyVersion: input.keyVersion,
+          token: randomBytes(32).toString("hex"),
+        }),
+      ),
+    );
+  } catch (cause) {
+    // Concurrent attempts cannot reserve the same id: their random tokens differ.
+    throw new Error("archive exportId reservation failed; retry with a new exportId", { cause });
+  }
+  const shards: ArchiveManifest["body"]["shards"] = [];
+  await planned.reduce(async (previous, shard) => {
+    await previous;
+    const plaintext = shardPlaintext(shard.group);
+    const nonce = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", input.keys.encryption, nonce);
+    cipher.setAAD(aad(input, shard.descriptor.key));
+    const ciphertext = Buffer.concat([
+      nonce,
+      cipher.update(gzipSync(plaintext)),
+      cipher.final(),
+      cipher.getAuthTag(),
+    ]);
+    if (ciphertext.byteLength !== shard.descriptor.bytes)
+      throw new Error("shard size changed after preflight");
+    const descriptor = { ...shard.descriptor, ciphertextSha256: sha256(ciphertext) };
+    await input.store.put(descriptor.key, ciphertext);
+    shards.push(descriptor);
+  }, Promise.resolve());
+  const manifest = manifestFor(shards);
+  const finalBytes = manifestBytes(manifest, budget);
+  if (finalBytes.byteLength !== plannedSize)
+    throw new Error("manifest size changed after preflight");
+  await input.store.put(manifestKey, finalBytes);
   return { manifestKey, manifest };
 }
 
@@ -166,6 +228,7 @@ export async function verifyColdArchive(input: {
   store: ColdArchiveStore;
   manifestKey: string;
   keyring: ArchiveKeyring;
+  manifestByteLimit?: number;
   // Trusted locator from the lookup/claim, preventing substitution of another authentic bundle.
   expected: {
     exportId: string;
@@ -174,10 +237,11 @@ export async function verifyColdArchive(input: {
     candidateDigest: string;
   };
 }): Promise<SubjectEnvelope[]> {
-  const manifestBytes = await input.store.get(input.manifestKey);
-  if (!manifestBytes) throw new Error("missing manifest");
-  if (manifestBytes.byteLength > MAX_SHARD_BYTES) throw new Error("manifest exceeds budget");
-  const json: unknown = JSON.parse(Buffer.from(manifestBytes).toString("utf8"));
+  const budget = manifestBudget(input.manifestByteLimit);
+  const manifestObjectBytes = await input.store.get(input.manifestKey);
+  if (!manifestObjectBytes) throw new Error("missing manifest");
+  if (manifestObjectBytes.byteLength > budget) throw new Error("manifest exceeds budget");
+  const json: unknown = JSON.parse(Buffer.from(manifestObjectBytes).toString("utf8"));
   const manifest = signedManifestSchema.parse(json);
   const { body } = manifest;
   const keys = input.keyring(body.keyVersion);

@@ -154,10 +154,12 @@ function firstRecord(
 }
 class MemoryArchive implements ColdArchiveStore {
   objects = new Map<string, Uint8Array>();
+  putKeys: string[] = [];
   get(key: string) {
     return Promise.resolve(this.objects.get(key) ?? null);
   }
   put(key: string, bytes: Uint8Array) {
+    this.putKeys.push(key);
     const existing = this.objects.get(key);
     if (existing && !Buffer.from(existing).equals(Buffer.from(bytes)))
       throw new Error("immutable object conflict");
@@ -165,6 +167,31 @@ class MemoryArchive implements ColdArchiveStore {
     return Promise.resolve();
   }
 }
+class FailingArchive extends MemoryArchive {
+  failure: { kind: "shard"; successfulPutsLeft: number } | { kind: "manifest" } | null;
+  constructor(kind: "shard" | "manifest") {
+    super();
+    this.failure = kind === "shard" ? { kind, successfulPutsLeft: 1 } : { kind };
+  }
+  override put(key: string, bytes: Uint8Array) {
+    if (this.failure?.kind === "shard" && key.includes("/shard-")) {
+      if (this.failure.successfulPutsLeft > 0) {
+        this.failure.successfulPutsLeft--;
+      } else {
+        this.failure = null;
+        this.putKeys.push(key);
+        return Promise.reject(new Error("injected shard put failure"));
+      }
+    }
+    if (this.failure?.kind === "manifest" && key.endsWith("/manifest.json")) {
+      this.failure = null;
+      this.putKeys.push(key);
+      return Promise.reject(new Error("injected manifest put failure"));
+    }
+    return super.put(key, bytes);
+  }
+}
+
 async function archive(
   lines: readonly FixtureLine[] = [user(), purchase()],
   candidates = [candidate()],
@@ -439,6 +466,117 @@ void test("encrypted compressed archive roundtrip, stable buckets and separate b
   const backup = new MemoryArchive();
   backup.objects = new Map(store.objects);
   assert.deepEqual(await verifyColdArchive({ ...input, store: backup }), restored);
+});
+
+void test("manifest budget is inclusive, preflight refuses over-budget before ANY put, and verification agrees", async () => {
+  const baseline = await archive();
+  const exportText = source([user(), purchase()]);
+  const settings = {
+    keys: baseline.secret,
+    keyVersion: "test-key-v1",
+    exportText,
+    expectedSourceSha256: sha256(exportText),
+    exportId: "synthetic-export-v1",
+    bundleKey: "synthetic-support-bundle-v1",
+    candidates: [candidate()],
+  };
+  const budget = Buffer.byteLength(JSON.stringify(baseline.manifest));
+  const exact = new MemoryArchive();
+  const published = await exportColdArchive({
+    ...settings,
+    store: exact,
+    manifestByteLimit: budget,
+  });
+  assert.equal((await exact.get(published.manifestKey))?.byteLength, budget);
+  assert.equal(
+    (await verifyColdArchive({ ...baseline.input, store: exact, manifestByteLimit: budget }))
+      .length,
+    1,
+  );
+  await assert.rejects(
+    verifyColdArchive({ ...baseline.input, store: exact, manifestByteLimit: budget - 1 }),
+    /manifest exceeds budget/,
+  );
+  const over = new MemoryArchive();
+  await assert.rejects(
+    exportColdArchive({ ...settings, store: over, manifestByteLimit: budget - 1 }),
+    /manifest exceeds budget before publication/,
+  );
+  assert.deepEqual(over.putKeys, []);
+  assert.equal(over.objects.size, 0);
+  await assert.rejects(
+    exportColdArchive({ ...settings, store: over, manifestByteLimit: 64 * 1024 * 1024 + 1 }),
+  );
+  assert.deepEqual(over.putKeys, []);
+  // A preflight failure has not consumed the id: a corrected budget can still publish it.
+  await exportColdArchive({ ...settings, store: over, manifestByteLimit: budget });
+  await assert.rejects(
+    exportColdArchive({ ...settings, store: over }),
+    /already reserved; retry with a new exportId/,
+  );
+});
+
+void test("failed shard/manifest puts publish no manifest; same-id retry is clear and a new exportId recovers", async () => {
+  await Promise.all(
+    (["shard", "manifest"] as const).map(async (failure) => {
+      const store = new FailingArchive(failure);
+      const secret = keys();
+      const exportText = source([user(), purchase()]);
+      const candidates = [candidate(), candidate("synthetic-empty")];
+      const [first, second] = candidates;
+      assert.ok(first && second);
+      assert.notEqual(
+        sha256(first.railsUserId).slice(0, 2),
+        sha256(second.railsUserId).slice(0, 2),
+      );
+      const settings = {
+        store,
+        keys: secret,
+        keyVersion: "test-key-v1",
+        exportText,
+        expectedSourceSha256: sha256(exportText),
+        exportId: "synthetic-failed-export",
+        bundleKey: "synthetic-support-bundle-v1",
+        candidates,
+      };
+      await assert.rejects(
+        exportColdArchive(settings),
+        new RegExp(`injected ${failure} put failure`),
+      );
+      const objects = [...store.objects.keys()];
+      assert.ok(objects.some((key) => key.startsWith("cold/attempts/")));
+      assert.ok(objects.some((key) => key.includes("/shard-")));
+      assert.ok(!objects.some((key) => key.endsWith("/manifest.json")));
+      const attemptedPuts = store.putKeys.length;
+      await assert.rejects(
+        exportColdArchive(settings),
+        /already reserved; retry with a new exportId/,
+      );
+      assert.equal(store.putKeys.length, attemptedPuts);
+      assert.deepEqual([...store.objects.keys()], objects);
+      const exportId = "synthetic-recovered-export";
+      const recovered = await exportColdArchive({ ...settings, exportId });
+      const restored = await verifyColdArchive({
+        store,
+        manifestKey: recovered.manifestKey,
+        keyring: () => secret,
+        expected: {
+          exportId,
+          sourceSha256: sha256(exportText),
+          candidateCount: candidates.length,
+          candidateDigest: sha256(
+            JSON.stringify(candidates.map((row) => sha256(row.railsUserId)).toSorted()),
+          ),
+        },
+      });
+      assert.equal(restored.length, candidates.length);
+      assert.equal(
+        [...store.objects.keys()].filter((key) => key.endsWith("/manifest.json")).length,
+        1,
+      );
+      assert.ok(objects.every((key) => store.objects.has(key)));
+    }),
+  );
 });
 
 void test("key rotation retains old decryption and rejects wrong, unknown and non-separated keys", async () => {
