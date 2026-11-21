@@ -11,6 +11,10 @@ import { last } from '@coursebuilder/nodash'
 
 import { EGGHEAD_API_V1_BASE_URL, getEggheadToken } from '../egghead'
 import { updatePostInTypeSense } from '../typesense/post'
+import {
+	buildTracklistReorderQuery,
+	PositionInputSchema,
+} from './position-input'
 import { getPost } from './read'
 
 // Simple CourseBuilderError implementation until properly imported
@@ -288,16 +292,7 @@ export const updateResourcePosition = async ({
 	return result
 }
 
-/**
- * Type for position input items used in updateResourcePositions
- */
-export type positionInputItem = {
-	currentParentResourceId: string
-	parentResourceId: string
-	resourceId: string
-	position: number
-	children?: positionInputItem[]
-}
+export type { positionInputItem } from './position-input'
 
 /**
  * Reorders items in an Egghead playlist
@@ -332,13 +327,14 @@ async function reorderEggheadPlaylistItems(
 
 	// Update each tracklist item's position in the playlist
 	await Promise.all(
-		tracklistAttributes.map((item) =>
-			eggheadPgQuery(
-				`UPDATE tracklists SET row_order = ${item.row_order_position} 
-				WHERE tracklistable_id = ${item.tracklistable_id}
-				AND playlist_id = ${eggheadPlaylistId}`,
-			),
-		),
+		tracklistAttributes.map((item) => {
+			const { sql, params } = buildTracklistReorderQuery({
+				rowOrder: item.row_order_position,
+				tracklistableId: item.tracklistable_id,
+				playlistId: eggheadPlaylistId,
+			})
+			return eggheadPgQuery(sql, params)
+		}),
 	)
 
 	return true
@@ -351,12 +347,14 @@ async function reorderEggheadPlaylistItems(
  * @returns The response from reordering Egghead playlist items
  * @throws {Error} If the user is not authorized
  */
-export const updateResourcePositions = async (input: positionInputItem[]) => {
+export const updateResourcePositions = async (rawInput: unknown) => {
 	const { session, ability } = await getServerAuthSession()
 
 	if (!session?.user?.id || !ability.can('create', 'Content')) {
 		throw new Error('Unauthorized')
 	}
+
+	const input = PositionInputSchema.parse(rawInput)
 
 	const result = await db.transaction(async (trx) => {
 		for (const {

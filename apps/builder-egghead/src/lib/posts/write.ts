@@ -500,9 +500,9 @@ export async function deletePostFromDatabase(id: string) {
 	}
 
 	if (post.fields.eggheadLessonId) {
-		await eggheadPgQuery(
-			`UPDATE lessons SET state = 'retired' WHERE id = ${post.fields.eggheadLessonId}`,
-		)
+		await eggheadPgQuery(`UPDATE lessons SET state = 'retired' WHERE id = $1`, [
+			post.fields.eggheadLessonId,
+		])
 	}
 
 	await db
