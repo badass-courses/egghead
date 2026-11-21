@@ -26,16 +26,19 @@ export async function openUtcConnection(options: mysql.ConnectionOptions) {
  * (`EGGHEAD_BETA_DB_APPROVED`). Writing beta (import apply or rollback apply)
  * also needs `EGGHEAD_PROGRESS_IMPORT_APPLY_APPROVED=true`, so a dry-run
  * environment cannot write by adding `--apply`. Production is refused for
- * both until it has its own reviewed approval.
+ * writes until it has its own reviewed approval; a production dry run reads only.
  */
 export function assertProgressImportAccess(input: {
   runtime: EggheadRuntime;
   apply: boolean;
   applyApproved: boolean;
 }) {
-  if (input.runtime === "production") {
+  // A production dry run only reads, so it is allowed: the plan for a
+  // production write has to be reviewed against production data. Writing
+  // production stays refused until it has its own reviewed approval.
+  if (input.runtime === "production" && input.apply) {
     throw new Error(
-      "Refusing progress import against runtime=production. Import into beta or local first; production needs its own reviewed approval.",
+      "Refusing to write progress into runtime=production. Dry runs are allowed; a production write needs its own reviewed approval.",
     );
   }
   if (input.apply && input.runtime === "beta" && !input.applyApproved) {
