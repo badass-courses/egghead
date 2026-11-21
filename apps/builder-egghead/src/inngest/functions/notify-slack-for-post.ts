@@ -25,8 +25,10 @@ export const notifySlack = inngest.createFunction(
 
 		const instructor = eggheadUser?.instructor
 
+		// Most instructors have no Slack channel on record; that is a normal skip,
+		// not a failed run.
 		if (!instructor || !instructor?.slack_group_id)
-			throw new NonRetriableError('No instructor found')
+			return { skipped: 'no instructor Slack channel' }
 
 		await step.run('Notify slack', async () => {
 			await notificationProvider.sendNotification({

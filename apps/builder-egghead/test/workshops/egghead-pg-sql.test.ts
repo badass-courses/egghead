@@ -73,4 +73,43 @@ describe('legacy egghead Postgres queries', () => {
 		}
 		expect(offenders).toEqual([])
 	})
+
+	it('never splices values into SQL in any module that talks to the egghead pool', () => {
+		const src = fileURLToPath(new URL('../../src', import.meta.url))
+		const files: string[] = []
+		const walk = (dir: string) => {
+			for (const name of readdirSync(dir)) {
+				const path = join(dir, name)
+				if (statSync(path).isDirectory()) walk(path)
+				else if (/\.(ts|tsx)$/.test(name)) files.push(path)
+			}
+		}
+		walk(src)
+
+		// Covers eggheadPgQuery, pool.query and client.query alike, including SQL
+		// built in a helper and passed by variable: any template literal that reads
+		// as SQL in a file importing the egghead pool may not splice a value.
+		const sqlVerb = /\b(INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|SELECT\b[\s\S]*\bFROM)\b/i
+		const template = /`([^`]*)`/g
+		const offenders: string[] = []
+		for (const file of files) {
+			const text = readFileSync(file, 'utf8')
+			if (!/eggheadPostgres/.test(text)) continue
+			for (const match of text.matchAll(template)) {
+				const body = match[1] ?? ''
+				if (!sqlVerb.test(body)) continue
+				// Allowed structural splices only: $${n} placeholders, a joined list of
+				// `$n` placeholders, and column lists from constant arrays in the same
+				// module (INSERT helpers in course.ts, instructor.ts, lesson.ts) or
+				// updateTag's zod-fixed keys.
+				const spliced = body
+					.replace(/\$\$\{[^}]*\}/g, '')
+					.replace(/\$\{updateFields\.join\(', '\)\}/g, '')
+					.replace(/\$\{columns\.join\(', '\)\}/g, '')
+					.replace(/\$\{placeholders\}/g, '')
+				if (spliced.includes('${')) offenders.push(file.slice(src.length))
+			}
+		}
+		expect(offenders).toEqual([])
+	})
 })
