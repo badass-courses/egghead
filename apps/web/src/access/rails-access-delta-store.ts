@@ -20,6 +20,13 @@ import {
   type RailsAccessExport,
 } from "./rails-access-delta";
 import type { ApplyCursor } from "./rails-access-delta-plan";
+import {
+  captureUndo,
+  checkUndoBaseline,
+  stampUndo,
+  undoForOps,
+  type UndoRow,
+} from "./rails-access-delta-rollback";
 
 export type EggheadDatabase = ReturnType<typeof getEggheadDatabase>;
 type Reader = Pick<EggheadDatabase, "select" | "execute">;
@@ -595,6 +602,7 @@ export interface BatchTiming {
 
 export interface ApplyOptions {
   readonly batchSize: number;
+  readonly undoRows?: readonly UndoRow[];
   /** Called after each committed batch, before the cursor is saved. */
   readonly onBatch?: (timing: BatchTiming) => void;
   /** Stop after this many committed batches (resume later). */
@@ -623,7 +631,27 @@ async function applyBatches(
   if (!batch || (options.maxBatches !== undefined && done >= options.maxBatches)) return cursor;
   const now = options.now();
   const started = performance.now();
-  await db.transaction((transaction) => writeInOrder(transaction, batch, now));
+  let journal = cursor.undoRows ?? [];
+  await db.transaction(async (transaction) => {
+    const reviewed = options.undoRows
+      ? undoForOps(options.undoRows, batch)
+      : await captureUndo(transaction, batch);
+    const previous = reviewed.map(
+      (row) => journal.find((saved) => saved.table === row.table && saved.id === row.id) ?? row,
+    );
+    await checkUndoBaseline(transaction, previous);
+    await writeInOrder(transaction, batch, now);
+    const stamped = await stampUndo(transaction, previous);
+    journal = [
+      ...journal.filter(
+        (row) => !stamped.some((next) => next.table === row.table && next.id === row.id),
+      ),
+      ...stamped,
+    ];
+    // Write proof before commit. If the process dies before commit, rollback
+    // refuses a mismatching image; it never guesses that a write landed.
+    await options.saveCursor({ ...cursor, undoRows: journal });
+  });
   options.onBatch?.({
     batch: cursor.batches + 1,
     ops: batch.length,
@@ -634,6 +662,7 @@ async function applyBatches(
   const next: ApplyCursor = {
     ...cursor,
     appliedOps,
+    undoRows: journal,
     batches: cursor.batches + 1,
     lastKey: batch.at(-1)?.key ?? cursor.lastKey,
     complete: appliedOps >= cursor.totalOps,

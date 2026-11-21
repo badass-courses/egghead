@@ -41,6 +41,8 @@
 // local wall-clock strings, and CourseBuilder runs in UTC.
 
 import { createHash } from "node:crypto";
+import { captureUndo } from "../apps/web/src/access/rails-access-delta-rollback";
+import { parseOnlyUsers, selectUserOps } from "../apps/web/src/access/rails-access-delta-canary";
 import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -106,7 +108,7 @@ function usage(message?: string): never {
       "[--identity-pass] [--apply|--resume] [--expect-plan <sha256>] [--confirm-database <db>] " +
       "[--batch-size N] [--max-batches N] [--allow-large-revoke] [--accept-bare-pro <sha256>] " +
       "[--previous-receipt <receipt.json>] [--allow-backing-growth] [--held-seat-flag <membershipId>=clear|keep]... " +
-      "[--accept-first-backing <sourceType>=<count>]... [--accept-stale-legacy <sha256>] [--accept-orphan-grants <sha256>] [--accept-held-org-reach <sha256>] " +
+      "[--accept-first-backing <sourceType>=<count>]... [--accept-stale-legacy <sha256>] [--accept-stale-managed <sha256>] [--only-users <file>] [--accept-orphan-grants <sha256>] [--accept-held-org-reach <sha256>] " +
       "[--max-identity-ops 50] [--legacy-stale-days 45] [--bare-pro-active-days 365] " +
       "[--max-export-age 2h] [--now <iso>] [--snapshot-transaction|--no-snapshot-transaction] [--json]",
   );
@@ -265,6 +267,8 @@ async function main() {
       "held-seat-flag": { type: "string", multiple: true },
       "accept-first-backing": { type: "string", multiple: true },
       "accept-stale-legacy": { type: "string" },
+      "accept-stale-managed": { type: "string" },
+      "only-users": { type: "string" },
       "accept-orphan-grants": { type: "string" },
       "accept-held-org-reach": { type: "string" },
       "max-identity-ops": { type: "string" },
@@ -284,6 +288,9 @@ async function main() {
   if (!exportPath) usage("--export is required");
   if (values.apply && values.resume) usage("--apply and --resume are exclusive");
   const writing = values.apply || values.resume;
+  const onlyUsers = values["only-users"]
+    ? parseOnlyUsers(await readFile(values["only-users"], "utf8"))
+    : undefined;
   const pass: DeltaPass = values["identity-pass"] ? "identity" : "full";
   const batchSize = positiveInt(values["batch-size"], "--batch-size", 100);
   const maxBatches =
@@ -324,6 +331,7 @@ async function main() {
     allowLargeRevoke: values["allow-large-revoke"],
     acceptBarePro: values["accept-bare-pro"] ?? null,
     acceptStaleLegacy: values["accept-stale-legacy"] ?? null,
+    acceptStaleManaged: values["accept-stale-managed"] ?? null,
     acceptOrphanGrants: values["accept-orphan-grants"] ?? null,
     acceptHeldOrgReach: values["accept-held-org-reach"] ?? null,
     acceptFirstBacking: firstBackingAcceptances(values["accept-first-backing"] ?? []),
@@ -417,13 +425,18 @@ async function main() {
       readOptions,
       analyzeOptions,
     );
-    const built = buildReceipt(railsExport, analysis, {
-      mode,
-      generatedAt,
-      target,
-      gateInputs,
-      previousBackingCounts: previousBacking?.counts ?? null,
-    });
+    const selectedPlanOps = selectUserOps(analysis.plan.ops, analysis.snapshot, onlyUsers);
+    const built = buildReceipt(
+      railsExport,
+      { ...analysis, plan: { ...analysis.plan, ops: selectedPlanOps } },
+      {
+        mode,
+        generatedAt,
+        target,
+        gateInputs,
+        previousBackingCounts: previousBacking?.counts ?? null,
+      },
+    );
     const receipt: Record<string, unknown> = {
       ...built,
       analysisClock: new Date(analysisNowMs).toISOString(),
@@ -465,12 +478,23 @@ async function main() {
           pass,
           gateInputs,
           generatedAt,
-          ops: analysis.plan.ops,
+          ops: selectUserOps(analysis.plan.ops, analysis.snapshot, onlyUsers),
+          undoRows: await captureUndo(
+            db,
+            selectUserOps(analysis.plan.ops, analysis.snapshot, onlyUsers),
+          ),
+          ...(onlyUsers ? { onlyUsers } : {}),
+          runtime: safety.runtime,
         }),
       );
       receipt["planFile"] = planPath;
     } else {
       const plan = parsePlan(await readFile(planPath, "utf8"));
+      if (JSON.stringify(plan.onlyUsers) !== JSON.stringify(onlyUsers))
+        throw new Error("--only-users differs from reviewed plan");
+      if (plan.runtime !== safety.runtime) throw new Error("plan runtime differs from target");
+      if (!plan.undoRows) throw new Error("plan has no rollback images; create a new dry run");
+      const selectedOps = selectUserOps(analysis.plan.ops, analysis.snapshot, onlyUsers);
       const pending =
         existingCursor && existingCursor.lastKey !== null
           ? plan.ops.filter((op) => op.key > (existingCursor.lastKey ?? ""))
@@ -486,11 +510,11 @@ async function main() {
         exportedAtMs: analysisClockMs(railsExport, null),
         nowMs: Date.now(),
         maxExportAgeMs,
-        freshPlanSha256: planSha256(analysis.plan.ops),
+        freshPlanSha256: planSha256(selectedOps),
         ...(mode === "resume"
           ? {
               resume: {
-                freshOpsOutsidePlan: analysis.plan.ops.filter(
+                freshOpsOutsidePlan: selectedOps.filter(
                   (op) => !pendingJson.has(JSON.stringify(op)),
                 ).length,
               },
@@ -525,6 +549,8 @@ async function main() {
       }
       const result = await applyAndVerify(db, railsExport, plan.ops, cursor, {
         batchSize,
+        undoRows: plan.undoRows,
+        ...(onlyUsers ? { onlyUsers } : {}),
         ...(maxBatches === undefined ? {} : { maxBatches }),
         now,
         analysisNowMs,
@@ -532,8 +558,10 @@ async function main() {
         analyzeOptions,
         saveCursor: (next) => writePrivate(cursorPath, `${JSON.stringify(next)}\n`),
       });
+      const { undoRows: privateUndoRows, ...publicCursor } = result.cursor;
       receipt["apply"] = {
-        cursor: result.cursor,
+        cursor: publicCursor,
+        rollbackRows: privateUndoRows?.length ?? 0,
         cursorFile: cursorPath,
         planFile: planPath,
         batchSize,

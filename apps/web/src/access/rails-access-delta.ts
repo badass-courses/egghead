@@ -171,8 +171,12 @@ const backingGrantLine = z.object({
   railsUserId: z.string().min(1),
   /** Gifts only: claimed_at + COALESCE(duration_months, 12) months, UTC. */
   expiresAt: nullableText,
-  /** Legacy subscriptions only: Stripe's renewing period end, metadata only. */
+  /** Rails date for managed/legacy backing; managed requires a current paid-through date. */
   currentPeriodEnd: nullableText,
+  heldReason: z
+    .enum(["no_subscription", "cancelled", "no_period_end", "period_end_stale"])
+    .nullable()
+    .optional(),
 });
 
 const manifestCounts = z.object({
@@ -877,7 +881,7 @@ export interface HeldLegacySubscription {
   readonly railsSourceId: string;
   readonly railsUserId: string;
   readonly currentPeriodEnd: string | null;
-  readonly reason: "period_end_stale" | "no_period_end";
+  readonly reason: "period_end_stale" | "no_period_end" | "no_subscription" | "cancelled";
 }
 
 /**
@@ -914,10 +918,28 @@ export function partitionBackingGrants(
   const cutoffMs = nowMs - staleDays * 86_400_000;
   const live: RailsBackingGrant[] = [];
   const held: HeldLegacySubscription[] = [];
+  const heldManaged: HeldLegacySubscription[] = [];
   const withoutPro: RailsBackingGrant[] = [];
   for (const grant of grants) {
     if (!proEligible.has(grant.railsUserId)) {
       withoutPro.push(grant);
+      continue;
+    }
+    if (grant.source === "managed_subscription") {
+      const end = railsTimestampToIso(grant.currentPeriodEnd);
+      // Rails stores a date: the entire export date is paid-through, in UTC.
+      const day = new Date(nowMs).toISOString().slice(0, 10);
+      const reason =
+        grant.heldReason ??
+        (end === null ? "no_period_end" : end.slice(0, 10) < day ? "period_end_stale" : null);
+      if (reason)
+        heldManaged.push({
+          railsSourceId: grant.railsSourceId,
+          railsUserId: grant.railsUserId,
+          currentPeriodEnd: end,
+          reason,
+        });
+      else live.push(grant);
       continue;
     }
     if (grant.source !== "legacy_subscription") {
@@ -937,7 +959,7 @@ export function partitionBackingGrants(
       live.push(grant);
     }
   }
-  return { live, held, withoutPro };
+  return { live, held, heldManaged, withoutPro };
 }
 
 /**
@@ -1450,6 +1472,7 @@ export interface DeltaPlan {
   readonly projectedExport: RailsAccessExport;
   /** Legacy subscriptions held as stale: granted nothing, existing rows kept. */
   readonly heldLegacySubscriptions: readonly HeldLegacySubscription[];
+  readonly heldManagedSubscriptions: readonly HeldLegacySubscription[];
   /** Every pro-eligible stale legacy subscription, before the one-list rule (for reconciliation). */
   readonly staleLegacyAll: readonly HeldLegacySubscription[];
   /** Existing rows kept for a held stale legacy subscription. */
@@ -1512,12 +1535,18 @@ export function deltaScope(
     nowMs,
     options.legacyStaleDays ?? DEFAULT_LEGACY_STALE_DAYS,
   );
+  const grantedAnotherWay = exportProEquivalent(railsExport, backing.live);
+  const heldManaged = backing.heldManaged.filter(
+    (held) =>
+      !grantedAnotherWay.has(held.railsUserId) &&
+      !railsExport.orphanRailsUserIds.includes(held.railsUserId),
+  );
   // A pro holder whose only backing is a stale legacy subscription is bare `pro`
   // with dead billing: the same sign-in window decides.
   const split = splitBarePro(
     railsExport,
     backing.live,
-    new Set(railsExport.orphanRailsUserIds),
+    new Set([...railsExport.orphanRailsUserIds, ...heldManaged.map((held) => held.railsUserId)]),
     nowMs,
     options.bareProActiveDays ?? DEFAULT_BARE_PRO_ACTIVE_DAYS,
   );
@@ -1528,6 +1557,7 @@ export function deltaScope(
   const kept = railsExport.proHolders
     .filter((holder) => {
       const id = holder.railsUserId;
+      if (heldManaged.some((held) => held.railsUserId === id)) return false;
       if (!existingBareProActive.has(id) || activeIds.has(id) || seenKept.has(id)) return false;
       seenKept.add(id);
       return true;
@@ -1574,12 +1604,25 @@ export function deltaScope(
       .map((holder) => holder.railsUserId)
       .filter((railsUserId) => !grantReferenced.has(railsUserId)),
   );
+  const managedHeldIds = new Set(heldManaged.map((held) => held.railsUserId));
   const projectedExport: RailsAccessExport = {
     ...railsExport,
-    users: railsExport.users.filter((user) => !proOnly.has(user.railsUserId)),
+    // A managed-only hold freezes the user, even if a playlist purchase or
+    // non-granting membership would otherwise cause an identity/create op.
+    users: railsExport.users.filter(
+      (user) => !proOnly.has(user.railsUserId) && !managedHeldIds.has(user.railsUserId),
+    ),
+    purchases: railsExport.purchases.filter(
+      (purchase) => !managedHeldIds.has(purchase.railsUserId),
+    ),
+    subscriptions: railsExport.subscriptions.map((subscription) =>
+      Object.assign({}, subscription, {
+        members: subscription.members.filter((member) => !managedHeldIds.has(member.railsUserId)),
+      }),
+    ),
     backingGrants: backing.live,
   };
-  return { backing, barePro, heldLegacy, staleByGrantedUser, projectedExport };
+  return { backing, barePro, heldLegacy, heldManaged, staleByGrantedUser, projectedExport };
 }
 
 export interface DeltaPlanOptions {
@@ -1607,7 +1650,7 @@ export function computeDeltaPlan(
     }),
   );
   const scope = deltaScope(railsExport, nowMs, options, existingBareProActive);
-  const { backing, barePro, heldLegacy, staleByGrantedUser, projectedExport } = scope;
+  const { backing, barePro, heldLegacy, heldManaged, staleByGrantedUser, projectedExport } = scope;
   const identities = resolveIdentities(projectedExport, snapshot);
   const expected = buildExpectedProjection(
     projectedExport,
@@ -1636,6 +1679,7 @@ export function computeDeltaPlan(
   const heldRailsUserIds = new Set([
     ...barePro.held.map((holder) => holder.railsUserId),
     ...heldLegacy.map((held) => held.railsUserId),
+    ...heldManaged.map((held) => held.railsUserId),
   ]);
   const heldCbUserIds = new Set(
     snapshot.users
@@ -1880,6 +1924,7 @@ export function computeDeltaPlan(
     barePro,
     projectedExport,
     heldLegacySubscriptions: heldLegacy,
+    heldManagedSubscriptions: heldManaged,
     staleLegacyAll: backing.held,
     revokeHeldForStaleLegacy,
     revokeHeldForHeldUser,

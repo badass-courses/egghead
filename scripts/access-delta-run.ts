@@ -37,6 +37,7 @@ import {
   type ApplyCursor,
   type GateInputs,
 } from "../apps/web/src/access/rails-access-delta-plan";
+import { selectUserOps } from "../apps/web/src/access/rails-access-delta-canary";
 import {
   applyDeltaOps,
   type BatchTiming,
@@ -330,14 +331,22 @@ export function staleLegacyReconciliation(
   railsExport: RailsAccessExport,
   plan: Pick<
     DeltaPlan,
-    "staleLegacyAll" | "heldLegacySubscriptions" | "barePro" | "liveBackingGrants"
+    | "staleLegacyAll"
+    | "heldLegacySubscriptions"
+    | "heldManagedSubscriptions"
+    | "barePro"
+    | "liveBackingGrants"
   >,
   after: ShadowResult,
   nowMs: number,
   activeDays: number,
 ) {
   const users = [...new Set(plan.staleLegacyAll.map((held) => held.railsUserId))];
-  const held = new Set(plan.heldLegacySubscriptions.map((entry) => entry.railsUserId));
+  const held = new Set(
+    [...plan.heldLegacySubscriptions, ...plan.heldManagedSubscriptions].map(
+      (entry) => entry.railsUserId,
+    ),
+  );
   const inWindow = new Set(plan.barePro.active.map((holder) => holder.railsUserId));
   const orphans = new Set(railsExport.orphanRailsUserIds);
   const reasons = {
@@ -432,12 +441,13 @@ export function staleLegacyReconciliation(
  * the plan's own hold so a regression there shows here.
  */
 export function revokesOnHeldUsers(
-  plan: Pick<DeltaPlan, "ops" | "barePro" | "heldLegacySubscriptions">,
+  plan: Pick<DeltaPlan, "ops" | "barePro" | "heldLegacySubscriptions" | "heldManagedSubscriptions">,
   snapshot: CbSnapshot,
 ) {
   const held = new Set([
     ...plan.barePro.held.map((holder) => holder.railsUserId),
     ...plan.heldLegacySubscriptions.map((entry) => entry.railsUserId),
+    ...plan.heldManagedSubscriptions.map((entry) => entry.railsUserId),
   ]);
   const railsIdByUser = new Map(
     snapshot.users.flatMap((user): [string, string][] =>
@@ -517,13 +527,20 @@ export function revokesOnHeldUsers(
  * organization row kept only because a held member's seat holds it.
  */
 export function heldOrganizationReach(
-  plan: Pick<DeltaPlan, "barePro" | "heldLegacySubscriptions" | "heldForMemberEntitlementIds">,
+  plan: Pick<
+    DeltaPlan,
+    | "barePro"
+    | "heldLegacySubscriptions"
+    | "heldManagedSubscriptions"
+    | "heldForMemberEntitlementIds"
+  >,
   after: ShadowResult,
   snapshot: CbSnapshot,
 ) {
   const held = new Set([
     ...plan.barePro.held.map((holder) => holder.railsUserId),
     ...plan.heldLegacySubscriptions.map((entry) => entry.railsUserId),
+    ...plan.heldManagedSubscriptions.map((entry) => entry.railsUserId),
   ]);
   // Rails grants these users nothing, so the shadow may carry no Rails id:
   // name them through the user link, or the Rails id on their own seats and rows.
@@ -991,6 +1008,7 @@ export function defaultGateInputs(overrides: Partial<GateInputs> = {}): GateInpu
       allowLargeRevoke: false,
       acceptBarePro: null,
       acceptStaleLegacy: null,
+      acceptStaleManaged: null,
       acceptOrphanGrants: null,
       acceptHeldOrgReach: null,
       acceptFirstBacking: {},
@@ -1034,6 +1052,12 @@ export function buildReceipt(
   const gate = context.gateInputs;
   const backing = backingCounts(railsExport, plan, Date.parse(railsExport.manifest.exportedAt));
   const growth = backingGrowth(backing.bySourceType, context.previousBackingCounts);
+  const heldManaged = {
+    ...heldList(
+      plan.heldManagedSubscriptions.map((held) => `${held.railsSourceId}:${held.railsUserId}`),
+    ),
+    subscriptions: plan.heldManagedSubscriptions,
+  };
   const heldLegacy = {
     ...heldList(plan.heldLegacySubscriptions.map((held) => held.railsSourceId)),
     staleDays: gate.legacyStaleDays,
@@ -1157,6 +1181,11 @@ export function buildReceipt(
           "(heldOrganizationReach); rule on them, then pass --accept-held-org-reach with heldOrganizationReach.sha256",
       );
     }
+    if (heldManaged.count > 0 && heldManaged.sha256 !== gate.acceptStaleManaged) {
+      failures.push(
+        `${heldManaged.count} managed subscriptions held without current paid-through backing; pass --accept-stale-managed with heldManagedSubscriptions.sha256`,
+      );
+    }
     if (heldLegacy.count > 0 && heldLegacy.sha256 !== gate.acceptStaleLegacy) {
       failures.push(
         `${heldLegacy.count} legacy subscriptions held as stale (period end over ${gate.legacyStaleDays} days past, or none, ` +
@@ -1235,6 +1264,7 @@ export function buildReceipt(
     proCrossCheck: { ...pro, acceptedBareProSha256: gate.acceptBarePro },
     backingGrants: { ...backing, growth, previous: context.previousBackingCounts },
     heldLegacySubscriptions: heldLegacy,
+    heldManagedSubscriptions: heldManaged,
     staleLegacyReconciliation: staleLegacyReconciliation(
       railsExport,
       plan,
@@ -1272,6 +1302,8 @@ export function buildReceipt(
 export type DeltaReceipt = ReturnType<typeof buildReceipt>;
 
 export interface ApplyRunOptions {
+  readonly onlyUsers?: readonly string[];
+  readonly undoRows?: readonly import("../apps/web/src/access/rails-access-delta-rollback").UndoRow[];
   readonly batchSize: number;
   /** Analysis clock for the post-apply verification (the export's time). */
   readonly analysisNowMs: number;
@@ -1294,6 +1326,7 @@ export async function applyAndVerify(
   const batchTimings: BatchTiming[] = [];
   const finalCursor = await applyDeltaOps(db, ops, cursor, {
     batchSize: options.batchSize,
+    ...(options.undoRows ? { undoRows: options.undoRows } : {}),
     ...(options.maxBatches === undefined ? {} : { maxBatches: options.maxBatches }),
     now: options.now,
     saveCursor: options.saveCursor,
@@ -1308,6 +1341,7 @@ export async function applyAndVerify(
     options.readOptions ?? DEFAULT_READ_OPTIONS,
     options.analyzeOptions ?? {},
   );
+  const remainingOps = selectUserOps(verify.plan.ops, verify.snapshot, options.onlyUsers);
   const totalMs = batchTimings.reduce((sum, timing) => sum + timing.ms, 0);
   return {
     cursor: finalCursor,
@@ -1318,8 +1352,8 @@ export async function applyAndVerify(
       perBatch: batchTimings,
     },
     verify: {
-      remainingOps: verify.plan.ops.length,
-      remainingByClass: countBy(verify.plan.ops, (op) => op.kind),
+      remainingOps: remainingOps.length,
+      remainingByClass: countBy(remainingOps, (op) => op.kind),
       underGrantUsers: verify.before.summary.underGrantUsers,
       overGrantUsers: verify.before.summary.overGrantUsers,
       missingIdentityUsers: verify.before.summary.missingIdentityUsers,
