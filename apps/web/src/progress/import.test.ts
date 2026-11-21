@@ -1765,7 +1765,13 @@ describe("write rules and guards", () => {
       assertProgressImportAccess({ runtime: "local", apply: true, applyApproved: false }),
     ).not.toThrow();
     expect(() =>
-      assertProgressImportAccess({ runtime: "production", apply: false, applyApproved: true }),
+      assertProgressImportAccess({ runtime: "production", apply: false, applyApproved: false }),
+    ).not.toThrow();
+    expect(() =>
+      assertProgressImportAccess({ runtime: "production", apply: true, applyApproved: true }),
+    ).toThrow("production");
+    expect(() =>
+      assertProgressImportAccess({ runtime: "production", apply: true, applyApproved: false }),
     ).toThrow("production");
   });
 });
