@@ -36,23 +36,24 @@ function getResourceInfo(post: Post): EggheadResource | undefined {
 /**
  * Builds tagging queries for a post
  * @param post - The post to build tagging queries for
- * @returns Array of SQL queries for tagging
+ * @returns Parameterized tagging statements; values travel only as bind parameters
  */
-function buildTaggingQueries(post: Post): string[] {
+function buildTaggingQueries(post: Post): { text: string; values: unknown[] }[] {
 	const eggheadResource = getResourceInfo(post)
 	if (!eggheadResource) {
 		throw new Error('No egghead resource found')
 	}
 
 	const { id, type } = eggheadResource
-	const queries: string[] = []
+	const queries: { text: string; values: unknown[] }[] = []
 
 	for (const tag of post?.tags?.map((tag) => tag.tag) || []) {
 		const tagId = Number(tag.id.split('_')[1])
-		queries.push(`
-			INSERT INTO taggings (tag_id, taggable_id, taggable_type, context, created_at, updated_at)
-			VALUES (${tagId}, ${id}, '${type}', 'topics', NOW(), NOW())
-		`)
+		queries.push({
+			text: `INSERT INTO taggings (tag_id, taggable_id, taggable_type, context, created_at, updated_at)
+			VALUES ($1, $2, $3, 'topics', NOW(), NOW())`,
+			values: [tagId, id, type],
+		})
 	}
 
 	return queries
@@ -119,8 +120,8 @@ export async function writeLegacyTaggingsToEgghead(postId: string) {
 		)
 
 		const tagQueries = buildTaggingQueries(post)
-		for (const query of tagQueries) {
-			await client.query(query)
+		for (const { text, values } of tagQueries) {
+			await client.query(text, values)
 		}
 
 		await client.query('COMMIT')
