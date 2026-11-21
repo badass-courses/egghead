@@ -16,7 +16,8 @@ import {
 import { SHADOW_STRIPE_EVENTS, type ShadowRecord } from "../shadow/projection";
 import { regenerateCatalogue } from "../shadow/regenerate-catalogue";
 import { replayShadowWindow } from "../shadow/replay";
-import { MemoryShadowStore, createRedisShadowStore } from "../shadow/store";
+import { MemoryShadowStore } from "../shadow/store";
+import { createMysqlShadowStore, type ShadowMysqlConnection } from "../shadow/mysql-store";
 import { createShadowStripeReader, type ShadowStripeReader } from "../shadow/stripe-reader";
 import { isEggheadSubscription } from "../shadow/tenant";
 
@@ -475,8 +476,7 @@ describe("signed POST and isolation fences", () => {
     const shadowKeys = [
       "STRIPE_SHADOW_WEBHOOK_SECRET",
       "STRIPE_SHADOW_READ_KEY",
-      "STRIPE_SHADOW_REDIS_REST_URL",
-      "STRIPE_SHADOW_REDIS_REST_TOKEN",
+      "STRIPE_SHADOW_DATABASE_URL",
     ];
     shadowKeys.forEach((key) => vi.stubEnv(key, undefined));
     const transport = vi.fn<typeof fetch>().mockRejectedValue(new Error("Unexpected shadow IO"));
@@ -505,14 +505,13 @@ describe("signed POST and isolation fences", () => {
     expect(() =>
       shadowDependencies({
         STRIPE_SHADOW_READ_KEY: "sk_synthetic",
-        STRIPE_SHADOW_REDIS_REST_URL: "https://example.test",
-        STRIPE_SHADOW_REDIS_REST_TOKEN: "synthetic",
+        STRIPE_SHADOW_DATABASE_URL: "mysql://shadow:synthetic@localhost/shadow_test",
       }),
     ).toThrow();
-    expect(() => createRedisShadowStore("http://example.test", "synthetic")).toThrow();
+    expect(() => createMysqlShadowStore("http://example.test")).toThrow();
   });
 
-  it("recursively fences route, replay and regeneration away from all DB/writer/mail clients", () => {
+  it("recursively fences route, replay and regeneration away from app DB/writer/mail clients", () => {
     const here = resolve(dirname(fileURLToPath(import.meta.url)), "../shadow");
     const visited = new Set<string>();
     const walk = (path: string) => {
@@ -533,11 +532,15 @@ describe("signed POST and isolation fences", () => {
           ts.isStringLiteral(node.moduleSpecifier)
         ) {
           const specifier = node.moduleSpecifier.text;
-          expect(specifier).not.toMatch(
-            /mysql|drizzle|\/db|inngest|coursebuilder|mailer|ownership-seam|stripe-billing/,
-          );
-          if (specifier.startsWith(".")) walk(resolve(dirname(path), `${specifier}.ts`));
-          else expect(["zod", "node:crypto", "node:url"]).toContain(specifier);
+          if (specifier === "mysql2/promise") {
+            expect(path).toBe(resolve(here, "mysql-store.ts"));
+          } else {
+            expect(specifier).not.toMatch(
+              /mysql2|drizzle|\/db|inngest|coursebuilder|mailer|ownership-seam|stripe-billing/,
+            );
+            if (specifier.startsWith(".")) walk(resolve(dirname(path), `${specifier}.ts`));
+            else expect(["zod", "node:crypto", "node:url"]).toContain(specifier);
+          }
         }
         ts.forEachChild(node, inspect);
       };
@@ -579,24 +582,35 @@ describe("signed POST and isolation fences", () => {
     expect(JSON.stringify(output)).not.toMatch(/cus_|sub_/);
   });
 
-  it("Redis adapter uses atomic Lua claims/completion and refuses transport errors", async () => {
-    const request = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(Response.json({ result: "claimed" }))
-      .mockResolvedValueOnce(Response.json({ result: 1 }))
-      .mockResolvedValueOnce(Response.json({ result: 0 }));
-    const store = createRedisShadowStore("https://example.test", "synthetic", request);
+  it("MySQL adapter uses conditional transactional completion and redacts transport errors", async () => {
+    const execute = vi
+      .fn<ShadowMysqlConnection["execute"]>()
+      .mockResolvedValue([{ affectedRows: 1 }, []]);
+    const db = {
+      execute,
+      beginTransaction: vi.fn(async () => {}),
+      commit: vi.fn(async () => {}),
+      rollback: vi.fn(async () => {}),
+      end: vi.fn(async () => {}),
+    } satisfies ShadowMysqlConnection;
+    const connect = vi.fn(async () => db);
+    const store = createMysqlShadowStore("mysql://shadow:synthetic@localhost/shadow_test", {
+      connect,
+    });
     const { record } = await recorded("customer.subscription.updated");
     expect(await store.claim(record.stripeEventId, "token")).toBe("claimed");
     expect(await store.complete(record.stripeEventId, "token", record)).toBe(true);
     await store.release(record.stripeEventId, "token");
-    for (const [, init] of request.mock.calls) {
-      const payload = init?.body;
-      if (typeof payload !== "string") throw new Error("Expected a Redis JSON command");
-      expect(JSON.parse(payload)[0]).toBe("EVAL");
-    }
-    request.mockResolvedValueOnce(Response.json({ error: "private response" }));
-    await expect(store.claim("evt", "token")).rejects.toThrow();
+    expect(db.beginTransaction).toHaveBeenCalledOnce();
+    expect(db.commit).toHaveBeenCalledOnce();
+    expect(db.rollback).not.toHaveBeenCalled();
+    expect(db.end).toHaveBeenCalledTimes(3);
+    const sql = execute.mock.calls.map(([query]) => query).join("\n");
+    expect(sql).toContain("claimOwner = ? AND completedAt IS NULL AND claimedUntil >");
+    expect(sql).toContain("INSERT INTO `ShadowRecord`");
+    expect(sql).not.toMatch(/UPSERT|ON DUPLICATE KEY|REPLACE INTO/i);
+    connect.mockRejectedValueOnce(new Error("private response with credentials"));
+    await expect(store.claim("evt", "token")).rejects.toThrow("Shadow MySQL store unavailable");
   });
 });
 

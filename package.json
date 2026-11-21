@@ -59,7 +59,8 @@
     "search:pagination:smoke": "tsx --tsconfig apps/web/tsconfig.json scripts/search-pagination-smoke.ts",
     "routing:redirect-targets": "tsx --tsconfig apps/web/tsconfig.json scripts/redirect-targets-check.ts",
     "subscription:behaviors": "TSX_TSCONFIG_PATH=apps/web/tsconfig.json node --experimental-test-module-mocks --import tsx --test scripts/subscription-lifecycle.test.ts scripts/subscription-boundary.test.ts scripts/subscription-store.test.ts scripts/subscription-inngest.test.ts scripts/subscription-route.test.ts && node --import tsx scripts/subscription-boundaries.ts",
-    "subscription:mysql-test": "TSX_TSCONFIG_PATH=apps/web/tsconfig.json node --import tsx --test --test-concurrency=1 scripts/subscription-mysql.test.ts"
+    "subscription:mysql-test": "TSX_TSCONFIG_PATH=apps/web/tsconfig.json node --import tsx --test --test-concurrency=1 scripts/subscription-mysql.test.ts",
+    "subscription:shadow:mysql-test": "tsx --tsconfig apps/web/tsconfig.json scripts/subscription-shadow-mysql-test.ts"
   },
   "dependencies": {
     "@coursebuilder/adapter-drizzle": "3.1.3",
@@ -82,6 +83,7 @@
     "drizzle-orm": "0.36.0",
     "effect": "4.0.0",
     "lefthook": "2.1.9",
+    "mysql2": "3.22.5",
     "oxfmt": "0.53.0",
     "oxlint": "1.68.0",
     "oxlint-tsgolint": "0.23.0",
