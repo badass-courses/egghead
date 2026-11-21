@@ -1,4 +1,5 @@
 import { env } from '@/env.mjs'
+import { isContentEditorRequest } from '@/server/editor-for-request'
 import { SkillRequest, withSkill } from '@/server/with-skill'
 
 import { getMuxOptions } from '@coursebuilder/video-processing/mux'
@@ -11,6 +12,9 @@ const baseUrl = 'https://api.mux.com'
  * @param req
  */
 export const POST = withSkill(async (req: SkillRequest) => {
+	if (!(await isContentEditorRequest(req))) {
+		return Response.json({ error: 'Unauthorized' }, { status: 401 })
+	}
 	try {
 		const response = await fetch(`${baseUrl}/video/v1/uploads`, {
 			headers: {

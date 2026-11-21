@@ -56,6 +56,14 @@ export const usersRouter = createTRPCRouter({
 					code: 'UNAUTHORIZED',
 				})
 
+			// Only the account itself, or an admin, may change a profile.
+			if (signedInUser.id !== input.userId && token.ability.cannot('manage', 'all')) {
+				throw new TRPCError({
+					message: 'Not allowed to edit this profile',
+					code: 'FORBIDDEN',
+				})
+			}
+
 			const fullUser = await db.query.users.findFirst({
 				where: eq(users.id, input.userId),
 				with: {

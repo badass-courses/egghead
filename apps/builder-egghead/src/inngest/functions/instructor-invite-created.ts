@@ -8,7 +8,8 @@ import { sendAnEmail } from '@coursebuilder/utils/send-an-email'
 import { NonRetriableError } from 'inngest'
 import { customAlphabet } from 'nanoid'
 
-const nanoid = customAlphabet('1234567890abcdefghijklmnopqrstuvwxyz', 5)
+// Invite links are bearer secrets until accepted, so make them unguessable.
+const nanoid = customAlphabet('1234567890abcdefghijklmnopqrstuvwxyz', 24)
 
 export const instructorInviteCreated = inngest.createFunction(
 	{

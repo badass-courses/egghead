@@ -3,6 +3,7 @@
 import { revalidatePath, revalidateTag } from 'next/cache'
 import { courseBuilderAdapter, db } from '@/db'
 import { eggheadPgQuery } from '@/db/eggheadPostgres'
+import { requireCanManageResource } from '@/server/require-editor'
 import {
 	contentResource,
 	contentResourceResource,
@@ -190,6 +191,7 @@ export async function updatePost(
  * Updates egghead taggings
  */
 export async function addTagToPost(postId: string, tagId: string) {
+	await requireCanManageResource(postId)
 	await db.insert(contentResourceTagTable).values({
 		contentResourceId: postId,
 		tagId,
@@ -225,6 +227,7 @@ export async function addTagToPost(postId: string, tagId: string) {
  * Sets the primary tag for a post
  */
 export async function setPrimaryTagToPost(postId: string, tagId: string) {
+	await requireCanManageResource(postId)
 	const post = await db.query.contentResource.findFirst({
 		where: eq(contentResource.id, postId),
 	})
@@ -269,6 +272,7 @@ export async function updatePostTags(postId: string, tags: EggheadTag[]) {
  * Updates egghead taggings
  */
 export async function removeTagFromPost(postId: string, tagId: string) {
+	await requireCanManageResource(postId)
 	const post = await db.query.contentResource.findFirst({
 		where: eq(contentResource.id, postId),
 	})

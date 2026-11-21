@@ -7,6 +7,7 @@ import { eggheadPgQuery } from '@/db/eggheadPostgres'
 import { accounts, invites, profiles, users } from '@/db/schema'
 import { INSTRUCTOR_INVITE_COMPLETED_EVENT } from '@/inngest/events/instructor-invite-completed'
 import { inngest } from '@/inngest/inngest.server'
+import { profileCreationProblem } from '@/lib/invites/invite-rules'
 import { addRoleToUser } from '@/lib/users'
 import { eq } from 'drizzle-orm'
 
@@ -33,6 +34,20 @@ export async function createInstructorProfile({
 	bio,
 	profileImageUrl,
 }: CreateInstructorProfileParams) {
+	const invite = await db.query.invites.findFirst({
+		where: eq(invites.id, inviteId),
+		columns: {
+			inviteEmail: true,
+			inviteState: true,
+			acceptedEmail: true,
+			expiresAt: true,
+		},
+	})
+	const problem = profileCreationProblem(invite, String(email ?? ''))
+	if (problem) {
+		throw new Error(problem)
+	}
+
 	await inngest.send({
 		name: INSTRUCTOR_INVITE_COMPLETED_EVENT,
 		data: {
