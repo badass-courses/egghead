@@ -261,10 +261,15 @@ const checks = [
     ACCESS_ENTITLEMENT_ROWS_SQL,
     "$.hasAccountMemberRole",
   ),
+  assertEqual(
+    "access evaluator never exempts a source from expiry gating",
+    String(ACCESS_ENTITLEMENT_ROWS_SQL.includes("entitlement.sourceType = ?")),
+    "false",
+  ),
   assertIncludes(
-    "access evaluator exempts subscription rows from generic expiresAt gating",
+    "access evaluator requires a strictly future expiry",
     ACCESS_ENTITLEMENT_ROWS_SQL,
-    "entitlement.sourceType = ?",
+    "entitlement.expiresAt > CURRENT_TIMESTAMP(3)",
   ),
   assertIncludes(
     "access evaluator reads purchase country restriction",

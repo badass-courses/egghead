@@ -173,13 +173,12 @@ const EXPECTED_CLASSES = {
   organization_create: 2, // accounts 7003, 7014
   membership_create: 3, // 8003 (103), 8006 (106), role-only 115 on 7014
   // 9003 org+seat, 9004 seat 106, lifetime 108, purchases 6001 and 6002,
-  // basic 114, 9011 org+seat (second sub on 7001), 9014 org+seat (trialing),
-  // backed pro: gift 120, managed 121, legacy subscription 122
-  entitlement_grant: 14,
-  entitlement_extend: 2, // 9001 org+seat
-  entitlement_update: 2, // 9010 org+seat: active -> past_due
+  // basic 114, 9011 org+seat; trialing 9014 grants nothing.
+  // Backed pro: gift 120, managed 121, legacy subscription 122.
+  entitlement_grant: 12,
+  entitlement_update: 4, // 9001 and 9004 org+seat acquire strict paid boundaries
   membership_revoke: 2, // 8002 (cancelled), 8007 (removed seat)
-  entitlement_revoke: 3, // 9002 org+seat, 9004 seat 107
+  entitlement_revoke: 5, // 9002 and past_due 9010 org+seat, 9004 seat 107
   entitlement_expire: 1, // purchase 6009 ran out in September
 };
 const EXPECTED_TOTAL = 38;
@@ -343,13 +342,11 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     assert.deepEqual(classCounts(ops), EXPECTED_CLASSES);
   });
 
-  void test("July-written rows for unchanged access produce no ops", () => {
+  void test("July subscription rows acquire a boundary; unchanged memberships produce no ops", () => {
     for (const id of [ids.subOrgEntitlement("9004", "7004"), ids.seatEntitlement("9004", "8005")]) {
-      assert.equal(
-        ops.some((op) => op.key.endsWith(`:${id}`)),
-        false,
-        id,
-      );
+      const op = opFor(ops, "entitlement_update", id);
+      assert.ok(op && op.kind === "entitlement_update", id);
+      assert.equal(op.entitlement.expiresAt, "2026-12-31T00:00:00.000Z");
     }
     assert.equal(
       ops.some((op) => op.key.endsWith(`:${ids.membership("8004")}`)),
@@ -357,21 +354,19 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     );
   });
 
-  void test("renewed user: period end moved later is an extend", () => {
-    const op = opFor(ops, "entitlement_extend", ids.seatEntitlement("9001", "8001"));
-    assert.ok(op && op.kind === "entitlement_extend");
-    assert.deepEqual(op.reasons, ["current_period_end_later"]);
+  void test("renewed user: old lenient row gains the paid-through boundary and law", () => {
+    const op = opFor(ops, "entitlement_update", ids.seatEntitlement("9001", "8001"));
+    assert.ok(op && op.kind === "entitlement_update");
+    assert.ok(op.reasons.includes("expires_at_earlier"));
+    assert.equal(op.entitlement.expiresAt, "2026-12-31T00:00:00.000Z");
     assert.equal(op.entitlement.metadata["currentPeriodEnd"], "2026-12-31T00:00:00.000Z");
   });
 
-  void test("lapsed but not cancelled: past_due keeps access with no expiry (ADR-0006)", () => {
-    const op = opFor(ops, "entitlement_update", ids.seatEntitlement("9010", "8010"));
-    assert.ok(op && op.kind === "entitlement_update");
-    assert.deepEqual(op.reasons, ["metadata_status_changed"]);
-    assert.equal(op.entitlement.expiresAt, null);
+  void test("past_due loses subscription access under ADR-0008", () => {
+    assert.ok(opFor(ops, "entitlement_revoke", ids.seatEntitlement("9010", "8010")));
     const shadow = analysis.after.users.find((user) => user.cbUserId === ids.user("110"));
-    assert.deepEqual(shadow?.underGrant, []);
-    assert.ok(shadow?.cbSays["all_access"]);
+    assert.equal(shadow?.underGrant.length ?? 0, 0);
+    assert.equal(shadow?.cbSays["all_access"], undefined);
   });
 
   void test("cancelled user and removed seat are revoked; their seat flags are cleared", () => {
@@ -432,8 +427,8 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
   });
 
   void test("shadow: before shows the drift, after the simulated apply shows none, and the plan converges", () => {
-    assert.equal(analysis.before.summary.underGrantUsers, 10); // 103, 106, 108, 109, 111, 114, 115, 120, 121, 122
-    assert.equal(analysis.before.summary.overGrantUsers, 2); // 102, 107
+    assert.equal(analysis.before.summary.underGrantUsers, 9); // trialing 115 no longer grants
+    assert.equal(analysis.before.summary.overGrantUsers, 3); // 102, 107, past_due 110
     assert.equal(analysis.after.summary.underGrantUsers, 0);
     assert.equal(analysis.after.summary.overGrantUsers, 0);
     assert.equal(analysis.remainingAfterSimulation, 0);
@@ -442,11 +437,28 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
   void test("receipt: counts per class, at most 20 samples without emails, and a passing gate", () => {
     const receipt = buildReceipt(railsExport, analysis, CTX);
     assert.equal(receipt.changes.total, EXPECTED_TOTAL);
-    assert.equal(receipt.changes.byClass["entitlement_revoke"], 3);
+    assert.equal(receipt.changes.byClass["entitlement_revoke"], 5);
     assert.ok(receipt.samples.length <= 20);
-    assert.equal(new Set(receipt.samples.map((sample) => sample["kind"])).size, 10);
+    assert.equal(new Set(receipt.samples.map((sample) => sample["kind"])).size, 9);
     assert.equal(JSON.stringify(receipt).includes("@example.test"), false);
     assert.deepEqual(receipt.gate, { pass: true, failures: [] });
+  });
+
+  void test("receipt forecasts holder losses without counting organization and seat twice", () => {
+    const loss = buildReceipt(railsExport, analysis, CTX).subscriptionBoundaryLoss;
+    assert.equal(loss.currentSubscriptionHolders, 5);
+    assert.equal(loss.losingHolders, 3);
+    assert.equal(loss.retainedHolders, 2);
+    assert.deepEqual(loss.byReason.status_past_due, {
+      holders: 1,
+      sampleRailsSubscriptionIds: ["9010"],
+    });
+    assert.deepEqual(loss.byReason.no_seat, { holders: 1, sampleRailsSubscriptionIds: ["9004"] });
+    assert.deepEqual(loss.byReason.subscription_missing, {
+      holders: 1,
+      sampleRailsSubscriptionIds: ["9002"],
+    });
+    assert.equal(JSON.stringify(loss).includes("@"), false);
   });
 
   void test("shadow compare for one user: Rails says X, CourseBuilder says Y", () => {
@@ -515,7 +527,7 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     assert.equal(held.plan.membershipRevokeHeldForIdentity, 1);
   });
 
-  void test("basic legacy role, trialing subscription and a role-only member are projected", () => {
+  void test("basic legacy role and role-only membership survive, but trialing grants no seat", () => {
     const basic = opFor(ops, "entitlement_grant", ids.basicEntitlement("114"));
     assert.ok(basic && basic.kind === "entitlement_grant");
     assert.equal(basic.entitlement.entitlementType, "egghead_basic_legacy_access");
@@ -527,8 +539,7 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
         op.kind === "entitlement_grant" &&
         op.entitlement.organizationMembershipId === ids.roleMembership("7014", "115"),
     );
-    assert.ok(seat && seat.kind === "entitlement_grant");
-    assert.equal(seat.entitlement.metadata["status"], "trialing");
+    assert.equal(seat, undefined);
   });
 
   void test("two enabled subscriptions on one account share one membership", () => {
@@ -593,8 +604,8 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
     const op = opFor(ops, "entitlement_expire", ids.purchaseEntitlement("6009"));
     assert.ok(op);
     assert.equal(opFor(ops, "entitlement_revoke", ids.purchaseEntitlement("6009")), undefined);
-    assert.equal(analysis.largeRevoke.entitlementRevokes, 3);
-    assert.equal(analysis.largeRevoke.revokes, 5, "plus the two seat-flag clears");
+    assert.equal(analysis.largeRevoke.entitlementRevokes, 5);
+    assert.equal(analysis.largeRevoke.revokes, 7, "plus the two seat-flag clears");
   });
 
   void test("#11: many expired purchases do not trip the revoke alarm", () => {
@@ -1190,8 +1201,8 @@ void describe("delta rules (pure, July snapshot vs November export)", () => {
       NOW_MS,
     );
     assert.equal(result.largeRevoke.membershipRevokes, 62);
-    assert.equal(result.largeRevoke.entitlementRevokes, 3);
-    assert.equal(result.largeRevoke.revokes, 65);
+    assert.equal(result.largeRevoke.entitlementRevokes, 5);
+    assert.equal(result.largeRevoke.revokes, 67);
     assert.equal(result.largeRevoke.tripped, true);
   });
 
@@ -1595,7 +1606,11 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     assert.ok(result.plan.barePro.held.some((holder) => holder.railsUserId === "105"));
     assert.ok(noOpNames(result.plan.ops, ids.membership("8005")));
     assert.ok(noOpNames(result.plan.ops, ids.seatEntitlement("9004", "8005")));
-    assert.equal(buildReceipt(held, result, CTX).revokesOnHeldUsers.ops, 0);
+    assert.equal(
+      buildReceipt(held, result, CTX).revokesOnHeldUsers.ops,
+      1,
+      "the org row gains a paid boundary; the conservative held-user guard requires review",
+    );
   });
 
   void test("r7: a held stale-only holder's rows are kept and they get no user ops", () => {
@@ -1855,7 +1870,11 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
     assert.equal(update.membership.fields["hasAccountMemberRole"], true);
     assert.equal(update.membership.role, "member");
     assert.equal(update.membership.fields["hasAccountOwnerRole"], true);
-    assert.equal(buildReceipt(changed, result, CTX).revokesOnHeldUsers.ops, 0);
+    assert.equal(
+      buildReceipt(changed, result, CTX).revokesOnHeldUsers.ops,
+      1,
+      "the conservative hold guard flags an unbounded org grant acquiring a paid boundary",
+    );
     const simulated = simulateApply(julySnapshot(), result.plan.ops, NOW_ISO);
     assert.deepEqual(analyze(changed, simulated, NOW_MS).plan.ops, []);
   });
@@ -2129,7 +2148,7 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
       ...snapshot,
       memberships: [
         ...snapshot.memberships,
-        Object.assign({}, seat, { id: "eh_orgmem_107_on_7010", organizationId: ids.org("7010") }),
+        Object.assign({}, seat, { id: "eh_orgmem_107_on_7010", organizationId: ids.org("7001") }),
       ],
       entitlements: [
         ...snapshot.entitlements,
@@ -2137,7 +2156,7 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
           organizationId: ids.org("7004"),
         }),
         Object.assign(nativeRow("stripe_ent_team_7010"), {
-          organizationId: ids.org("7010"),
+          organizationId: ids.org("7001"),
         }),
       ],
     };
@@ -2169,7 +2188,7 @@ void describe("round 5: pro-gated backing, holds and bound gate inputs (pure)", 
         shadow.summary.underGrantUsers,
       );
     }
-    assert.equal(analysis.before.summary.overGrantUsers, 2);
+    assert.equal(analysis.before.summary.overGrantUsers, 3);
     // 30 new learners: more under-granted users than any sample holds, all listed.
     const crowd = exportWith(
       Array.from({ length: 30 }, (_, index) =>
@@ -2546,8 +2565,8 @@ void describe(
       assert.equal(checksumBefore.length, FIXTURE_TABLES.length);
       const analysis = await run.analyzeDatabase(db, railsExport, NOW_MS, SMALL);
       assert.deepEqual(classCounts(analysis.plan.ops), EXPECTED_CLASSES);
-      assert.equal(analysis.before.summary.underGrantUsers, 10);
-      assert.equal(analysis.before.summary.overGrantUsers, 2);
+      assert.equal(analysis.before.summary.underGrantUsers, 9);
+      assert.equal(analysis.before.summary.overGrantUsers, 3);
       const countAfter = await query(
         "SELECT COUNT(*) AS n, MAX(updatedAt) AS u FROM egghead_Entitlement",
       );
@@ -2576,28 +2595,16 @@ void describe(
 
       // Runtime verdicts from the app's own read: evaluateContentAccessForUser.
       // 120 gift, 121 managed subscription, 122 legacy subscription (backed pro).
-      const granted = [
-        "101",
-        "103",
-        "105",
-        "106",
-        "108",
-        "110",
-        "114",
-        "115",
-        "120",
-        "121",
-        "122",
-      ].map(ids.user);
+      const granted = ["101", "103", "105", "106", "108", "114", "120", "121", "122"].map(ids.user);
       const verdicts = await Promise.all(
-        [...granted, ...["102", "104", "107"].map(ids.user)].map(async (userId) => [
+        [...granted, ...["102", "104", "107", "110", "115"].map(ids.user)].map(async (userId) => [
           userId,
           (await runtimeAccess(userId)).granted,
         ]),
       );
       assert.deepEqual(verdicts, [
         ...granted.map((userId) => [userId, true]),
-        ...["102", "104", "107"].map((rails) => [ids.user(rails), false]),
+        ...["102", "104", "107", "110", "115"].map((rails) => [ids.user(rails), false]),
       ]);
       assert.equal(
         (await runtimeAccess(ids.user("109"))).reason,
@@ -2649,7 +2656,11 @@ void describe(
         "SELECT expiresAt, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.status')) AS status FROM egghead_Entitlement WHERE id = ?",
         [ids.seatEntitlement("9010", "8010")],
       );
-      assert.deepEqual({ ...lapsed[0] }, { expiresAt: null, status: "past_due" });
+      assert.deepEqual({ ...lapsed[0] }, { expiresAt: null, status: "active" });
+      const lapsedRow = await query("SELECT deletedAt FROM egghead_Entitlement WHERE id = ?", [
+        ids.seatEntitlement("9010", "8010"),
+      ]);
+      assert.ok(lapsedRow[0]?.["deletedAt"]);
     });
 
     void test("re-running is idempotent: a fresh plan is empty and replaying the old plan changes nothing", async () => {

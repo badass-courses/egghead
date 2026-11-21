@@ -3,21 +3,22 @@
 // Pure: no database, no clock, no filesystem. `rails-access-delta-store.ts` reads
 // and writes CourseBuilder; `scripts/access-delta.ts` is the CLI.
 //
-// Law (ADR-0006, lenient at the flip): anyone Rails grants today keeps access.
-// A subscription in trialing/active/past_due grants regardless of its period end.
-// The expected rows reproduce the July 2026 projection (migrate-egghead
-// tools/me.ts `collectAuthProjectionSource`) byte for byte in ids and keys, so
-// rows written in July compare as unchanged and nothing is duplicated.
+// Law (ADR-0008): only active subscriptions inside their paid period grant.
+// Stable projection ids survive renewals and the paid-through law change.
+// July 2026 projection ids and keys are retained. Existing subscription rows
+// gain the strict law and paid boundary without duplicating grants.
 
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import { accessGranted, strictPaidThroughRule } from "../subscriptions/ownership/access-rule";
+
 export const RAILS_ACCESS_EXPORT_FORMAT = "egghead-rails-access-export/v3";
-export const ACCESS_DELTA_LAW = "adr-0006-lenient-status";
+export const ACCESS_DELTA_LAW = strictPaidThroughRule.name;
 
 const SUBSCRIPTION_SOURCE_TYPE = "rails_account_subscription";
-const SUBSCRIPTION_ACCESS_LAW = "lenient_status_v1";
+const SUBSCRIPTION_ACCESS_LAW = strictPaidThroughRule.name;
 const GIFT_ACCESS_LAW = "gift_expires_at_v1";
 const ROLE_SOURCE_TYPE = "rails_user_role";
 const PURCHASE_SOURCE_TYPE = "rails_sellable_purchase";
@@ -1032,9 +1033,8 @@ function backingEntitlement(grant: RailsBackingGrant, userId: string): ExpectedE
       railsSourceId: grant.railsSourceId,
       railsUserId: grant.railsUserId,
       accessReason: "backed_legacy_pro",
-      // A gift ends on expiresAt (the runtime exempts only rails_account_subscription
-      // rows from it); managed and legacy subscriptions follow the lenient law.
-      accessLaw: grant.source === "gift" ? GIFT_ACCESS_LAW : SUBSCRIPTION_ACCESS_LAW,
+      // Gift promises and legacy backing keep their separate approved laws.
+      accessLaw: grant.source === "gift" ? GIFT_ACCESS_LAW : "lenient_status_v1",
       // Legacy subscriptions: the period end is metadata.
       currentPeriodEnd: railsTimestampToIso(grant.currentPeriodEnd) ?? undefined,
     }),
@@ -1051,12 +1051,25 @@ function membershipRole(member: RailsSubscriptionMember) {
   return "user";
 }
 
+/** Unknown Rails statuses fail closed; ADR-0008 grants only `active`. */
+export function subscriptionPaidThrough(sub: RailsSubscription, nowMs: number): boolean {
+  const boundary = railsTimestampToIso(sub.currentPeriodEnd);
+  return accessGranted(
+    strictPaidThroughRule.evaluate({
+      status: sub.status === "active" ? "active" : "unpaid",
+      paidThroughAt: boundary === null ? null : Date.parse(boundary) / 1000,
+      now: nowMs / 1000,
+    }),
+  );
+}
+
 export function buildExpectedProjection(
   railsExport: RailsAccessExport,
   identities: ReadonlyMap<string, IdentityOutcome>,
   bareProActive: readonly RailsProHolder[] = [],
   /** Stale legacy subscription ids behind a bare-active grant, by Rails user id. */
   staleLegacyByUser: ReadonlyMap<string, readonly string[]> = new Map(),
+  nowMs: number = Date.parse(railsExport.manifest.exportedAt),
 ): ExpectedProjection {
   const entitlements = new Map<string, ExpectedEntitlement>();
   const memberships = new Map<string, ExpectedMembership>();
@@ -1115,29 +1128,36 @@ export function buildExpectedProjection(
     }
 
     const orgKey = `rails_account_subscription:${sub.railsAccountSubscriptionId}:organization:${orgId}:${ALL_ACCESS_TYPE}`;
-    put({
-      id: projectionIds.entitlement(orgKey),
-      entitlementType: ALL_ACCESS_TYPE,
-      userId: null,
-      organizationId: orgId,
-      organizationMembershipId: null,
-      sourceType: SUBSCRIPTION_SOURCE_TYPE,
-      sourceId: sub.railsAccountSubscriptionId,
-      metadata: {
-        idempotencyKey: orgKey,
-        source: "enabled_account_subscription",
-        railsAccountSubscriptionId: sub.railsAccountSubscriptionId,
-        railsAccountId,
-        status: sub.status,
-        quantity: sub.quantity,
-        accessReason: "enabled_account_subscription",
-        accessLaw: SUBSCRIPTION_ACCESS_LAW,
-        currentPeriodEnd,
-        ownerType: "organization",
-      },
-      expiresAt: null,
-      createdAt,
-    });
+    const paidThrough = subscriptionPaidThrough(sub, nowMs);
+    if (paidThrough && mysqlExpiryOrNull(currentPeriodEnd) === null) {
+      throw new Error(
+        `Subscription ${sub.railsAccountSubscriptionId} paid boundary exceeds MySQL TIMESTAMP range; refusing an unbounded grant`,
+      );
+    }
+    if (paidThrough)
+      put({
+        id: projectionIds.entitlement(orgKey),
+        entitlementType: ALL_ACCESS_TYPE,
+        userId: null,
+        organizationId: orgId,
+        organizationMembershipId: null,
+        sourceType: SUBSCRIPTION_SOURCE_TYPE,
+        sourceId: sub.railsAccountSubscriptionId,
+        metadata: {
+          idempotencyKey: orgKey,
+          source: "enabled_account_subscription",
+          railsAccountSubscriptionId: sub.railsAccountSubscriptionId,
+          railsAccountId,
+          status: sub.status,
+          quantity: sub.quantity,
+          accessReason: "enabled_account_subscription",
+          accessLaw: SUBSCRIPTION_ACCESS_LAW,
+          currentPeriodEnd,
+          ownerType: "organization",
+        },
+        expiresAt: currentPeriodEnd,
+        createdAt,
+      });
 
     for (const member of sub.members) {
       const userId = resolvedUserId(identities, member.railsUserId);
@@ -1168,6 +1188,7 @@ export function buildExpectedProjection(
         policy.membersWithoutMemberRole++;
         continue;
       }
+      if (!paidThrough) continue;
       const seatKey = `rails_account_subscription:${sub.railsAccountSubscriptionId}:membership:${membershipId}:${ALL_ACCESS_TYPE}`;
       put({
         id: projectionIds.entitlement(seatKey),
@@ -1192,7 +1213,7 @@ export function buildExpectedProjection(
           scopedAccountMemberRole: true,
           ownerType: "user",
         }),
-        expiresAt: null,
+        expiresAt: currentPeriodEnd,
         createdAt,
       });
     }
@@ -1283,7 +1304,7 @@ export function buildExpectedProjection(
         railsUserId: holder.railsUserId,
         staleLegacySubscriptionIds: staleLegacyByUser.get(holder.railsUserId),
         accessReason: "bare_pro_recently_active",
-        accessLaw: SUBSCRIPTION_ACCESS_LAW,
+        accessLaw: "lenient_status_v1",
       }),
       expiresAt: null,
       createdAt: null,
@@ -1360,7 +1381,7 @@ function classifyEntitlement(
   if (!sameValue(expected.expiresAt, existing.expiresAt)) {
     const longer =
       (expected.expiresAt === null && existing.expiresAt !== null) ||
-      laterThan(expected.expiresAt, existing.expiresAt);
+      (existing.expiresAt !== null && laterThan(expected.expiresAt, existing.expiresAt));
     reasons.push(longer ? "expires_at_later" : "expires_at_earlier");
     extended ||= longer;
   }
@@ -1646,6 +1667,7 @@ export function computeDeltaPlan(
     identities,
     barePro.active,
     staleByGrantedUser,
+    nowMs,
   );
   const ops: DeltaOp[] = [];
   const unresolvedRailsUserIds = new Set(

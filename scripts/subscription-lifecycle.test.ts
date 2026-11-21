@@ -56,10 +56,7 @@ await test("individual renewal, suspension, recovery and cancellation keep one b
       current,
       snapshot(subscriptionSnapshotSchema.shape.status.parse(status), index + 1, 1),
     ).state;
-    assert.deepEqual(
-      subscriptionBeneficiaries(current, now),
-      ["unpaid", "canceled"].includes(status) ? [] : ["owner"],
-    );
+    assert.deepEqual(subscriptionBeneficiaries(current, now), status === "active" ? ["owner"] : []);
     assert.equal(current.assignments.length, 1);
   }
 });
@@ -496,9 +493,7 @@ await test("generated histories with plans, reviews, seat changes, renewals and 
       }
       const reviewing = model.assigned.size > model.seats;
       const expected =
-        model.status !== "canceled" && grants(model.status) && !reviewing
-          ? new Set(model.assigned.keys())
-          : new Set();
+        model.status === "active" && !reviewing ? new Set(model.assigned.keys()) : new Set();
       const context = JSON.stringify({ seed, step, command });
       assert.deepEqual(new Set(subscriptionBeneficiaries(current, at)), expected, context);
       assert.deepEqual(

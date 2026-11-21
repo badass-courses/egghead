@@ -9,7 +9,7 @@
 --   user          a Rails user referenced by any line below (identity + email)
 --   role_grant    a global special role (lifetime_subscriber, VIP, staff roles)
 --   basic_grant   the global legacy `basic` role (ADR-0007 default grant)
---   subscription  an account subscription in an enabled status, with its members
+--   subscription  an active/trialing/past_due/unpaid account subscription and members
 --   purchase      a viewable sellable purchase
 --   pro_holder    a user holding the global `pro` role: Rails' own access decision
 --                 (Ability#lesson_permissions checks is_pro?). Cross-check only
@@ -21,10 +21,11 @@
 -- line, or whose counts disagree with the lines it read, so a truncated export
 -- can never be mistaken for "these users lost access".
 --
--- Access law mirrors the July 2026 projection (migrate-egghead tools/me.ts):
---   * ADR-0006 lenient status law: trialing/active/past_due subscriptions grant;
---     current_period_end (integer epoch seconds in Rails) is exported as UTC ISO
---     text for observability only.
+-- Subscription access follows ADR-0008; non-subscription promises remain separate:
+--   * Only active inside current_period_end grants. The boundary (integer epoch
+--     seconds in Rails) is exported as UTC ISO for entitlement expiresAt.
+--     trialing/past_due/unpaid remain visible for denied-access loss reporting;
+--     their scoped seats do not become bare-pro fallback grants.
 --   * Rails `datetime` columns are UTC `timestamp without time zone`; they
 --     serialize without an offset and the delta script reads them as UTC.
 --   * Team access flows through the scoped `account_member` role, not raw
@@ -55,7 +56,7 @@
 --       legacy_subscription   subscriptions.user_id with cancelled_on IS NULL and
 --                             "willCancelAfterPeriod" = false (Subscription.active,
 --                             app/models/subscription.rb). currentPeriodEnd is
---                             exported as metadata only, like account subscriptions.
+--                             exported as metadata only (separate legacy backing law).
 --
 -- It never selects passwords, tokens, IP addresses, Stripe ids or billing info.
 
@@ -71,8 +72,8 @@ SET TIME ZONE 'UTC';
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 
 WITH
-enabled_status(status) AS (
-  VALUES ('trialing'), ('active'), ('past_due')
+reportable_status(status) AS (
+  VALUES ('trialing'), ('active'), ('past_due'), ('unpaid')
 ),
 special_role_name(name) AS (
   VALUES ('admin'), ('analyst'), ('content_tester'), ('editor'), ('instructor'),
@@ -91,7 +92,7 @@ basic_roles AS (
   JOIN roles r ON r.id = ur.role_id
   WHERE r.resource_type IS NULL AND r.name = 'basic'
 ),
-enabled_subs AS (
+subscription_facts AS (
   SELECT
     s.id,
     s.account_id,
@@ -108,7 +109,7 @@ enabled_subs AS (
     s.stripe_subscription_id IS NOT NULL AS stripe_subscription_id_present
   FROM account_subscriptions s
   LEFT JOIN accounts a ON a.id = s.account_id
-  WHERE s.status IN (SELECT status FROM enabled_status)
+  WHERE s.status IN (SELECT status FROM reportable_status)
 ),
 role_members AS (
   SELECT
@@ -121,7 +122,7 @@ role_members AS (
     ON r.id = ur.role_id
    AND r.resource_type = 'Account'
    AND r.name IN ('account_owner', 'account_member')
-  WHERE r.resource_id IN (SELECT account_id FROM enabled_subs)
+  WHERE r.resource_id IN (SELECT account_id FROM subscription_facts)
   GROUP BY ur.user_id, r.resource_id
 ),
 sub_members AS (
@@ -135,7 +136,7 @@ sub_members AS (
   FROM account_users au
   FULL OUTER JOIN role_members rm
     ON rm.account_id = au.account_id AND rm.user_id = au.user_id
-  WHERE COALESCE(au.account_id, rm.account_id) IN (SELECT account_id FROM enabled_subs)
+  WHERE COALESCE(au.account_id, rm.account_id) IN (SELECT account_id FROM subscription_facts)
 ),
 viewable_purchases AS (
   SELECT
@@ -279,7 +280,7 @@ subscription_lines AS (
       WHERE m.account_id = s.account_id AND m.user_id IS NOT NULL
     ), '[]'::json)
   )::text AS line
-  FROM enabled_subs s
+  FROM subscription_facts s
 ),
 purchase_lines AS (
   SELECT 5 AS ord, p.id AS sort_id, json_build_object(
