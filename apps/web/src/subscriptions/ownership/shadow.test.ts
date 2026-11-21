@@ -471,6 +471,33 @@ describe("signed POST and isolation fences", () => {
     ).toBe(503);
   });
 
+  it("cold-imports the real route without shadow env and returns 503 without any IO", async () => {
+    const shadowKeys = [
+      "STRIPE_SHADOW_WEBHOOK_SECRET",
+      "STRIPE_SHADOW_READ_KEY",
+      "STRIPE_SHADOW_REDIS_REST_URL",
+      "STRIPE_SHADOW_REDIS_REST_TOKEN",
+    ];
+    shadowKeys.forEach((key) => vi.stubEnv(key, undefined));
+    const transport = vi.fn<typeof fetch>().mockRejectedValue(new Error("Unexpected shadow IO"));
+    vi.stubGlobal("fetch", transport);
+    vi.resetModules();
+    try {
+      const route = await import("../../app/api/stripe/subscription-shadow/route");
+      // cacheComponents rejects route-segment runtime config, even the Node.js default.
+      expect(route).not.toHaveProperty("runtime");
+      expect(transport).not.toHaveBeenCalled();
+      const response = await route.POST(signedRequest(signature));
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ received: false, error: "shadow-not-configured" });
+      expect(transport).not.toHaveBeenCalled();
+      expect(databaseAccess).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("never falls back to application credentials or an in-memory production store", () => {
     expect(() =>
       shadowDependencies({ STRIPE_SECRET_KEY: "synthetic", DATABASE_URL: "synthetic" }),
