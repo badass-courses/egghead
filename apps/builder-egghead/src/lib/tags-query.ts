@@ -58,7 +58,8 @@ export async function getAllEggheadTags(): Promise<EggheadTag[]> {
 	const allTagIds = apiData.map((tag) => tag.id)
 
 	const tagRows = await eggheadPgQuery(
-		`SELECT * FROM tags WHERE id IN (${allTagIds.join(',')})`,
+		`SELECT * FROM tags WHERE id = ANY($1::int[])`,
+		[allTagIds],
 	)
 
 	const dbData = z.array(EggheadDbTagSchema).parse(tagRows.rows)

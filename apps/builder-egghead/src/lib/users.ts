@@ -156,7 +156,8 @@ export const loadEggheadInstructorForUser = async (userId: string) => {
 	}
 
 	const instructorResult = await eggheadPgQuery(
-		`SELECT * FROM instructors WHERE user_id = ${eggheadAccount.providerAccountId}`,
+		`SELECT * FROM instructors WHERE user_id = $1`,
+		[eggheadAccount.providerAccountId],
 	)
 
 	const instructor = InstructorEggheadDbSchema.safeParse(
@@ -354,9 +355,10 @@ export async function updateInstructorAccount(data: InstructorAccountData) {
           SET
           slack_group_id = $1,
           slack_id = $2
+          WHERE user_id = $3
           RETURNING *
         `,
-			[data.slackChannelId, data.slackId],
+			[data.slackChannelId, data.slackId, eggheadAccount.providerAccountId],
 		)
 	} catch (e) {
 		console.log({ e })
