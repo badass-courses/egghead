@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
       createdById: user.id,
     });
     return NextResponse.json(newPost, { status: 201, headers: corsHeaders });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to create post" },
       { status: 500, headers: corsHeaders },
@@ -163,7 +163,7 @@ export async function DELETE(request: NextRequest) {
   try {
     await deletePostFromDatabase(id);
     return NextResponse.json({ message: "Post deleted successfully" }, { headers: corsHeaders });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to delete post" },
       { status: 500, headers: corsHeaders },

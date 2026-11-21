@@ -51,7 +51,7 @@ export async function POST(request: NextRequest, props: { params: Promise<{ post
 
   try {
     await updatePostTags(params.postId, validatedData.data);
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to update post tags" },
       { status: 500, headers: corsHeaders },
