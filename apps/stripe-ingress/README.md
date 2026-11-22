@@ -7,7 +7,7 @@ A Worker for `POST /api/stripe/subscription-shadow`. It verifies Stripe's signat
 - Only the exact POST path is accepted. Other paths return 404; other methods, including OPTIONS, return 405. There is no CORS handler.
 - Declared and streamed bodies are capped at 256 KiB. The Worker keeps the original bytes in an ArrayBuffer, including whitespace and non-ASCII content.
 - WebCrypto verifies HMAC-SHA256 over the Stripe timestamp, a dot, and those bytes. One timestamp and one or more `v1` signatures are accepted. Comparison covers every digest byte. Timestamp tolerance is five minutes in either direction.
-- Upstream comes only from `SHADOW_UPSTREAM_URL`. It must be HTTPS at the exact shadow path, with no credentials, query or fragment. Client path, query and Host never select the destination.
+- Upstream comes only from `SHADOW_UPSTREAM_URL`. The stack requires `https://beta.egghead.io/api/stripe/subscription-shadow`, with no alternate host or port, credentials, query or fragment, so deployment cannot redirect the bypass secret to another host. Client path, query and Host never select the destination.
 - Forwarded headers are exactly `content-type: application/json`, the verified `stripe-signature`, and the secret `x-vercel-protection-bypass`. Client cookies, authorization and Vercel headers are discarded.
 - One fetch, a ten-second timeout, and no internal retry. Upstream redirects and fetch failures return 502 so Stripe can retry. Other upstream statuses are preserved with a fixed short body (no body for 204/205). Upstream bodies and headers are never relayed.
 - The Worker never logs request data or exceptions. Upload metadata disables Workers Logs, invocation logs, traces, logpush, tail consumers and streaming tail consumers.
@@ -73,7 +73,7 @@ Start a forwarder in the same shell, keep its PID, and stop only that process wh
 
 ```sh
 export CLOUDFLARE_ACCOUNT_ID='<approved-fleet-account-id>'
-export SHADOW_UPSTREAM_URL='https://<approved-beta-host>/api/stripe/subscription-shadow'
+export SHADOW_UPSTREAM_URL='https://beta.egghead.io/api/stripe/subscription-shadow'
 export SC_FORWARD_URL='http://127.0.0.1:8789'
 export SC_FORWARD_NONCE="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
 sc forward --listen 127.0.0.1:8789 --upstream-host api.cloudflare.com &

@@ -30,6 +30,7 @@ export default Alchemy.Stack(
     const upstream = new URL(upstreamUrl);
     if (
       upstream.protocol !== "https:" ||
+      upstream.host !== "beta.egghead.io" ||
       upstream.pathname !== SHADOW_PATH ||
       upstream.username ||
       upstream.password ||
@@ -38,7 +39,7 @@ export default Alchemy.Stack(
     ) {
       return yield* Effect.die(
         new Error(
-          "SHADOW_UPSTREAM_URL must be the exact HTTPS shadow route without credentials, query or fragment",
+          "SHADOW_UPSTREAM_URL must be https://beta.egghead.io/api/stripe/subscription-shadow without credentials, query or fragment",
         ),
       );
     }
