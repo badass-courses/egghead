@@ -68,8 +68,11 @@ await test(
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     const nonce = "synthetic-stack-forward-nonce-00000000";
-    let upstream = "https://beta.example.test/api/stripe/subscription-shadow";
-    const run = async (command: string): Promise<string> => {
+    const upstream = "https://beta.egghead.io/api/stripe/subscription-shadow";
+    const run = async (
+      command: string,
+      options: { upstreamUrl?: string; force?: boolean } = {},
+    ): Promise<string> => {
       const child = spawn(
         process.execPath,
         [
@@ -81,6 +84,7 @@ await test(
           "mock",
           "--no-input",
           ...(command === "plan" ? [] : ["--yes"]),
+          ...(options.force ? ["--force"] : []),
         ],
         {
           cwd,
@@ -88,7 +92,7 @@ await test(
             ...process.env,
             ALCHEMY_TELEMETRY_DISABLED: "1",
             CLOUDFLARE_ACCOUNT_ID: accountId,
-            SHADOW_UPSTREAM_URL: upstream,
+            SHADOW_UPSTREAM_URL: options.upstreamUrl ?? upstream,
             SC_FORWARD_URL: `http://127.0.0.1:${address.port}`,
             SC_FORWARD_NONCE: nonce,
           },
@@ -107,6 +111,30 @@ await test(
       return output;
     };
     try {
+      const hostError = /SHADOW_UPSTREAM_URL must be https:\/\/beta\.egghead\.io/;
+      await assert.rejects(
+        run("plan", { upstreamUrl: "https://egghead.io/api/stripe/subscription-shadow" }),
+        hostError,
+      );
+      await assert.rejects(
+        run("plan", { upstreamUrl: "https://attacker.example/api/stripe/subscription-shadow" }),
+        hostError,
+      );
+      await assert.rejects(
+        run("plan", {
+          upstreamUrl: "https://beta.egghead.io.attacker.example/api/stripe/subscription-shadow",
+        }),
+        hostError,
+      );
+      await assert.rejects(
+        run("plan", { upstreamUrl: "https://beta.egghead.io:8443/api/stripe/subscription-shadow" }),
+        hostError,
+      );
+      assert.equal(
+        calls.length,
+        0,
+        "invalid upstream hosts must fail before any Cloudflare API call",
+      );
       await run("plan");
       assert.equal(live, false);
       await run("deploy");
@@ -117,9 +145,8 @@ await test(
         calls.slice(afterDeploy).some((call) => call.startsWith("PUT") || call.startsWith("POST")),
         false,
       );
-      upstream = "https://beta-updated.example.test/api/stripe/subscription-shadow";
       const beforeUpdate = calls.filter((call) => call.startsWith("PUT")).length;
-      await run("deploy");
+      await run("deploy", { force: true });
       assert.equal(calls.filter((call) => call.startsWith("PUT")).length, beforeUpdate + 1);
       const allowed = new Set([
         `GET ${script}`,
