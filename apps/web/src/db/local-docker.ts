@@ -1,6 +1,6 @@
 import mysql from "mysql2/promise";
 import { getEnv } from "../env";
-import { getEggheadRuntime, type EggheadRuntime } from "../runtime";
+import { getEggheadRuntime, isReadOnlyBeta, type EggheadRuntime } from "../runtime";
 
 export { getEggheadRuntime, type EggheadRuntime } from "../runtime";
 
@@ -63,7 +63,7 @@ export function assertDatabaseUrlForRuntime(rawUrl = getDatabaseUrl()): Database
   const productionDatabaseAllowed =
     runtime === "production" && Boolean(database) && isPlanetScaleDatabase({ host });
   const commerceWritesAllowed =
-    (runtime === "local" && localDockerOnly) || productionDatabaseAllowed;
+    !isReadOnlyBeta() && ((runtime === "local" && localDockerOnly) || productionDatabaseAllowed);
 
   if (runtime === "local" && !localDockerOnly) {
     throw new Error(
@@ -206,20 +206,20 @@ export function getEggheadMysqlPool() {
   if (pool) return pool;
 
   const rawUrl = getDatabaseUrl();
-  const { runtime } = assertDatabaseUrlForRuntime(rawUrl);
+  assertDatabaseUrlForRuntime(rawUrl);
   if (getDatabaseReadOnlyMode()) {
     throw new Error("The shared pool is not available in EGGHEAD_DB_READ_ONLY mode.");
   }
   const connection = mysql.createPool(mysqlConnectionOptionsFromUrl(rawUrl));
-  pool = runtime === "beta" ? guardReadOnly(connection) : connection;
+  pool = isReadOnlyBeta() ? guardReadOnly(connection) : connection;
 
   return pool;
 }
 
 export async function createEggheadMysqlConnection() {
   const rawUrl = getDatabaseUrl();
-  const { runtime } = assertDatabaseUrlForRuntime(rawUrl);
-  const readOnly = getDatabaseReadOnlyMode() ?? (runtime === "beta" ? "guard" : null);
+  assertDatabaseUrlForRuntime(rawUrl);
+  const readOnly = getDatabaseReadOnlyMode() ?? (isReadOnlyBeta() ? "guard" : null);
   const connection = await mysql.createConnection(mysqlConnectionOptionsFromUrl(rawUrl));
   if (!readOnly) return connection;
   if (readOnly === "session") {

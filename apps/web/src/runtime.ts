@@ -2,29 +2,36 @@ import { getEnv } from "./env";
 
 export type EggheadRuntime = "beta" | "local" | "production";
 
+function isBetaVercelProject() {
+  // Use platform-owned project metadata, not a second mutable runtime flag.
+  return (
+    process.env["VERCEL_PROJECT_NAME"] === "beta-egghead" ||
+    process.env["VERCEL_PROJECT_PRODUCTION_URL"] === "beta.egghead.io"
+  );
+}
+
+function isVercel() {
+  return (
+    process.env["VERCEL"] === "1" ||
+    process.env["VERCEL_ENV"] !== undefined ||
+    isBetaVercelProject()
+  );
+}
+
 export function getEggheadRuntime(): EggheadRuntime {
   const rawRuntime = getEnv("EGGHEAD_RUNTIME")?.trim().toLowerCase();
-  // Use platform-owned project metadata, not a second mutable runtime flag.
-  const isBetaProject =
-    process.env["VERCEL_PROJECT_NAME"] === "beta-egghead" ||
-    process.env["VERCEL_PROJECT_PRODUCTION_URL"] === "beta.egghead.io";
-  const onVercel =
-    process.env["VERCEL"] === "1" || process.env["VERCEL_ENV"] !== undefined || isBetaProject;
-
-  if (!rawRuntime) {
-    if (onVercel) throw new Error("EGGHEAD_RUNTIME is required on Vercel");
-    return "local";
-  }
+  if (!rawRuntime) return isVercel() ? "beta" : "local";
   if (rawRuntime !== "local" && rawRuntime !== "beta" && rawRuntime !== "production") {
     throw new Error("Unsupported EGGHEAD_RUNTIME");
   }
-  if (isBetaProject && rawRuntime !== "beta") {
-    throw new Error("The beta Vercel project requires EGGHEAD_RUNTIME=beta");
+  if (rawRuntime === "production" && isBetaVercelProject()) {
+    throw new Error("The beta Vercel project cannot use production runtime");
   }
   return rawRuntime;
 }
 
-/** Beta is a reader. The signed Stripe shadow route uses its own isolated store. */
+/** Vercel local may use local fixture settings, but cannot enable side effects. */
 export function isReadOnlyBeta() {
-  return getEggheadRuntime() === "beta";
+  const runtime = getEggheadRuntime();
+  return runtime === "beta" || (runtime === "local" && isVercel());
 }

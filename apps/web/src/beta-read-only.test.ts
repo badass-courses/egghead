@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { register } from "./instrumentation";
-import { getEggheadRuntime } from "./runtime";
+import { getEggheadRuntime, isReadOnlyBeta } from "./runtime";
 
 const mocks = vi.hoisted(() => ({
   authGet: vi.fn(() => Response.json({ session: null })),
@@ -83,34 +83,62 @@ describe("deployed runtime at Next startup", () => {
     ["VERCEL", "1", undefined],
     ["VERCEL_ENV", "preview", ""],
     ["VERCEL_ENV", "production", "   "],
-  ])("fails on %s=%s without an explicit runtime", (key, marker, runtime) => {
+  ])("defaults to read-only beta on %s=%s without a runtime", (key, marker, runtime) => {
     vi.stubEnv(key, marker);
     vi.stubEnv("EGGHEAD_RUNTIME", runtime);
-    expect(register).toThrow("EGGHEAD_RUNTIME is required on Vercel");
+    expect(register).not.toThrow();
+    expect(getEggheadRuntime()).toBe("beta");
+    expect(isReadOnlyBeta()).toBe(true);
   });
 
-  it.each(["production", "local"])("refuses runtime %s on the beta Vercel project", (runtime) => {
+  it("refuses explicit production on the beta Vercel project", () => {
     vi.stubEnv("VERCEL_PROJECT_NAME", "beta-egghead");
     vi.stubEnv("VERCEL_ENV", "preview");
-    vi.stubEnv("EGGHEAD_RUNTIME", runtime);
-    expect(register).toThrow("The beta Vercel project requires EGGHEAD_RUNTIME=beta");
+    vi.stubEnv("EGGHEAD_RUNTIME", "production");
+    expect(register).toThrow("The beta Vercel project cannot use production runtime");
+  });
+
+  it("honors Vercel local fixture settings without opening writes", async () => {
+    vi.stubEnv("VERCEL_PROJECT_NAME", "beta-egghead");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("EGGHEAD_RUNTIME", "local");
+    vi.stubEnv("DATABASE_URL", "mysql://root:fixture@127.0.0.1:3307/egghead_test");
+    const db = await import("./db/local-docker");
+    expect(register).not.toThrow();
+    expect(getEggheadRuntime()).toBe("local");
+    expect(isReadOnlyBeta()).toBe(true);
+    expect(db.commerceWritesAreAllowed()).toBe(false);
+    await expect(import("../drizzle.config")).rejects.toThrow(
+      "Web schema tools require local Docker",
+    );
   });
 
   it("also recognizes beta by the platform production hostname", () => {
     vi.stubEnv("VERCEL_PROJECT_PRODUCTION_URL", "beta.egghead.io");
     vi.stubEnv("EGGHEAD_RUNTIME", "production");
-    expect(register).toThrow("The beta Vercel project requires EGGHEAD_RUNTIME=beta");
+    expect(register).toThrow("The beta Vercel project cannot use production runtime");
     vi.stubEnv("EGGHEAD_RUNTIME", "beta");
     expect(register).not.toThrow();
+    expect(getEggheadRuntime()).toBe("beta");
+    expect(isReadOnlyBeta()).toBe(true);
   });
 
   it("keeps local defaults and permits explicit production on a different project", () => {
     expect(getEggheadRuntime()).toBe("local");
+    expect(isReadOnlyBeta()).toBe(false);
     vi.stubEnv("VERCEL_ENV", "production");
     vi.stubEnv("VERCEL_PROJECT_NAME", "egghead-web");
     vi.stubEnv("EGGHEAD_RUNTIME", "production");
     expect(register).not.toThrow();
     expect(getEggheadRuntime()).toBe("production");
+    expect(isReadOnlyBeta()).toBe(false);
+  });
+
+  it("throws on unknown runtime values instead of falling back", () => {
+    vi.stubEnv("EGGHEAD_RUNTIME", "prodution");
+    expect(register).toThrow("Unsupported EGGHEAD_RUNTIME");
+    vi.stubEnv("VERCEL", "1");
+    expect(register).toThrow("Unsupported EGGHEAD_RUNTIME");
   });
 });
 
@@ -149,7 +177,7 @@ describe("beta read-only boundaries", () => {
   });
 
   it("skips ordinary ingress and Inngest transport but leaves CourseBuilder session reads", async () => {
-    vi.stubEnv("EGGHEAD_RUNTIME", "beta");
+    vi.stubEnv("VERCEL_ENV", "preview");
     const cb = await import("./app/api/coursebuilder/[...nextCourseBuilder]/route");
     const inngest = await import("./app/api/inngest/route");
     expect(await (await cb.POST(req("/api/coursebuilder/webhook/stripe", "POST"))).json()).toEqual({

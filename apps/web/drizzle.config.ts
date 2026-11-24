@@ -1,10 +1,10 @@
 import { defineConfig } from "drizzle-kit";
 
 import { assertLocalDockerDatabaseUrl } from "./src/db/local-docker";
-import { getEggheadRuntime } from "./src/runtime";
+import { getEggheadRuntime, isReadOnlyBeta } from "./src/runtime";
 
 // Drizzle Kit loads this before any `push` or `migrate` can connect.
-if (getEggheadRuntime() !== "local") {
+if (getEggheadRuntime() !== "local" || isReadOnlyBeta()) {
   throw new Error(
     "Web schema tools require local Docker; use a reviewed deploy request for remote DDL.",
   );
