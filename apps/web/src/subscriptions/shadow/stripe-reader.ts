@@ -10,18 +10,54 @@ export interface ShadowStripeReader {
 }
 
 const pageSchema = z.object({
-  data: z.array(z.object({ id: z.string() }).passthrough()),
+  data: z.array(z.unknown()),
   has_more: z.boolean(),
 });
+const cursorSchema = z.object({ id: z.string().min(1) });
+const stripeOrigin = "https://api.stripe.com";
+const projectionPath =
+  /^\/v1\/(?:subscriptions(?:\/[A-Za-z0-9_-]+)?|(?:customers|products|invoices|charges)\/[A-Za-z0-9_-]+)$/;
 
-/** Deliberately exposes GET only. Provision a restricted Stripe key with read permissions only. */
+export class ShadowStripeScopeError extends Error {
+  constructor() {
+    super("Request outside the Stripe shadow read scope");
+  }
+}
+
+export function scopedStripeFetch(
+  request: typeof fetch,
+  mode: "events" | "projection",
+): typeof fetch {
+  return (input, init) => {
+    const url = typeof input === "string" ? URL.parse(input) : null;
+    if (
+      !url ||
+      url.origin !== stripeOrigin ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      init?.method !== "GET" ||
+      init.redirect !== "error" ||
+      init.body != null ||
+      (url.pathname !== "/v1/events" &&
+        (mode !== "projection" || !projectionPath.test(url.pathname)))
+    )
+      throw new ShadowStripeScopeError();
+    return request(url.href, init);
+  };
+}
+
+/** Only Events listing and the reads needed by shadow projection can reach Stripe. */
 export function createShadowStripeReader(
   key: string,
   request: typeof fetch = fetch,
+  mode: "events" | "projection" = "projection",
 ): ShadowStripeReader {
+  const send = scopedStripeFetch(request, mode);
   const get = async (path: string, params = new URLSearchParams()): Promise<unknown> => {
-    const response = await request(`https://api.stripe.com/v1/${path}?${params}`, {
+    const response = await send(`${stripeOrigin}/v1/${path}?${params}`, {
       method: "GET",
+      redirect: "error",
       headers: { Authorization: `Bearer ${key}`, "Stripe-Version": "2024-06-20" },
       cache: "no-store",
     });
@@ -33,7 +69,7 @@ export function createShadowStripeReader(
     path: string,
     query: Record<string, string>,
     after?: string,
-  ): AsyncGenerator<z.infer<typeof pageSchema>["data"][number], void, unknown> {
+  ): AsyncGenerator<unknown, void, unknown> {
     const params = new URLSearchParams({
       ...query,
       limit: "100",
@@ -42,10 +78,11 @@ export function createShadowStripeReader(
     const page = pageSchema.parse(await get(path, params));
     yield* page.data;
     if (!page.has_more) return;
-    const next = page.data.at(-1)?.id;
-    if (!next || next === after) throw new Error("Shadow Stripe pagination made no progress");
+    const cursor = cursorSchema.safeParse(page.data.at(-1));
+    if (!cursor.success || cursor.data.id === after)
+      throw new Error("Shadow Stripe pagination made no progress");
     // The next request depends on this page's cursor; delegate lazily, not in parallel.
-    yield* pages(path, query, next);
+    yield* pages(path, query, cursor.data.id);
   }
   return {
     retrieve: (resource, id) => get(`${resource}/${encodeURIComponent(id)}`),
@@ -61,4 +98,12 @@ export function createShadowStripeReader(
     events: (from, to) =>
       pages("events", { "created[gte]": String(from), "created[lt]": String(to) }),
   };
+}
+
+export function createShadowStripeEventsReader(
+  key: string,
+  request: typeof fetch,
+): Pick<ShadowStripeReader, "events"> {
+  const reader = createShadowStripeReader(key, request, "events");
+  return { events: (from, to) => reader.events(from, to) };
 }

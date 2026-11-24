@@ -57,7 +57,7 @@ One completed event yields one JSON object with `name`, `stripeEventId`, `eventT
 
 Each would-do includes subscription id, status, period end, quantity, a seat-change observation, cancellation flag, strict paid-through verdict, and the target **`Entitlement.expiresAt` on `sourceType = rails_account_subscription`**. `expiresAt` is the ISO rendering of Stripe's paid-through seconds. It is the field the paid-through importer writes, not a second boundary. A denied verdict does not imply a new grant: an eventual writer must apply both status eligibility and expiry. This packet makes no entitlement writes. Wiring real writes to imported Rails grants remains behind the existing ownership flip and its cutover review.
 
-The verdict reuses `strictPaidThroughRule` (ADR-0008). Past due, trialing, unpaid and boundary equality deny. Cancel-at-period-end retains access only while active and before the boundary. Refunds and disputes cause a fresh subscription read; they do not independently revoke access or initiate refunds. Team billing eligibility is recorded separately from `accessVerdict = unknown-team-roster`. No main DB read means no roster verdict. Quantity deltas use Stripe's `previous_attributes` only when present; otherwise the prior quantity/delta is unknown, not invented. Seat assignment/removal changes are not inferred.
+The verdict reuses `strictPaidThroughRule` (ADR-0008). Past due, trialing, unpaid and boundary equality deny. Cancel-at-period-end retains access only while active and before the boundary. Refunds and disputes cause a fresh subscription read; they do not independently revoke access or initiate refunds. Team billing eligibility is recorded separately from `accessVerdict = unknown-team-roster`. No main DB read means no roster verdict. Quantity deltas use Stripe's `previous_attributes` only when present; otherwise the prior quantity/delta is unknown, not invented. Zero seats preserves the billing boundary and produces `zero_seat_policy_unknown`, not a grant or denial: Rails account roles can still confer access and this route does not read them. Seat assignment/removal changes are not inferred.
 
 This is an **observation-time projection**, not a reconstruction of historical state. Most events re-read current Stripe subscription state, like the existing CB lifecycle. Final subscription deletion uses its signed terminal payload. A replay records the current read at a new `observedAt`, not the period/status that existed at the event's original creation time. Comparison must respect those times.
 
@@ -71,13 +71,17 @@ For Axiom/Vercel logs, parse the JSON message and filter `name` for `subscriptio
 
 ## Replay and catalogue refresh
 
-From the repository root, with the isolated secrets already in the process environment:
+From the repository root, with a verified read-only Stripe key injected as `STRIPE_SHADOW_READ_KEY`:
 
 ```sh
-pnpm exec tsx apps/web/src/subscriptions/shadow/replay.ts <from-epoch-seconds> <to-epoch-seconds>
+pnpm exec tsx apps/web/src/subscriptions/shadow/replay.ts --dry-run <from-epoch-seconds> <to-epoch-seconds>
 ```
 
-The window is `[from, to)`. Stripe's event-list API only retains roughly 30 days. The command paginates the event log with the read key and dispatches through the same projection and external event claims. Replaying a completed event does not emit it again. Stdout is JSONL records; the completion summary goes to stderr. A failure exits nonzero; rerun the same window after fixing it. Keep records and claims intact between webhook and replay runs. Do not replay through the CB writer endpoint.
+The window is `[from, to)`. Stripe retains roughly 30 days. Replay lists every page through GET requests, sorts supported events oldest first by `created` (event ID breaks ties), and calls the same dispatcher as the signed webhook. Dry run claims and deduplicates events in memory for that invocation. It never reads DB configuration, and its observations are lost on exit. The Stripe account is shared: `listed` is an account-wide event count, not an egghead customer count. Supported events can produce would-dos or counted skips; unsupported types are counted separately. Stdout contains one per-type JSON summary, never records or IDs. Event and projection parse failures are counted separately; dry mode also counts other per-event processing failures. Projection parse diagnostics contain only grouped event types, schema paths and Zod issue codes. They mask dynamic keys and indexes and never include issue values or messages. Any failure exits nonzero. A failed list request aborts replay rather than presenting partial coverage as complete.
+
+For a census without projection, use `--events-only`. It permits only `GET /v1/events` on Stripe; projection and processing failure counters are `null` because the dispatcher is never called. The projection modes additionally permit only the exact customer, subscription, product, invoice and charge GET paths needed by shadow. Off-scope requests abort and redirects are rejected. Use a verified read-only key by default; narrower operator exceptions do not broaden the client's allowlist.
+
+Only for a separately authorized backfill, use `--write-shadow` instead of `--dry-run` and bind `STRIPE_SHADOW_DATABASE_URL` to the isolated shadow store. This mode persists to `ShadowRecord`, uses the same durable event claims as the webhook, and also prints only counts. Keep claims intact between webhook and backfill so overlap does not create duplicate records. Do not replay through the CB writer endpoint. Neither mode reconstructs historical subscription state: the projection generally looks up Stripe state at observation time.
 
 To regenerate candidate catalogue data:
 
