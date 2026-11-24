@@ -18,7 +18,11 @@ import { regenerateCatalogue } from "../shadow/regenerate-catalogue";
 import { replayShadowWindow, runShadowReplayCommand } from "../shadow/replay";
 import { MemoryShadowStore } from "../shadow/store";
 import { createMysqlShadowStore, type ShadowMysqlConnection } from "../shadow/mysql-store";
-import { createShadowStripeReader, type ShadowStripeReader } from "../shadow/stripe-reader";
+import {
+  createShadowStripeReader,
+  scopedStripeFetch,
+  type ShadowStripeReader,
+} from "../shadow/stripe-reader";
 import { isEggheadSubscription } from "../shadow/tenant";
 
 const { databaseAccess } = vi.hoisted(() => ({
@@ -497,6 +501,25 @@ describe("event claims, retries and replay", () => {
       "Usage",
     );
     expect(request).toHaveBeenCalledTimes(4);
+    request.mockClear();
+    const census = await runShadowReplayCommand({
+      args: ["--events-only", ...args.slice(1)],
+      env,
+      request,
+    });
+    expect(census).toMatchObject({
+      projectionExecuted: false,
+      failures: 1,
+      byType: {
+        "invoice.paid": {
+          listed: 3,
+          eventParseFailures: 1,
+          projectionParseFailures: null,
+          processingFailures: null,
+        },
+      },
+    });
+    expect(request).toHaveBeenCalledOnce();
   });
 });
 
@@ -614,6 +637,34 @@ describe("signed POST and isolation fences", () => {
     walk(resolve(here, "replay.ts"));
     walk(resolve(here, "regenerate-catalogue.ts"));
     expect(visited.size).toBeGreaterThan(10);
+  });
+
+  it("rejects writes, other paths and alternate origins before fetch", async () => {
+    const send = vi.fn<typeof fetch>(async () => Response.json({}));
+    const events = scopedStripeFetch(send, "events");
+    const project = scopedStripeFetch(send, "projection");
+    const init: RequestInit = { method: "GET", redirect: "error" };
+    const origin = "https://api.stripe.com";
+    const allowed = [
+      "/v1/events",
+      "/v1/subscriptions",
+      "/v1/subscriptions/sub_synthetic",
+      "/v1/customers/cus_synthetic",
+      "/v1/products/prod_synthetic",
+      "/v1/invoices/in_synthetic",
+      "/v1/charges/ch_synthetic",
+    ];
+    expect(() => events(`${origin}/v1/customers/cus_synthetic`, init)).toThrow();
+    expect(() => project(`${origin}/v1/events`, { ...init, method: "POST" })).toThrow();
+    expect(() => project(`${origin}/v1/events`, { ...init, redirect: "follow" })).toThrow();
+    expect(() => project(`${origin}/v1/coupons`, init)).toThrow();
+    expect(() => project(`${origin}/v1/charges/ch_example/refunds`, init)).toThrow();
+    expect(() => project("https://other.example/v1/events", init)).toThrow();
+    expect(() => project("http://api.stripe.com/v1/events", init)).toThrow();
+    expect(send).not.toHaveBeenCalled();
+    await events(`${origin}/v1/events?limit=100`, init);
+    await Promise.all(allowed.map((path) => project(`${origin}${path}`, init)));
+    expect(send).toHaveBeenCalledTimes(allowed.length + 1);
   });
 
   it("uses GET-only Stripe reads and paginates the exact replay window", async () => {
