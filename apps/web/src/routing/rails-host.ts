@@ -30,6 +30,7 @@ const MEMBER_FEEDS =
   /^\/(?:lessons\/pro_feed|courses\/[^/]+\/course_feed|playlists\/[^/]+\/playlist_feed|instructors\/[^/]+\/feed)(?:\.rss)?$/;
 const LEGACY_MAGIC_LINK = /^\/token\/[^/]+$/;
 const RETIRED_API = /^\/(?:oauth(?:\/|$)|api\/v1(?:\/|$)|graphql(?:\/|$)|current_user(?:\.json)?$)/;
+const PENDING_SAML = /^\/(?:saml-(?:login|consume|metadata)$|saml_sessions(?:\/|$))/;
 const PROFILE = /^\/users\/\d+$/;
 const CONTENT_PAGE = /^\/(?:courses|playlists|lessons)\/[a-z0-9][a-z0-9_~-]*$/i;
 const LESSON_EMBED = /^\/lessons\/[a-z0-9][a-z0-9_~-]*\/embed$/i;
@@ -40,6 +41,7 @@ type RailsHostRoute =
   | { kind: "serve-feed"; path: string }
   | { kind: "redirect"; location: string }
   | { kind: "retire"; reason: "member-feed" | "magic-link" | "legacy-api" }
+  | { kind: "pending-saml" }
   | { kind: "unmapped" };
 
 export function railsHostRoute(pathname: string): RailsHostRoute {
@@ -47,6 +49,8 @@ export function railsHostRoute(pathname: string): RailsHostRoute {
   if (MEMBER_FEEDS.test(path)) return { kind: "retire", reason: "member-feed" };
   if (LEGACY_MAGIC_LINK.test(path)) return { kind: "retire", reason: "magic-link" };
   if (RETIRED_API.test(path)) return { kind: "retire", reason: "legacy-api" };
+  // Rails still owns SAML. Do not attach this host until its flip decision.
+  if (PENDING_SAML.test(path)) return { kind: "pending-saml" };
   if (PUBLIC_FEEDS.has(path)) return { kind: "serve-feed", path };
 
   const target = canonicalPath(path);

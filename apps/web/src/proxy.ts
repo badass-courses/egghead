@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { retiredMemberFeed } from "./feeds/retired";
+import { isLegacyShortLinkPath, legacyShortLinkGone } from "./routing/legacy-short-links";
 import { RAILS_HOST, railsHostRoute } from "./routing/rails-host";
 
 const PRIVATE_HEADERS = { "cache-control": "no-store", "referrer-policy": "no-referrer" };
@@ -22,7 +23,10 @@ export function proxy(request: NextRequest) {
         : "This legacy egghead endpoint is gone.\n";
     return new Response(isHead ? null : message, { status: 410, headers: PRIVATE_HEADERS });
   }
-  if (route.kind === "unmapped") {
+  if (route.kind === "pending-saml" || route.kind === "unmapped") {
+    // The private edge resolver owns hits. A short link that reaches origin
+    // has no approved target here; never send it to the homepage.
+    if (isLegacyShortLinkPath(request.nextUrl.pathname)) return legacyShortLinkGone();
     return new Response(null, { status: 404, headers: PRIVATE_HEADERS });
   }
   if (request.method !== "GET" && !isHead) {
