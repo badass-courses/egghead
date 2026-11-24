@@ -195,14 +195,35 @@ describe("beta read-only boundaries", () => {
     expect(mocks.inngestServe).not.toHaveBeenCalled();
   });
 
-  it("does not delegate Auth.js sign-in or OAuth callback requests", async () => {
+  it("returns a signed-out session and 404s other Auth.js requests in beta", async () => {
     vi.stubEnv("EGGHEAD_RUNTIME", "beta");
     const auth = await import("./app/api/auth/[...nextauth]/route");
-    expect((await auth.GET(req("/api/auth/callback/github?code=fixture"))).status).toBe(404);
-    expect((await auth.POST(req("/api/auth/signin/postmark", "POST"))).status).toBe(404);
-    expect((await auth.GET(req("/api/auth/session"))).status).toBe(200);
-    expect(mocks.authGet).toHaveBeenCalledOnce();
+    const session = await auth.GET(req("/api/auth/session"));
+    expect(session.status).toBe(200);
+    expect(await session.json()).toEqual({ user: null });
+    expect(session.headers.get("cache-control")).toBe("no-store");
+    const blocked = await Promise.all([
+      auth.GET(req("/api/auth/csrf")),
+      auth.GET(req("/api/auth/providers")),
+      auth.GET(req("/api/auth/signin")),
+      auth.GET(req("/api/auth/callback/github?code=fixture")),
+      auth.POST(req("/api/auth/session", "POST")),
+      auth.POST(req("/api/auth/signin/postmark", "POST")),
+    ]);
+    expect(blocked.map((response) => response.status)).toEqual([404, 404, 404, 404, 404, 404]);
+    expect(mocks.authGet).not.toHaveBeenCalled();
     expect(mocks.authPost).not.toHaveBeenCalled();
+  });
+
+  it("still delegates Auth.js requests outside beta", async () => {
+    vi.stubEnv("EGGHEAD_RUNTIME", "production");
+    const auth = await import("./app/api/auth/[...nextauth]/route");
+    const read = req("/api/auth/session");
+    const write = req("/api/auth/signin/postmark", "POST");
+    await auth.GET(read);
+    await auth.POST(write);
+    expect(mocks.authGet.mock.calls).toEqual([[read]]);
+    expect(mocks.authPost.mock.calls).toEqual([[write]]);
   });
 
   it("disables GitHub and magic links with keys present without dropping session reads", async () => {
