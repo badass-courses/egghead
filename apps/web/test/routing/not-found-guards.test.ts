@@ -285,14 +285,11 @@ void describe("no streaming boundary sits above a notFound()", () => {
   });
 
   void test("no middleware or proxy sits outside the route model", async () => {
-    // The parity and replay tests model redirects, rewrites and the file tree.
-    // A middleware or proxy would run before rewrites and is not modelled.
-    const present = await Promise.all(
-      ["middleware.ts", "proxy.ts", "middleware.js", "proxy.js"].map((file) =>
-        exists(path.join(srcDir, file)),
-      ),
-    );
-    assert.deepEqual(present, [false, false, false, false]);
+    // The only proxy is src/proxy.ts, whose host isolation and routing are
+    // tested in rails-host.test.ts. Canonical parity still models no proxy.
+    const untracked = ["middleware.ts", "middleware.js", "proxy.js"];
+    const present = await Promise.all(untracked.map((file) => exists(path.join(srcDir, file))));
+    assert.deepEqual(present, [false, false, false]);
   });
 });
 
