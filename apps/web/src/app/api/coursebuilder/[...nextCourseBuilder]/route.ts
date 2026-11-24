@@ -4,10 +4,15 @@ import { NextRequest } from "next/server";
 import { isWorkshopProduct } from "../../../../workshops/catalog";
 import { getWorkshopPayments } from "../../../../workshops/payments";
 import { getEnv } from "../../../../env";
+import { isReadOnlyBeta } from "../../../../runtime";
 import { checkoutSessionCompletedEvent } from "@coursebuilder/core/schemas/stripe/checkout-session-completed";
 import { STRIPE_CHECKOUT_SESSION_COMPLETED_EVENT } from "@coursebuilder/core/events/stripe";
 import { inngest } from "../../../../inngest/client";
 import { localWorkshopPurchasesEnabled } from "../../../../workshops/checkout-contract";
+
+function courseBuilderPath(request: Request) {
+  return new URL(request.url).pathname.replace(/\/+$/, "");
+}
 
 async function workshopCheckoutBypass(request: NextRequest) {
   const url = new URL(request.url);
@@ -18,11 +23,19 @@ async function workshopCheckoutBypass(request: NextRequest) {
   return isWorkshopProduct(productId);
 }
 export async function GET(request: NextRequest) {
+  if (isReadOnlyBeta() && courseBuilderPath(request) !== "/api/coursebuilder/session") {
+    return new Response(null, { status: 404 });
+  }
   if (await workshopCheckoutBypass(request))
     return Response.json({ error: "Use the Workshop landing page to purchase" }, { status: 403 });
   return handlers.GET(request);
 }
 export async function POST(request: NextRequest) {
+  if (isReadOnlyBeta()) {
+    return courseBuilderPath(request) === "/api/coursebuilder/webhook/stripe"
+      ? Response.json({ received: true, skipped: "writes-blocked" })
+      : new Response(null, { status: 404 });
+  }
   if (await workshopCheckoutBypass(request))
     return Response.json({ error: "Use the Workshop landing page to purchase" }, { status: 403 });
   if (

@@ -2,6 +2,24 @@ import type { Adapter, AdapterAccount } from "@auth/core/adapters";
 import type { AuthStoragePort } from "@coursebuilder/core/auth";
 import type { IdentityPort } from "@coursebuilder/core/ports/identity";
 
+/** Keep valid existing sessions readable without extending, creating, or deleting a row. */
+export function createBetaSessionAdapter(adapter: Adapter): Adapter {
+  return {
+    async getSessionAndUser(token) {
+      return (await adapter.getSessionAndUser?.(token)) ?? null;
+    },
+    async createSession() {
+      throw new Error("Beta cannot create sessions");
+    },
+    async updateSession() {
+      return null;
+    },
+    async deleteSession() {
+      // Auth.js clears the browser cookie but must not revoke a live session row.
+    },
+  };
+}
+
 function isLowercase(value: string): value is Lowercase<string> {
   return value === value.toLowerCase();
 }

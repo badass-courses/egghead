@@ -7,6 +7,7 @@ import { z } from "zod";
 import { getCourseBySlug } from "../content/course";
 import { getLessonById } from "../content/lesson";
 import { getCurrentUser } from "../coursebuilder/current-user";
+import { isReadOnlyBeta } from "../runtime";
 import { recordAnonymousLessonCompletion } from "./anonymous-lesson-progress";
 import { syncCourseProgressForUser } from "./course-progress";
 import { LESSON_PROGRESS_SOURCES } from "./lesson-progress-sources";
@@ -74,6 +75,8 @@ export async function setLessonCompletion(input: unknown): Promise<SetLessonComp
           : "anonymous_saved",
       );
     }
+
+    if (isReadOnlyBeta()) return result("failed");
 
     const progress = completed
       ? await completeResourceForUser({ userId: user.id, resourceId: lesson.id, source })

@@ -1,3 +1,4 @@
+import { isReadOnlyBeta } from "../runtime";
 import { inngest } from "./client";
 import { stripeWorkshopLocalPurchase } from "./stripe-workshop-local";
 import { localWorkshopPurchasesEnabled } from "../workshops/checkout-contract";
@@ -8,9 +9,11 @@ import {
 
 export const inngestConfig = {
   client: inngest,
-  functions: [
-    stripeSubscriptionCheckoutSessionComplete,
-    stripeCustomerSubscriptionUpdated,
-    ...(localWorkshopPurchasesEnabled() ? [stripeWorkshopLocalPurchase] : []),
-  ],
+  functions: isReadOnlyBeta()
+    ? []
+    : [
+        stripeSubscriptionCheckoutSessionComplete,
+        stripeCustomerSubscriptionUpdated,
+        ...(localWorkshopPurchasesEnabled() ? [stripeWorkshopLocalPurchase] : []),
+      ],
 };

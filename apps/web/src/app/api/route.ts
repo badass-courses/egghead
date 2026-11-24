@@ -3,6 +3,7 @@ import {
   getEggheadRuntime,
   isBetaDatabaseApproved,
 } from "../../db/local-docker";
+import { isReadOnlyBeta } from "../../runtime";
 
 export function GET() {
   const runtime = getEggheadRuntime();
@@ -36,6 +37,7 @@ export function GET() {
         runtime,
         betaDatabaseApproved: isBetaDatabaseApproved(),
         commerceWritesAllowed: commerceWritesAreAllowed(),
+        betaReadOnly: isReadOnlyBeta(),
         productionDatabaseRequired: runtime === "production",
       },
     },

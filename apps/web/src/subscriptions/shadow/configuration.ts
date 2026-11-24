@@ -8,11 +8,18 @@ export function shadowDependencies(
 ): ShadowDependencies {
   const key = env["STRIPE_SHADOW_READ_KEY"];
   const url = env["STRIPE_SHADOW_DATABASE_URL"];
-  if (!key?.startsWith("rk_") || !url)
+  const appDatabaseUrl = env["DATABASE_URL"];
+  const contentReader = env["STRIPE_SHADOW_CONTENT_READER_USERNAME"];
+  const shadowWriter = env["STRIPE_SHADOW_WRITER_USERNAME"];
+  if (!key?.startsWith("rk_") || !url || !appDatabaseUrl || !contentReader || !shadowWriter)
     throw new Error("Shadow is not configured with isolated credentials");
+  const store = createMysqlShadowStore(url, {
+    appDatabaseUrl,
+    branchPins: { contentReader, shadowWriter },
+  });
   return {
     stripe: createShadowStripeReader(key),
-    store: createMysqlShadowStore(url, { appDatabaseUrl: env["DATABASE_URL"] }),
+    store,
     log: (record) => console.info(JSON.stringify(record)),
   };
 }

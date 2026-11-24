@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { getStripeProvider, getSiteUrl } from "../coursebuilder/stripe-provider";
 import { getEggheadDatabase } from "../db/adapter";
 import { merchantCustomer, merchantSubscription } from "../db/schema";
+import { isReadOnlyBeta } from "../runtime";
 import { getBillingSubscriptionForUser } from "./status";
 import { getStripeSubscriptionCurrentPeriodEnd } from "./stripe";
 
@@ -173,6 +174,7 @@ export async function getMembershipBillingSummary(
 }
 
 export async function getMembershipBillingPortalUrl(userId: string) {
+  if (isReadOnlyBeta()) return null;
   try {
     const membership = await getStripeMembershipForUser(userId);
     if (!membership) return null;

@@ -1,10 +1,11 @@
 import mysql from "mysql2/promise";
 import { getEnv } from "../env";
+import { getEggheadRuntime, isReadOnlyBeta, type EggheadRuntime } from "../runtime";
+
+export { getEggheadRuntime, type EggheadRuntime } from "../runtime";
 
 const DEFAULT_LOCAL_DOCKER_MYSQL_URL = "mysql://root:root@127.0.0.1:3307/coursebuilder_test";
 const LEADING_SLASH = /^\//;
-
-export type EggheadRuntime = "beta" | "local" | "production";
 
 let pool: mysql.Pool | null = null;
 
@@ -22,17 +23,6 @@ export type DatabaseSafety = {
 
 export function getDatabaseUrl() {
   return getEnv("DATABASE_URL") ?? DEFAULT_LOCAL_DOCKER_MYSQL_URL;
-}
-
-export function getEggheadRuntime(): EggheadRuntime {
-  const rawRuntime = getEnv("EGGHEAD_RUNTIME")?.trim().toLowerCase();
-
-  if (!rawRuntime) return "local";
-  if (rawRuntime === "local" || rawRuntime === "beta" || rawRuntime === "production") {
-    return rawRuntime;
-  }
-
-  throw new Error(`Unsupported EGGHEAD_RUNTIME: ${rawRuntime}`);
 }
 
 export function isBetaDatabaseApproved() {
@@ -73,7 +63,7 @@ export function assertDatabaseUrlForRuntime(rawUrl = getDatabaseUrl()): Database
   const productionDatabaseAllowed =
     runtime === "production" && Boolean(database) && isPlanetScaleDatabase({ host });
   const commerceWritesAllowed =
-    (runtime === "local" && localDockerOnly) || productionDatabaseAllowed;
+    !isReadOnlyBeta() && ((runtime === "local" && localDockerOnly) || productionDatabaseAllowed);
 
   if (runtime === "local" && !localDockerOnly) {
     throw new Error(
@@ -189,7 +179,7 @@ export function assertReadOnlyStatement(statement: unknown) {
   }
 }
 
-function guardReadOnly(connection: mysql.Connection): mysql.Connection {
+function guardReadOnly<T extends mysql.Connection | mysql.Pool>(connection: T): T {
   return new Proxy(connection, {
     get(target, property, receiver) {
       if (property === "query") {
@@ -204,6 +194,9 @@ function guardReadOnly(connection: mysql.Connection): mysql.Connection {
           return target.execute(...args);
         };
       }
+      if (property === "getConnection" && "getConnection" in target) {
+        return async () => guardReadOnly(await target.getConnection());
+      }
       return Reflect.get(target, property, receiver);
     },
   });
@@ -217,7 +210,8 @@ export function getEggheadMysqlPool() {
   if (getDatabaseReadOnlyMode()) {
     throw new Error("The shared pool is not available in EGGHEAD_DB_READ_ONLY mode.");
   }
-  pool = mysql.createPool(mysqlConnectionOptionsFromUrl(rawUrl));
+  const connection = mysql.createPool(mysqlConnectionOptionsFromUrl(rawUrl));
+  pool = isReadOnlyBeta() ? guardReadOnly(connection) : connection;
 
   return pool;
 }
@@ -225,8 +219,8 @@ export function getEggheadMysqlPool() {
 export async function createEggheadMysqlConnection() {
   const rawUrl = getDatabaseUrl();
   assertDatabaseUrlForRuntime(rawUrl);
+  const readOnly = getDatabaseReadOnlyMode() ?? (isReadOnlyBeta() ? "guard" : null);
   const connection = await mysql.createConnection(mysqlConnectionOptionsFromUrl(rawUrl));
-  const readOnly = getDatabaseReadOnlyMode();
   if (!readOnly) return connection;
   if (readOnly === "session") {
     try {

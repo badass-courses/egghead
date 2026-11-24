@@ -1,9 +1,9 @@
-import { createAuthJsAdapter } from "../server/auth-js-adapter";
+import { createAuthJsAdapter, createBetaSessionAdapter } from "../server/auth-js-adapter";
 import type { NextAuthConfig } from "next-auth";
 import { logger } from "@coursebuilder/utils/logger";
 
 import { getCourseBuilderAdapter } from "../db/adapter";
-import { getEggheadRuntime } from "../db/local-docker";
+import { getEggheadRuntime, isReadOnlyBeta } from "../runtime";
 import { getEnv } from "../env";
 import { claimAnonymousLessonCompletions } from "../progress/anonymous-lesson-progress";
 import { createAuthConfig } from "./auth-config-factory";
@@ -17,6 +17,7 @@ const LOCAL_EMAIL_FROM = "egghead development <no-reply@egghead.local>";
 const authSecret = getAuthSecret();
 
 export function isGithubAuthConfigured() {
+  if (isReadOnlyBeta()) return false;
   const githubClientId = getEnv("GITHUB_CLIENT_ID");
   const githubClientSecret = getEnv("GITHUB_CLIENT_SECRET");
 
@@ -24,6 +25,7 @@ export function isGithubAuthConfigured() {
 }
 
 export function isEmailAuthConfigured() {
+  if (isReadOnlyBeta()) return false;
   const postmarkApiKey = getEnv("POSTMARK_API_KEY");
   const postmarkFromEmail = getEnv("POSTMARK_FROM_EMAIL");
 
@@ -36,6 +38,7 @@ export function isEmailAuthConfigured() {
 }
 
 function getAuthProviders(): NextAuthConfig["providers"] {
+  if (isReadOnlyBeta()) return [];
   const githubClientId = getEnv("GITHUB_CLIENT_ID");
   const githubClientSecret = getEnv("GITHUB_CLIENT_SECRET");
   const postmarkApiKey = getEnv("POSTMARK_API_KEY");
@@ -71,9 +74,12 @@ async function claimAnonymousProgressOnSignIn(userId: string) {
   }
 }
 
+const adapter = createAuthJsAdapter(getCourseBuilderAdapter());
+const readOnlyBeta = isReadOnlyBeta();
+
 export const authConfig = createAuthConfig({
-  adapter: createAuthJsAdapter(getCourseBuilderAdapter()),
+  adapter: readOnlyBeta ? createBetaSessionAdapter(adapter) : adapter,
   providers: getAuthProviders(),
-  onSignIn: claimAnonymousProgressOnSignIn,
+  ...(readOnlyBeta ? {} : { onSignIn: claimAnonymousProgressOnSignIn }),
   secret: authSecret,
 }) satisfies NextAuthConfig;
