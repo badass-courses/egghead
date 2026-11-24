@@ -8,6 +8,7 @@ import { getCurrentUser } from "../../coursebuilder/current-user";
 import { profileNameSchema } from "../../profile/contracts";
 import { updatePrivateProfileName } from "../../profile/data";
 import { disconnectPrivateGithubAccount } from "../../profile/github-disconnect";
+import { isReadOnlyBeta } from "../../runtime";
 import { signIn, signOut } from "../../server/auth";
 import { getMembershipBillingPortalUrl } from "../../subscriptions/billing";
 
@@ -41,6 +42,7 @@ export async function manageMembership() {
 }
 
 export async function updateProfileName(formData: FormData) {
+  if (isReadOnlyBeta()) redirect("/profile");
   const currentUser = await getCurrentUser();
   if (!currentUser?.id) redirect("/login?callbackUrl=%2Fprofile");
 
@@ -61,6 +63,7 @@ export async function updateProfileName(formData: FormData) {
 }
 
 export async function disconnectGithubAccount(): Promise<GithubDisconnectActionResult> {
+  if (isReadOnlyBeta()) return { status: "unauthorized" };
   const currentUser = await getCurrentUser();
   if (!currentUser?.id) return { status: "unauthorized" };
 

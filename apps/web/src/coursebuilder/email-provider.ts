@@ -3,6 +3,7 @@ import { render } from "@react-email/components";
 import PostmarkProvider from "next-auth/providers/postmark";
 
 import { getCourseBuilderAdapter } from "../db/adapter";
+import { isReadOnlyBeta } from "../runtime";
 import { formatMagicSignInLink, sendEmail } from "./email-delivery";
 
 const EGGHEAD_SIGN_IN_SUBJECT = "Log in to egghead";
@@ -18,6 +19,7 @@ export function createPostmarkEmailProvider({ apiKey, from }: PostmarkEmailProvi
     apiKey: apiKey ?? SUPPRESSED_EMAIL_API_KEY,
     from,
     sendVerificationRequest: async ({ identifier, url }) => {
+      if (isReadOnlyBeta()) throw new Error("Beta sign-in is disabled");
       const adapter = getCourseBuilderAdapter();
       const user =
         process.env["CREATE_USER_ON_LOGIN"] === "false"

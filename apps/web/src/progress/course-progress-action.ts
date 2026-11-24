@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { getCourseBySlug } from "../content/course";
 import { getCurrentUser } from "../coursebuilder/current-user";
+import { isReadOnlyBeta } from "../runtime";
 import { saveCourseReviewForUser } from "./course-progress";
 
 const courseProgressInputSchema = z.object({
@@ -37,6 +38,7 @@ async function validatedCourse(input: { courseId: string; courseSlug: string }) 
 export async function submitCourseReview(input: unknown): Promise<SubmitCourseReviewResult> {
   const parsed = courseReviewInputSchema.safeParse(input);
   const courseId = parsed.success ? parsed.data.courseId : "";
+  if (isReadOnlyBeta()) return { status: "failed", courseId };
   const user = await getCurrentUser();
 
   if (!user?.id) {

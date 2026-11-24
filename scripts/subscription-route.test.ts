@@ -149,13 +149,12 @@ async function runtimeTests(name: string, env: Record<string, string>) {
     });
   });
 
-  await test(`${name}: refunds, disputes, dunning and customer deletions still reach CourseBuilder`, async () => {
+  await test(`${name}: refunds, disputes, dunning and customer deletions respect ingress policy`, async () => {
     await withEnv(env, async () => {
       forwarded.length = 0;
       sent.length = 0;
-      // CourseBuilder marks a fully refunded purchase Refunded and a disputed one
-      // Disputed, so it must see these whatever the seam does. The seam keeps no
-      // marker and publishes nothing where writes are blocked.
+      // Production still forwards these to the CourseBuilder adapter. Beta does not
+      // delegate to the writer-capable transport at all.
       const events = [
         signedEvent("customer.deleted", {
           id: "cus_synthetic",
@@ -179,17 +178,21 @@ async function runtimeTests(name: string, env: Record<string, string>) {
       const replies = await Promise.all(events.map((event) => route.POST(event.request())));
       assert.deepEqual(
         await Promise.all(replies.map((reply) => reply.json())),
-        events.map(() => ({ handledBy: "coursebuilder" })),
+        events.map(() =>
+          name === "beta"
+            ? { received: true, skipped: "writes-blocked" }
+            : { handledBy: "coursebuilder" },
+        ),
       );
       assert.deepEqual(
         forwarded.map((entry) => entry.body).toSorted(),
-        events.map((event) => event.body).toSorted(),
+        name === "beta" ? [] : events.map((event) => event.body).toSorted(),
       );
       assert.deepEqual(sent, []);
     });
   });
 
-  await test(`${name}: checkout, update and workshop events still reach CourseBuilder with their body`, async () => {
+  await test(`${name}: checkout, update and workshop events respect ingress policy`, async () => {
     await withEnv(env, async () => {
       forwarded.length = 0;
       sent.length = 0;
@@ -208,17 +211,17 @@ async function runtimeTests(name: string, env: Record<string, string>) {
       );
       assert.deepEqual(
         forwarded.map((entry) => entry.body).toSorted(),
-        events.map((event) => event.body).toSorted(),
+        name === "beta" ? [] : events.map((event) => event.body).toSorted(),
       );
       assert.deepEqual(sent, []);
-      // A signature the seam cannot verify is CourseBuilder's to reject.
+      // The beta endpoint is a no-op. Elsewhere CourseBuilder verifies what it receives.
       const forged = new Request(webhookUrl, {
         method: "POST",
         body: events[1]?.body ?? "",
         headers: { "stripe-signature": "t=1,v1=forged" },
       });
       assert.equal((await route.POST(forged)).status, 200);
-      assert.equal(forwarded.length, 4);
+      assert.equal(forwarded.length, name === "beta" ? 0 : 4);
     });
   });
 }

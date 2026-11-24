@@ -1,6 +1,6 @@
 import mysql from "mysql2/promise";
 import { z } from "zod";
-import { shadowDatabaseOptions } from "./database-url";
+import { shadowDatabaseOptions, type ShadowBranchPins } from "./database-url";
 import type { ShadowStore } from "./store";
 
 /** Small schema-checked driver boundary; no application adapter or pool is reachable. */
@@ -46,11 +46,12 @@ export function createMysqlShadowStore(
   url: string,
   options: {
     appDatabaseUrl?: string | undefined;
+    branchPins?: ShadowBranchPins;
     tables?: ShadowTables;
     connect?: () => Promise<ShadowMysqlConnection>;
   } = {},
 ): ShadowStore {
-  const connectionOptions = shadowDatabaseOptions(url, options.appDatabaseUrl);
+  const connectionOptions = shadowDatabaseOptions(url, options.appDatabaseUrl, options.branchPins);
   const tables = shadowTableNames(options.tables);
   const connect = options.connect ?? (() => mysql.createConnection(connectionOptions));
   async function usingConnection<T>(work: (db: ShadowMysqlConnection) => Promise<T>): Promise<T> {

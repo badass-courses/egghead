@@ -13,6 +13,13 @@ import type { ShadowRecord } from "../shadow/projection";
 
 const main = "mysql://branch:synthetic@aws.connect.psdb.cloud/egghead";
 const isolated = "mysql://shadow-branch:synthetic@aws.connect.psdb.cloud/egghead";
+const branchPins = { contentReader: "branch", shadowWriter: "shadow-branch" };
+const binding = {
+  DATABASE_URL: main,
+  STRIPE_SHADOW_READ_KEY: "rk_synthetic",
+  STRIPE_SHADOW_CONTENT_READER_USERNAME: branchPins.contentReader,
+  STRIPE_SHADOW_WRITER_USERNAME: branchPins.shadowWriter,
+};
 const local = "mysql://shadow:synthetic@localhost/shadow_test";
 const record: ShadowRecord = {
   name: "subscription.shadow.skipped",
@@ -47,7 +54,9 @@ describe("isolated shadow MySQL target", () => {
     "mysql://branch:different@aws.connect.psdb.cloud/egghead?sslaccept=strict",
     "mysql://%62ranch:synthetic@AWS.CONNECT.PSDB.CLOUD/another_database",
     "mysql://branch:synthetic@aws.connect.psdb.cloud:3307/egghead",
-  ])("refuses the main host/branch user before connecting (%#)", async (url) => {
+    "mysql://main-second-password:synthetic@aws.connect.psdb.cloud/egghead",
+    "mysql://main-second-password:synthetic@gcp.connect.psdb.cloud/%65gghead",
+  ])("refuses content or unattested branch credentials before connecting (%#)", async (url) => {
     const connect = vi.spyOn(mysql, "createConnection");
     const now = Date.now();
     const timestamp = Math.floor(now / 1000);
@@ -68,8 +77,7 @@ describe("isolated shadow MySQL target", () => {
       secret,
       () =>
         shadowDependencies({
-          DATABASE_URL: main,
-          STRIPE_SHADOW_READ_KEY: "rk_synthetic",
+          ...binding,
           STRIPE_SHADOW_DATABASE_URL: url,
         }),
       now,
@@ -77,17 +85,34 @@ describe("isolated shadow MySQL target", () => {
     expect(response.status).toBe(503);
     expect(connect).not.toHaveBeenCalled();
   });
-  it("allows a distinct PlanetScale branch user, enforces TLS, and opens no connection", () => {
+  it("allows attested PlanetScale branch credentials, enforces TLS, and opens no connection", () => {
     const connect = vi.spyOn(mysql, "createConnection");
-    const options = shadowDatabaseOptions(`${isolated}?sslaccept=accept_invalid_certs`, main);
+    const options = shadowDatabaseOptions(
+      `${isolated}?sslaccept=accept_invalid_certs`,
+      main,
+      branchPins,
+    );
     expect(options.ssl).toEqual({ rejectUnauthorized: true });
     expect(options.user).toBe("shadow-branch");
-    shadowDependencies({
-      DATABASE_URL: main,
-      STRIPE_SHADOW_READ_KEY: "rk_synthetic",
-      STRIPE_SHADOW_DATABASE_URL: isolated,
-    });
+    shadowDependencies({ ...binding, STRIPE_SHADOW_DATABASE_URL: isolated });
     expect(connect).not.toHaveBeenCalled();
+  });
+  it("fails closed if either attestation or the content URL is missing or no longer matches", () => {
+    const env = { ...binding, STRIPE_SHADOW_DATABASE_URL: isolated };
+    expect(() => shadowDependencies({ ...env, DATABASE_URL: undefined })).toThrow();
+    expect(() =>
+      shadowDependencies({ ...env, STRIPE_SHADOW_CONTENT_READER_USERNAME: undefined }),
+    ).toThrow();
+    expect(() =>
+      shadowDependencies({ ...env, STRIPE_SHADOW_WRITER_USERNAME: undefined }),
+    ).toThrow();
+    expect(() =>
+      shadowDependencies({ ...env, DATABASE_URL: main.replace("branch:", "other-reader:") }),
+    ).toThrow();
+    expect(() => shadowDatabaseOptions(isolated, main)).toThrow();
+    expect(() =>
+      shadowDatabaseOptions(main, main, { contentReader: "branch", shadowWriter: "branch" }),
+    ).toThrow();
   });
   it.each([
     "https://example.test",
@@ -98,9 +123,12 @@ describe("isolated shadow MySQL target", () => {
     expect(() => shadowDatabaseOptions(url)).toThrow();
   });
   it("keeps branch usernames case-sensitive and rejects unsafe table identifiers", () => {
-    expect(shadowDatabaseOptions(isolated.replace("shadow-branch", "Branch"), main).user).toBe(
-      "Branch",
-    );
+    expect(
+      shadowDatabaseOptions(isolated.replace("shadow-branch", "Branch"), main, {
+        ...branchPins,
+        shadowWriter: "Branch",
+      }).user,
+    ).toBe("Branch");
     expect(() =>
       shadowTableNames({ claims: "ShadowEventClaim;DROP", records: "ShadowRecord" }),
     ).toThrow();

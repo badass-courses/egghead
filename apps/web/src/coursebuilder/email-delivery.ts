@@ -1,4 +1,5 @@
 import { getEnv } from "../env";
+import { isReadOnlyBeta } from "../runtime";
 
 const POSTMARK_EMAIL_ENDPOINT = "https://api.postmarkapp.com/email";
 
@@ -58,6 +59,7 @@ export async function sendEmail(
     log = console.info,
   }: SendEmailOptions,
 ) {
+  if (isReadOnlyBeta()) return { status: "disabled" } as const;
   if (!deliveryEnabled) {
     log(formatSuppressedEmail(email));
     return { status: "suppressed" } as const;
