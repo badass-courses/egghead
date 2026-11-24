@@ -1,31 +1,147 @@
 import { pathToFileURL } from "node:url";
-import { dispatchShadowEvent, type ShadowDependencies } from "./handler";
+import { z } from "zod";
 import { shadowDependencies } from "./configuration";
+import { dispatchShadowEvent, type ShadowDependencies } from "./handler";
+import { SHADOW_STRIPE_EVENTS, shadowEventSchema, type ShadowEvent } from "./projection";
+import { MemoryShadowStore } from "./store";
+import { createShadowStripeReader } from "./stripe-reader";
+
+const eventType = z.object({
+  type: z
+    .string()
+    .regex(/^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/)
+    .max(100),
+});
+const supportedTypes = new Set<string>(SHADOW_STRIPE_EVENTS);
+const typeCounts = () => ({
+  listed: 0,
+  unsupported: 0,
+  eventParseFailures: 0,
+  projectionParseFailures: 0,
+  processingFailures: 0,
+  duplicate: 0,
+  wouldDo: 0,
+  skipped: 0,
+  tenantMetadataConflicts: 0,
+  unresolvedDeletedCustomers: 0,
+});
+
+type ReplayMode =
+  | { mode: "--dry-run"; stripe: ShadowDependencies["stripe"] }
+  | { mode: "--write-shadow"; deps: ShadowDependencies };
 
 /** Stripe retains events for ~30 days. The supplied window is [from, to), epoch seconds. */
-export async function replayShadowWindow(from: number, to: number, deps: ShadowDependencies) {
+export async function replayShadowWindow(input: { from: number; to: number } & ReplayMode) {
+  const { from, to, mode } = input;
   if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to <= from)
-    throw new Error("Use a positive [from, to) window in epoch seconds");
-  const counts = { recorded: 0, duplicate: 0, ignored: 0 };
-  for await (const event of deps.stripe.events(from, to)) {
-    const result = await dispatchShadowEvent(event, deps);
-    counts[result.status] += 1;
+    throw new Error("Use a nonnegative [from, to) window in epoch seconds");
+  const deps: ShadowDependencies =
+    input.mode === "--dry-run"
+      ? { stripe: input.stripe, store: new MemoryShadowStore(), log: () => {} }
+      : input.deps;
+  const byType = new Map<string, ReturnType<typeof typeCounts>>();
+  const countsFor = (type: string) => {
+    const counts = byType.get(type) ?? typeCounts();
+    byType.set(type, counts);
+    return counts;
+  };
+
+  // Stripe returns newest-first pages. Collect before dispatch so ordering spans pages.
+  const events: ShadowEvent[] = [];
+  for await (const raw of deps.stripe.events(from, to)) {
+    const envelope = eventType.safeParse(raw);
+    const type = envelope.success ? envelope.data.type : "invalid-type";
+    const counts = countsFor(type);
+    counts.listed += 1;
+    if (envelope.success && !supportedTypes.has(type)) {
+      counts.unsupported += 1;
+      continue;
+    }
+    const parsed = shadowEventSchema.safeParse(raw);
+    if (!parsed.success || parsed.data.created < from || parsed.data.created >= to) {
+      counts.eventParseFailures += 1;
+      continue;
+    }
+    events.push(parsed.data);
   }
-  return counts;
+  const ordered = events.toSorted((a, b) => a.created - b.created || a.id.localeCompare(b.id));
+  await ordered.reduce(async (previous, event) => {
+    await previous; // Complete each claim/projection before dispatching the next event.
+    const counts = countsFor(event.type);
+    try {
+      const result = await dispatchShadowEvent(event, deps);
+      if (result.status === "duplicate") counts.duplicate += 1;
+      if (result.status === "recorded") {
+        const { record } = result;
+        if (record.name === "subscription.shadow.would-do") counts.wouldDo += 1;
+        else counts.skipped += 1;
+        counts.tenantMetadataConflicts += record.tenantMetadataConflicts;
+        counts.unresolvedDeletedCustomers += record.unresolvedDeletedCustomers;
+      }
+    } catch (error) {
+      if (error instanceof z.ZodError) counts.projectionParseFailures += 1;
+      else if (mode === "--dry-run") counts.processingFailures += 1;
+      else throw error; // A write or read failure must not quietly leave gaps in a backfill.
+    }
+  }, Promise.resolve());
+  return {
+    from,
+    to,
+    mode,
+    failures: [...byType.values()].reduce(
+      (sum, c) => sum + c.eventParseFailures + c.projectionParseFailures + c.processingFailures,
+      0,
+    ),
+    byType: Object.fromEntries([...byType.entries()].toSorted(([a], [b]) => a.localeCompare(b))),
+  };
+}
+
+export async function runShadowReplayCommand({
+  args,
+  env,
+  request = fetch,
+}: {
+  args: string[];
+  env: Readonly<Record<string, string | undefined>>;
+  request?: typeof fetch;
+}) {
+  const [mode, rawFrom, rawTo] = args;
+  if (
+    args.length !== 3 ||
+    (mode !== "--dry-run" && mode !== "--write-shadow") ||
+    !rawFrom ||
+    !rawTo ||
+    !/^\d+$/.test(rawFrom) ||
+    !/^\d+$/.test(rawTo)
+  )
+    throw new Error(
+      "Usage: replay.ts (--dry-run | --write-shadow) <from-epoch-seconds> <to-epoch-seconds>",
+    );
+  const window = { from: Number(rawFrom), to: Number(rawTo) };
+  if (mode === "--write-shadow") {
+    // Replay prints counts only. The canonical records go to the isolated store.
+    return replayShadowWindow({
+      ...window,
+      mode,
+      deps: { ...shadowDependencies(env), log: () => {} },
+    });
+  }
+  // Dry mode never reads a DB URL or constructs a database store, even if one is configured.
+  const key = env["STRIPE_SHADOW_READ_KEY"];
+  if (!key?.startsWith("rk_")) throw new Error("Restricted Stripe key required");
+  return replayShadowWindow({ ...window, mode, stripe: createShadowStripeReader(key, request) });
 }
 
 async function main() {
-  const [from, to] = process.argv.slice(2).map(Number);
-  if (from === undefined || to === undefined || process.argv.length !== 4)
-    throw new Error("Usage: replay.ts <from-epoch-seconds> <to-epoch-seconds>");
-  const counts = await replayShadowWindow(from, to, shadowDependencies(process.env));
-  console.error(JSON.stringify({ name: "subscription.shadow.replay-complete", ...counts }));
+  const summary = await runShadowReplayCommand({ args: process.argv.slice(2), env: process.env });
+  console.info(JSON.stringify(summary));
+  if (summary.failures) process.exitCode = 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(() => {
     console.error(
-      "Shadow replay failed; check isolated configuration and window. No payloads logged.",
+      "Shadow replay failed. Use (--dry-run | --write-shadow) <from-epoch-seconds> <to-epoch-seconds>; check the Stripe read key, window, and, for write mode only, isolated shadow configuration. No payloads logged.",
     );
     process.exitCode = 1;
   });

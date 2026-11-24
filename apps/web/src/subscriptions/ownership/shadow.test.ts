@@ -15,7 +15,7 @@ import {
 } from "../shadow/handler";
 import { SHADOW_STRIPE_EVENTS, type ShadowRecord } from "../shadow/projection";
 import { regenerateCatalogue } from "../shadow/regenerate-catalogue";
-import { replayShadowWindow } from "../shadow/replay";
+import { replayShadowWindow, runShadowReplayCommand } from "../shadow/replay";
 import { MemoryShadowStore } from "../shadow/store";
 import { createMysqlShadowStore, type ShadowMysqlConnection } from "../shadow/mysql-store";
 import { createShadowStripeReader, type ShadowStripeReader } from "../shadow/stripe-reader";
@@ -292,10 +292,11 @@ describe("isolated shadow projection", () => {
     "charge.refunded",
     ...SHADOW_STRIPE_EVENTS.filter((type) => type.startsWith("charge.dispute.")),
   ])("%s observes billing, never initiates refunds or revokes on its own", async (type) => {
-    const { projected } = await recorded(type, subscription(), {
-      id: "ch_synthetic",
-      charge: "ch_synthetic",
-    });
+    const payload =
+      type === "charge.refunded"
+        ? { id: "ch_synthetic" }
+        : { id: "dp_synthetic", charge: "ch_synthetic" };
+    const { projected } = await recorded(type, subscription(), payload);
     expect(projected?.accessVerdict).toBe("grant");
   });
 
@@ -429,19 +430,73 @@ describe("event claims, retries and replay", () => {
         created: 11,
       };
     };
-    expect(await replayShadowWindow(10, 20, deps)).toEqual({
-      recorded: 2,
-      duplicate: 0,
-      ignored: 0,
+    const input = { from: 10, to: 20, deps, mode: "--write-shadow" } as const;
+    expect(await replayShadowWindow(input)).toMatchObject({
+      failures: 0,
+      byType: { "invoice.paid": { listed: 2, wouldDo: 2, duplicate: 0 } },
     });
-    expect(await replayShadowWindow(10, 20, deps)).toEqual({
-      recorded: 0,
-      duplicate: 2,
-      ignored: 0,
+    expect(log.mock.calls.map(([record]) => record.createdAt)).toEqual([11, 19]);
+    expect(await replayShadowWindow(input)).toMatchObject({
+      failures: 0,
+      byType: { "invoice.paid": { listed: 2, wouldDo: 0, duplicate: 2 } },
     });
     expect(store.records.size).toBe(2);
     expect(log).toHaveBeenCalledTimes(2);
-    await expect(replayShadowWindow(20, 10, deps)).rejects.toThrow();
+    await expect(replayShadowWindow({ ...input, to: 10 })).rejects.toThrow();
+  });
+
+  it("dry-runs the projection without reading DB configuration or exposing raw inputs", async () => {
+    const paid = event("invoice.paid", { id: "in_synthetic", subscription: "sub_synthetic" });
+    const badProjection = event("invoice.payment_failed", { id: "in_invalid", subscription: 42 });
+    const badRead = event("charge.refunded", { id: "ch_missing" });
+    const request = vi.fn<typeof fetch>(async (input, init) => {
+      const url = requestUrl(input);
+      expect(init?.method).toBe("GET");
+      if (url.pathname === "/v1/events") {
+        return Response.json({
+          data: [
+            paid,
+            paid,
+            { type: "invoice.paid", data: {} },
+            badProjection,
+            badRead,
+            event("invoice.upcoming"),
+          ],
+          has_more: false,
+        });
+      }
+      if (url.pathname === "/v1/subscriptions/sub_synthetic") return Response.json(subscription()); // Synthetic catalogue item is skipped.
+      if (url.pathname === "/v1/customers/cus_synthetic")
+        return Response.json({ id: "cus_synthetic" });
+      return new Response("private response body", { status: 404 });
+    });
+    const env = new Proxy(
+      { STRIPE_SHADOW_READ_KEY: "rk_synthetic" },
+      {
+        get(target, key, receiver) {
+          if (key !== "STRIPE_SHADOW_READ_KEY")
+            throw new Error("Dry run accessed DB configuration");
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    const args = ["--dry-run", String(paid.created), String(paid.created + 1)];
+    const result = await runShadowReplayCommand({ args, env, request });
+    expect(result).toMatchObject({
+      failures: 3,
+      byType: {
+        "invoice.paid": { listed: 3, skipped: 1, duplicate: 1, eventParseFailures: 1 },
+        "invoice.payment_failed": { listed: 1, projectionParseFailures: 1 },
+        "charge.refunded": { listed: 1, processingFailures: 1 },
+        "invoice.upcoming": { listed: 1, unsupported: 1 },
+      },
+    });
+    expect(JSON.stringify(result)).not.toMatch(/synthetic|private response body|ch_missing/);
+    expect(request).toHaveBeenCalledTimes(4);
+    await expect(runShadowReplayCommand({ args: args.slice(1), env, request })).rejects.toThrow(
+      "Usage",
+    );
+    expect(request).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -574,6 +629,7 @@ describe("signed POST and isolation fences", () => {
     expect(events).toHaveLength(2);
     for (const [url, init] of request.mock.calls) {
       expect(init?.method).toBe("GET");
+      expect(init?.redirect).toBe("error");
       expect(requestUrl(url).href).toMatch(/^https:\/\/api.stripe.com\/v1\//);
     }
     const first = requestUrl(request.mock.calls[0]?.[0]);

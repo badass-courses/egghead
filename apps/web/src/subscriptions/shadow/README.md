@@ -69,13 +69,15 @@ For Axiom/Vercel logs, parse the JSON message and filter `name` for `subscriptio
 
 ## Replay and catalogue refresh
 
-From the repository root, with the isolated secrets already in the process environment:
+From the repository root, with a verified read-only Stripe key injected as `STRIPE_SHADOW_READ_KEY`:
 
 ```sh
-pnpm exec tsx apps/web/src/subscriptions/shadow/replay.ts <from-epoch-seconds> <to-epoch-seconds>
+pnpm exec tsx apps/web/src/subscriptions/shadow/replay.ts --dry-run <from-epoch-seconds> <to-epoch-seconds>
 ```
 
-The window is `[from, to)`. Stripe's event-list API only retains roughly 30 days. The command paginates the event log with the read key and dispatches through the same projection and external event claims. Replaying a completed event does not emit it again. Stdout is JSONL records; the completion summary goes to stderr. A failure exits nonzero; rerun the same window after fixing it. Keep records and claims intact between webhook and replay runs. Do not replay through the CB writer endpoint.
+The window is `[from, to)`. Stripe retains roughly 30 days. Replay lists every page through GET requests, sorts supported events oldest first by `created` (event ID breaks ties), and calls the same dispatcher as the signed webhook. Dry run claims and deduplicates events in memory for that invocation. It never reads DB configuration, and its observations are lost on exit. The Stripe account is shared: `listed` is an account-wide event count, not an egghead customer count. Supported events can produce would-dos or counted skips; unsupported types are counted separately. Stdout contains one per-type JSON summary, never records or IDs. Event and projection parse failures are counted separately; dry mode also counts other per-event processing failures. Any failure exits nonzero. A failed list request aborts replay rather than presenting partial coverage as complete.
+
+Only for a separately authorized backfill, use `--write-shadow` instead of `--dry-run` and bind `STRIPE_SHADOW_DATABASE_URL` to the isolated shadow store. This mode persists to `ShadowRecord`, uses the same durable event claims as the webhook, and also prints only counts. Keep claims intact between webhook and backfill so overlap does not create duplicate records. Do not replay through the CB writer endpoint. Neither mode reconstructs historical subscription state: the projection generally looks up Stripe state at observation time.
 
 To regenerate candidate catalogue data:
 
