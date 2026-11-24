@@ -75,6 +75,8 @@ const subscriptionSchema = z
   })
   .passthrough();
 
+const seatQuantitySchema = z.number().int().nonnegative();
+
 export interface ShadowSubscription {
   stripeSubscriptionId: string;
   status: z.infer<typeof subscriptionSchema>["status"];
@@ -86,7 +88,7 @@ export interface ShadowSubscription {
   seatChange: { previous: number | null; next: number; delta: number | null };
   cancelAtPeriodEnd: boolean;
   billingAccess: boolean;
-  accessVerdict: "grant" | "deny" | "unknown-team-roster";
+  accessVerdict: "grant" | "deny" | "unknown-team-roster" | "zero_seat_policy_unknown";
   roster: "not-required" | "unknown";
   accessLaw: string;
 }
@@ -170,7 +172,8 @@ export async function projectShadowEvent(
             data: z
               .array(
                 z.object({
-                  quantity: z.number().int().positive(),
+                  quantity: seatQuantitySchema,
+                  current_period_end: z.unknown().optional(),
                   price: z.object({ product: idSchema }).optional(),
                   plan: z.object({ product: idSchema }).optional(),
                 }),
@@ -220,14 +223,20 @@ export async function projectShadowEvent(
         .int()
         .positive()
         .max(253402300799)
-        .safeParse(getStripeSubscriptionCurrentPeriodEnd(raw));
+        .safeParse(
+          getStripeSubscriptionCurrentPeriodEnd({
+            current_period_end: subscription["current_period_end"],
+            // Billing periods are independent of the seat count, including zero seats.
+            items: { data: items.map(({ current_period_end }) => ({ current_period_end })) },
+          }),
+        );
       const currentPeriodEnd = period.success ? period.data : null;
       const seats = items[0]?.quantity;
       if (seats === undefined) throw new Error("Shadow subscription has no seat quantity");
       const previous = z
         .object({
           items: z.object({
-            data: z.array(z.object({ quantity: z.number().int().positive() })).length(1),
+            data: z.array(z.object({ quantity: seatQuantitySchema })).length(1),
           }),
         })
         .safeParse(event.data.previous_attributes);
@@ -259,7 +268,16 @@ export async function projectShadowEvent(
           },
           cancelAtPeriodEnd: subscription.cancel_at_period_end,
           billingAccess,
-          accessVerdict: !billingAccess ? "deny" : team ? "unknown-team-roster" : "grant",
+          // Rails account roles can still confer access at zero Stripe seats. This route
+          // does not read those roles and must not invent a grant or a revocation.
+          accessVerdict:
+            seats === 0
+              ? "zero_seat_policy_unknown"
+              : !billingAccess
+                ? "deny"
+                : team
+                  ? "unknown-team-roster"
+                  : "grant",
           roster: team ? "unknown" : "not-required",
           accessLaw: strictPaidThroughRule.name,
         },

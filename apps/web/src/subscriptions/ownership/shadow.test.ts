@@ -237,6 +237,43 @@ describe("isolated shadow projection", () => {
     expect(newer.projected?.accessVerdict).toBe("grant");
   });
 
+  it.each(["customer.subscription.updated", "invoice.paid", "invoice.payment_succeeded"])(
+    "%s records zero seats and the boundary without guessing Rails member access",
+    async (type) => {
+      const raw = subscription({
+        ...(type === "invoice.payment_succeeded" ? { current_period_end: undefined } : {}),
+        items: {
+          data: [
+            {
+              quantity: 0,
+              current_period_end: end,
+              price: { id: "price_synthetic_egghead", product: "prod_synthetic_egghead" },
+            },
+          ],
+        },
+      });
+      const payload =
+        type === "customer.subscription.updated"
+          ? raw
+          : type === "invoice.paid"
+            ? { id: "in_synthetic", subscription: "sub_synthetic" }
+            : {
+                id: "in_synthetic",
+                parent: { subscription_details: { subscription: "sub_synthetic" } },
+              };
+      const { projected } = await recorded(type, raw, payload);
+      expect(projected).toMatchObject({
+        status: "active",
+        currentPeriodEnd: end,
+        expiresAt: new Date(end * 1000).toISOString(),
+        seats: 0,
+        seatChange: { previous: null, next: 0, delta: null },
+        billingAccess: true,
+        accessVerdict: "zero_seat_policy_unknown",
+      });
+    },
+  );
+
   it.each([
     [end, "grant"],
     [now / 1000, "deny"],
@@ -349,6 +386,23 @@ describe("isolated shadow projection", () => {
     });
   });
 
+  it("records a seat increase from a reported zero rather than treating zero as missing", async () => {
+    const { deps, log } = setup();
+    const input = event("customer.subscription.updated");
+    await dispatchShadowEvent(
+      {
+        ...input,
+        data: { ...input.data, previous_attributes: { items: { data: [{ quantity: 0 }] } } },
+      },
+      deps,
+      now,
+    );
+    expect(log.mock.calls[0]?.[0].subscriptions[0]).toMatchObject({
+      seatChange: { previous: 0, next: 1, delta: 1 },
+      accessVerdict: "grant",
+    });
+  });
+
   it("covers every required event with a single record, including checkout", async () => {
     await Promise.all(
       SHADOW_STRIPE_EVENTS.map(async (type) => {
@@ -452,6 +506,10 @@ describe("event claims, retries and replay", () => {
   it("dry-runs the projection without reading DB configuration or exposing raw inputs", async () => {
     const paid = event("invoice.paid", { id: "in_synthetic", subscription: "sub_synthetic" });
     const badProjection = event("invoice.payment_failed", { id: "in_invalid", subscription: 42 });
+    const badMetadata = event("invoice.payment_succeeded", {
+      id: "in_synthetic",
+      metadata: { "private@example.test": 918273, status: 918273 },
+    });
     const badRead = event("charge.refunded", { id: "ch_missing" });
     const request = vi.fn<typeof fetch>(async (input, init) => {
       const url = requestUrl(input);
@@ -463,6 +521,7 @@ describe("event claims, retries and replay", () => {
             paid,
             { type: "invoice.paid", data: {} },
             badProjection,
+            badMetadata,
             badRead,
             event("invoice.upcoming"),
           ],
@@ -487,15 +546,32 @@ describe("event claims, retries and replay", () => {
     const args = ["--dry-run", String(paid.created), String(paid.created + 1)];
     const result = await runShadowReplayCommand({ args, env, request });
     expect(result).toMatchObject({
-      failures: 3,
+      failures: 4,
+      projectionIssues: [
+        {
+          eventType: "invoice.payment_failed",
+          path: ["subscription"],
+          code: "invalid_union",
+          count: 1,
+        },
+        {
+          eventType: "invoice.payment_succeeded",
+          path: ["metadata", "<key>"],
+          code: "invalid_type",
+          count: 2,
+        },
+      ],
       byType: {
         "invoice.paid": { listed: 3, skipped: 1, duplicate: 1, eventParseFailures: 1 },
         "invoice.payment_failed": { listed: 1, projectionParseFailures: 1 },
+        "invoice.payment_succeeded": { listed: 1, projectionParseFailures: 1 },
         "charge.refunded": { listed: 1, processingFailures: 1 },
         "invoice.upcoming": { listed: 1, unsupported: 1 },
       },
     });
-    expect(JSON.stringify(result)).not.toMatch(/synthetic|private response body|ch_missing/);
+    expect(JSON.stringify(result)).not.toMatch(
+      /synthetic|private response body|ch_missing|private@example|918273/,
+    );
     expect(request).toHaveBeenCalledTimes(4);
     await expect(runShadowReplayCommand({ args: args.slice(1), env, request })).rejects.toThrow(
       "Usage",

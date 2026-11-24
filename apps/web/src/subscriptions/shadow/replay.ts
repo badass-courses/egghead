@@ -17,6 +17,45 @@ const eventType = z.object({
     .max(100),
 });
 const supportedTypes = new Set<string>(SHADOW_STRIPE_EVENTS);
+const projectionFields = new Set([
+  "id",
+  "customer",
+  "subscription",
+  "charge",
+  "invoice",
+  "parent",
+  "subscription_details",
+  "metadata",
+  "status",
+  "cancel_at_period_end",
+  "items",
+  "data",
+  "quantity",
+  "price",
+  "plan",
+  "product",
+]);
+
+function projectionIssuePath(path: readonly PropertyKey[]) {
+  const segments: string[] = [];
+  for (const part of path) {
+    if (typeof part === "number" && segments.at(-1) !== "metadata") {
+      segments.push("[]");
+    } else if (
+      typeof part === "string" &&
+      segments.at(-1) !== "metadata" &&
+      projectionFields.has(part)
+    ) {
+      segments.push(part);
+    } else {
+      // Map keys (for example metadata) can contain identifiers and arbitrary text.
+      segments.push("<key>");
+      break;
+    }
+  }
+  return segments;
+}
+
 const typeCounts = () => ({
   listed: 0,
   unsupported: 0,
@@ -28,6 +67,7 @@ const typeCounts = () => ({
   skipped: 0,
   tenantMetadataConflicts: 0,
   unresolvedDeletedCustomers: 0,
+  zeroSeatPolicyUnknown: 0,
 });
 
 type ReplayMode =
@@ -48,6 +88,10 @@ export async function replayShadowWindow(input: { from: number; to: number } & R
         ? { stripe: input.stripe, store: new MemoryShadowStore(), log: () => {} }
         : null;
   const byType = new Map<string, ReturnType<typeof typeCounts>>();
+  const issueCounts = new Map<
+    string,
+    { eventType: ShadowEvent["type"]; path: string[]; code: string; count: number }
+  >();
   const countsFor = (type: string) => {
     const counts = byType.get(type) ?? typeCounts();
     byType.set(type, counts);
@@ -86,11 +130,22 @@ export async function replayShadowWindow(input: { from: number; to: number } & R
         else counts.skipped += 1;
         counts.tenantMetadataConflicts += record.tenantMetadataConflicts;
         counts.unresolvedDeletedCustomers += record.unresolvedDeletedCustomers;
+        counts.zeroSeatPolicyUnknown += record.subscriptions.filter(
+          (subscription) => subscription.accessVerdict === "zero_seat_policy_unknown",
+        ).length;
       }
     } catch (error) {
       if (error instanceof ShadowStripeScopeError) throw error;
-      if (error instanceof z.ZodError) counts.projectionParseFailures += 1;
-      else if (mode === "--dry-run") counts.processingFailures += 1;
+      if (error instanceof z.ZodError) {
+        counts.projectionParseFailures += 1;
+        for (const issue of error.issues) {
+          // Never serialize a Zod issue: it can carry input values in fields or messages.
+          const path = projectionIssuePath(issue.path);
+          const key = JSON.stringify([event.type, path, issue.code]);
+          const count = (issueCounts.get(key)?.count ?? 0) + 1;
+          issueCounts.set(key, { eventType: event.type, path, code: issue.code, count });
+        }
+      } else if (mode === "--dry-run") counts.processingFailures += 1;
       else throw error; // A write or read failure must not quietly leave gaps in a backfill.
     }
   }, Promise.resolve());
@@ -99,6 +154,7 @@ export async function replayShadowWindow(input: { from: number; to: number } & R
     to,
     mode,
     projectionExecuted: deps !== null,
+    ...(deps ? { projectionIssues: [...issueCounts.values()] } : {}),
     failures: [...byType.values()].reduce(
       (sum, c) => sum + c.eventParseFailures + c.projectionParseFailures + c.processingFailures,
       0,
