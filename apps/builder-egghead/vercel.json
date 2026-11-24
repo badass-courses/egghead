@@ -1,5 +1,4 @@
 {
-	"git": { "deploymentEnabled": { "worker/beta-live-db": false } },
 	"crons": [
 		{
 			"path": "/api/cron",

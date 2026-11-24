@@ -1,6 +1,9 @@
 import type { Adapter } from "@auth/core/adapters";
 import { NextRequest } from "next/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { register } from "./instrumentation";
+import { getEggheadRuntime } from "./runtime";
 
 const mocks = vi.hoisted(() => ({
   authGet: vi.fn(() => Response.json({ session: null })),
@@ -57,10 +60,58 @@ function req(path: string, method = "GET") {
   return new NextRequest(`https://beta.example.test${path}`, { method });
 }
 
+beforeEach(() => {
+  for (const key of [
+    "EGGHEAD_RUNTIME",
+    "VERCEL",
+    "VERCEL_ENV",
+    "VERCEL_PROJECT_NAME",
+    "VERCEL_PROJECT_PRODUCTION_URL",
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   vi.resetModules();
+});
+
+describe("deployed runtime at Next startup", () => {
+  it.each([
+    ["VERCEL", "1", undefined],
+    ["VERCEL_ENV", "preview", ""],
+    ["VERCEL_ENV", "production", "   "],
+  ])("fails on %s=%s without an explicit runtime", (key, marker, runtime) => {
+    vi.stubEnv(key, marker);
+    vi.stubEnv("EGGHEAD_RUNTIME", runtime);
+    expect(register).toThrow("EGGHEAD_RUNTIME is required on Vercel");
+  });
+
+  it.each(["production", "local"])("refuses runtime %s on the beta Vercel project", (runtime) => {
+    vi.stubEnv("VERCEL_PROJECT_NAME", "beta-egghead");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("EGGHEAD_RUNTIME", runtime);
+    expect(register).toThrow("The beta Vercel project requires EGGHEAD_RUNTIME=beta");
+  });
+
+  it("also recognizes beta by the platform production hostname", () => {
+    vi.stubEnv("VERCEL_PROJECT_PRODUCTION_URL", "beta.egghead.io");
+    vi.stubEnv("EGGHEAD_RUNTIME", "production");
+    expect(register).toThrow("The beta Vercel project requires EGGHEAD_RUNTIME=beta");
+    vi.stubEnv("EGGHEAD_RUNTIME", "beta");
+    expect(register).not.toThrow();
+  });
+
+  it("keeps local defaults and permits explicit production on a different project", () => {
+    expect(getEggheadRuntime()).toBe("local");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("VERCEL_PROJECT_NAME", "egghead-web");
+    vi.stubEnv("EGGHEAD_RUNTIME", "production");
+    expect(register).not.toThrow();
+    expect(getEggheadRuntime()).toBe("production");
+  });
 });
 
 describe("beta read-only boundaries", () => {
