@@ -1,17 +1,17 @@
 # Feeds (Rails parity)
 
-Ports the five RSS feeds egghead-rails served (`config/routes.rb` feed block,
-`app/views/**/*.rss.builder`) onto CourseBuilder content. They keep the Rails
-URL paths, so no redirects are needed. The route-parity redirect table leaves
-these paths alone.
+The public Rails catalog feed runs on CourseBuilder content at the same paths.
+It lists published lessons and courses without video enclosures. The four old
+member feed routes return 410 on both hosts. Rails #5361 disabled their token
+auth; CourseBuilder does not restart it or expose their enclosures in public RSS.
 
-| Rails route                    | Rails action              | CB route file                               | Auth   |
+| Rails route                    | Rails action              | CB route file                               | Status |
 | ------------------------------ | ------------------------- | ------------------------------------------- | ------ |
 | `/feed`, `/lessons/feed`       | `lessons#feed`            | `app/feed/route.ts`, `app/lessons/feed`     | public |
-| `/lessons/pro_feed?tech=`      | `lessons#pro_feed`        | `app/lessons/pro_feed/route.ts`             | token  |
-| `/courses/:id/course_feed`     | `series#course_feed`      | `app/courses/[course]/course_feed/route.ts` | token  |
-| `/playlists/:id/playlist_feed` | `playlists#playlist_feed` | `app/playlists/[id]/playlist_feed/route.ts` | token  |
-| `/instructors/:id/feed`        | `instructors#feed`        | `app/instructors/[id]/feed/route.ts`        | token  |
+| `/lessons/pro_feed?tech=`      | `lessons#pro_feed`        | `app/lessons/pro_feed/route.ts`             | 410    |
+| `/courses/:id/course_feed`     | `series#course_feed`      | `app/courses/[course]/course_feed/route.ts` | 410    |
+| `/playlists/:id/playlist_feed` | `playlists#playlist_feed` | `app/playlists/[id]/playlist_feed/route.ts` | 410    |
+| `/instructors/:id/feed`        | `instructors#feed`        | `app/instructors/[id]/feed/route.ts`        | 410    |
 | `/i/:slug/rss.xml`             | egghead-next (not Rails)  | `app/i/[slug]/rss.xml/route.ts`             | public |
 
 `/i/:slug/rss.xml` reads the legacy Typesense collection
@@ -28,9 +28,8 @@ Rails also answered each route with a `.rss` suffix (`/feed.rss` returned 200).
 `feeds/rewrites.ts` rewrites those six suffixed paths to the same handlers
 (`beforeFiles` in `next.config.ts`); query strings pass through.
 
-Every feed route renders per request (`await connection()`), served from the
-hours-long content cache, and is never prerendered at build time. Unknown
-feeds are cached for minutes.
+Public RSS renders per request (`await connection()`), served from the
+hours-long content cache. Unknown instructor podcasts are cached for minutes.
 
 ## GUIDs
 
@@ -94,9 +93,13 @@ only if its fields carry a Rails Series id. Selection windows order by
 
 `?tech=` matches tag names (Rails `tagged_with`; names are lowercased) or slugs.
 
-## Token auth
+## Inactive member-feed implementation
 
-Rails: `?user_email=<email>&user_token=<users.authentication_token>`. The user
+The member renderer, auth code and import tooling below are retained for
+reference and parity tests. No public route invokes them. Do not import legacy
+feed tokens for cutover.
+
+Former Rails auth: `?user_email=<email>&user_token=<users.authentication_token>`. The user
 had to be pro (not trialing) or an instructor. CB looks the token up by
 SHA-256 in `egghead_LegacyFeedToken` (`db/legacy-feed-tokens.ts`) and accepts
 the URL email if it matches either the Rails email captured at import (stored
@@ -106,7 +109,7 @@ entitlement (`access/evaluate.ts`) or the `admin` or `contributor` role. Every
 refusal returns 403, a store outage returns a retryable 503, and a malformed
 URL segment returns 404.
 
-## Import the desk must run
+### Historical token import procedure (do not run for cutover)
 
 1. Ship the schema. This repo has no migrations folder: schema changes live in
    `src/db/schema.ts` and reach a database through `drizzle-kit push`

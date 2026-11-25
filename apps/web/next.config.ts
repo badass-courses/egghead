@@ -4,6 +4,7 @@ import {
   beforeFilesRewritesForNextConfig,
   legacyRedirectsForNextConfig,
 } from "./src/routing/legacy-redirects";
+import { RAILS_HOST_CONDITION } from "./src/routing/rails-host";
 
 const nextConfig: NextConfig = {
   cacheComponents: true,
@@ -14,7 +15,9 @@ const nextConfig: NextConfig = {
   // Inventory and contract test: src/routing/route-inventory.ts,
   // test/routing/route-parity.test.ts.
   async redirects() {
-    return legacyRedirectsForNextConfig();
+    return legacyRedirectsForNextConfig().map((rule) =>
+      Object.assign(rule, { missing: [RAILS_HOST_CONDITION] }),
+    );
   },
   async rewrites() {
     return {
